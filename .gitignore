@@ -1,5 +1,14 @@
 /Data
+*RData
+*RDS
+*.DS_Store
+*.html
 *.jpg
+/Results
+*.csv
+/Presentations
+*.png
+*.key
 *.pdf
-*.RDS
+
 
