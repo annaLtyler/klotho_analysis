@@ -1,0 +1,11 @@
+animalName,sequencingBatch,climbID,sampleName,line,diet,age_d,age_m,snp,genotype_climb,genotype_seq,validated.gt,sex_climb,sex_ge,validated.sex
+81659,23-model-ad-002,352085,GT23-09708,B6J. Klotho(VS),6% Standard,371,12,Klotho-VS,WT,NA,Inconclusive,Female,Female,TRUE
+81659,23-model-ad-002,352085,GT23-09708,B6J. Klotho(VS),6% Standard,371,12,Klotho-FC,WT,WT,Inconclusive,Female,Female,TRUE
+85810,23-model-ad-002,360874,GT23-09583,B6J. Klotho(VS),6% Standard,141,5,Klotho-VS,Heterozygous,NA,Inconclusive,Male,Male,TRUE
+85810,23-model-ad-002,360874,GT23-09583,B6J. Klotho(VS),6% Standard,141,5,Klotho-FC,WT,WT,Inconclusive,Male,Male,TRUE
+85959,23-model-ad-002,361491,GT23-09545,B6J. Klotho(VS),6% Standard,136,5,Klotho-VS,WT,NA,Inconclusive,Male,Male,TRUE
+85959,23-model-ad-002,361491,GT23-09545,B6J. Klotho(VS),6% Standard,136,5,Klotho-FC,WT,NA,Inconclusive,Male,Male,TRUE
+85965,23-model-ad-002,361497,GT23-09709,B6J. Klotho(VS),6% Standard,136,5,Klotho-VS,Heterozygous,Homozygous,Inconclusive,Female,Female,TRUE
+85965,23-model-ad-002,361497,GT23-09709,B6J. Klotho(VS),6% Standard,136,5,Klotho-FC,WT,NA,Inconclusive,Female,Female,TRUE
+89058,23-model-ad-002,364190,GT23-09592,B6J. Klotho(FC),NA,115,4,Klotho-VS,WT,NA,Inconclusive,Male,Male,TRUE
+89058,23-model-ad-002,364190,GT23-09592,B6J. Klotho(FC),NA,115,4,Klotho-FC,Heterozygous,WT,Inconclusive,Male,Male,TRUE

@@ -1,0 +1,6 @@
+Female_4	Female_12	Male_4	Male_12
+WT/WT	5	10	8	9
+WT/FC	5	4	5	6
+FC/FC	3	4	5	6
+WT/VS	2	5	2	3
+VS/VS	2	5	4	6

@@ -1,0 +1,4 @@
+group	sex	Klotho genotype	sex:Klotho genotype	age	sex:age	age:Klotho genotype
+age_batch_12	539	4007	1	--	--	--
+age_batch_4	11	5	0	--	--	--
+all	86	4287	0	1530	94	2

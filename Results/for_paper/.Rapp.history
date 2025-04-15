@@ -1,0 +1,294 @@
+?formula
+?rm
+?boxplot
+??rank
+test <- readRDS("~/Downloads/annotated_biodomains_Oct23.rds")
+str(test)
+length(test)
+names(test)
+class(test)
+head(test)
+test[1,]
+dim(test)
+test$ensembl_id[1]
+test$Subdomain[1]
+??rank
+?t.test
+?rank
+?ecdf
+?rpois
+library(vioplot)
+?vioplot
+?par
+??Tukey
+all <- readRDS("~/Documents/Projects/Klotho/Results/all/processed_data/Normalized_Expression.RDS")
+dim(all)
+older <- readRDS("~/Documents/Projects/Klotho/Results/age_batch_12/processed_data/Normalized_Expression.RDS")
+dim(older)
+library(MASS)
+?lda
+?entrop
+??entropy
+library(igraph)
+?graph_from_edgelist
+library(igraph)
+?simplify
+?remove.edges
+??remove.edges
+?? delete edges
+?? delete.edges
+?delete_vertices
+??projection
+?which.max
+library(pheatmap)
+?pheatmap
+sprintf("%f", pi)
+sprintf("%.3f", pi)
+sprintf("%.0f", pi)
+young <- readRDS("~/Documents/Projects/Klotho/analysis/Results/age_batch_4/gene_Effects_of_genotype.RDS")
+old <- readRDS("~/Documents/Projects/Klotho/analysis/Results/age_batch_12/gene_Effects_of_genotype.RDS")
+str(old[[1]])
+str(old)
+young <- readRDS("~/Documents/Projects/Klotho/analysis/Results/age_batch_4/gene_Effects_of_genotype.RDS")
+old <- readRDS("~/Documents/Projects/Klotho/analysis/Results/age_batch_12/gene_Effects_of_genotype.RDS")
+str(young)
+plot(young$R2, old$R2)
+common.genes <- intersect(names(young$R2), names(old$R2))
+common.genes
+plot(young$R2[common.genes], old$R2[common.genes])
+boxplot(list("4" = young$R2, "12" = old$R2))
+source('~/Documents/Projects/Klotho/analysis/Code/plot.with.model.R')
+plot.with.model(young$R2[common.genes], old$R2[common.genes])
+all.fun <- list.files("~/Documents/Projects/Klotho/analysis/Code")
+for(i in 1:length(all.fun)){source(all.fun[i])}
+all.fun <- list.files("~/Documents/Projects/Klotho/analysis/Code", full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+plot.with.model(young$R2[common.genes], old$R2[common.genes])
+plot.with.model(young$R2[common.genes], old$R2[common.genes], report = "cor.test")
+col = rgb(49/256,130/256,189/256, alpha = 0.5))
+plot.with.model(young$R2[common.genes], old$R2[common.genes], report = "cor.test",#
+	col = rgb(49/256,130/256,189/256, alpha = 0.5))
+boxplot(list("4" = young$R2, "12" = old$R2))
+r2.diff <- old$R2 - young$R2
+r2.diff <- old$R2[common.genes] - young$R2[common.genes]
+hist(r2.diff)
+library(gprofiler2)
+head(r2.diff)
+more.in.old <- names(head(sort(r2.diff, decreasing = TRUE), 100))
+more.in.old
+more.in.young <- names(head(sort(r2.diff, decreasing = FALSE), 100))
+more.in.old.enrich <- gost(nore.in.old, organism = "mmusculus",
+sources = c("GO", "KEGG", "REACTOME", "HP", "CORUM"))
+more.in.old.enrich <- gost(more.in.old, organism = "mmusculus", #
+	sources = c("GO", "KEGG", "REACTOME", "HP", "CORUM"))
+plot.enrichment(more.in.old.enrich, plot.label = "More different in old mice")
+plot.enrichment(more.in.old.enrich, plot.label = "More different in old mice", 	#
+	max.term.size = 3000, num.terms = 30)
+plot.enrichment(more.in.young.enrich, plot.label = "More different in old mice", 	#
+	max.term.size = 3000, num.terms = 30)
+more.in.young.enrich <- gost(more.in.young, organism = "mmusculus", #
+	sources = c("GO", "KEGG", "REACTOME", "HP", "CORUM"))
+plot.enrichment(more.in.young.enrich, plot.label = "More different in old mice", 	#
+	max.term.size = 3000, num.terms = 30)
+?boxplot
+?interaction.plot
+?axis
+?knn
+??knn
+library(easyPubMed)#
+library(stringr)#
+library(tm)#
+library(cluster)#
+library(igraph)#
+library(wordcloud)#
+library(topicmodels)#
+library(pheatmap)#
+useful.fun <- list.files("~/Documents/git_repositories/useful_r_code", full.names = TRUE)#
+for(i in 1:length(useful.fun)){source(useful.fun[i])}
+remove.chars <- c(".", ",", "(", ")", '"', "[", "]", ":")#
+#from tm and ones I've noticed#
+remove.words <- c(stopwords("english"), "also", "via", "among", "group", "log", "axis",#
+	"known", "apparently", "role", "forever", "study")
+library(here)
+pub.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(pub.fun)){source(useful.fun[i])}
+pub.fun
+q()
+library(igraph)
+?modularity
+install.packages("vcfR")
+install.packages("dplyr")
+library(vcfR)
+library(dplyr)
+read_vcf <- function(file) {#
+  vcf <- read.vcfR(file)#
+  vcf_df <- as.data.frame(vcf@fix)#
+  return(vcf_df)#
+}
+file.name <- "~/Downloads/WSB_EiJ.mgp.v5.indels.dbSNP142.normed.vcf.gz"
+vcf_files <- file.name
+vcf_data <- lapply(vcf_files, read_vcf)
+test <- readRDS("~/Documents/Projects/LPS/LPS_cape/Results/query_cape_heterosis17/cross_pairscan.RDS")
+str(test)
+head(test$pairscan_results[[1]])
+str(test$pairscan_results[[1]])
+head(test$pairscan_results[[1]]$pairscan_effects)
+head(test$pairscan_results[[1]]$pairscan_effects, 100)
+tail(test$pairscan_results[[1]]$pairscan_effects)
+unique(test$pairscan_results[[1]]$pairscan_effects[,1])
+test <- readRDS("~/Documents/Projects/LPS/LPS_cape/Results/query_cape_heterosis17/cross_geno.RDS")
+chr2.idx <- which(test$chromosome == 2)
+test <- readRDS("~/Documents/Projects/LPS/LPS_cape/Results/query_cape_heterosis17/cross.RDS")
+chr2.idx <- which(test$chromosome == 2)
+chr2.idx
+test$marker_location[chr2.idx]
+?text
+library(qtl2)
+?scan1
+?interaction.plot
+library(qtl2)
+?scan1
+?scan1perm
+?scan1.plot
+?qtl2::scan1.plot
+?plot.scan1
+library(qtl2)
+??pull_marker_probpos
+??marker_probpos
+??probpos
+total <- 27293.97#
+salary <- 120172#
+years <- 5#
+#
+per.year <- total/years
+per.year
+perc.sal <- per.year/salary
+perc.sal
+islet.drugs <- read.delim("~/Downloads/islet.gct")
+islet.drugs <- read.delim("~/Downloads/islet.gct", header = TRUE, sep = "\t")
+?read.delim
+islet.drugs <- read.delim("~/Downloads/islet.gct", header = TRUE, sep = "\t", skip = 3)
+islet.drugs[1:10, 1:10]
+islet.drugs <- read.delim("~/Downloads/islet.gct", header = TRUE, sep = "\t", skip = 2)
+islet.drugs[1:10, 1:10]
+colnames(islet.drugs)
+sig.level <- 15
+sig.idx <- which(islet.drugs[,"fdr_q_nlog10"] >= sig.level)
+sig.table <- islet.drugs[sig.idx,]
+dim(sig.table)
+colnames(islet.drugs)
+unique(sig.table[,"src_set_id"])
+strings <- unique(sig.table[,"src_set_id"])
+split.strings <- sapply(strings, function(x) strsplit(x, "."))
+split.strings
+split.strings <- sapply(strings, function(x) strsplit(x, ""))
+split.strings
+letter.mat <- matrix(0, nrow = length(strings), ncol = 26)
+rownames(letter.mat) <- strings
+colnames(letter.mat) <- letters
+split.strings <- sapply(strings, function(x) str_to_lower(strsplit(x, "")))
+library(stringR)
+library(stringr)
+split.strings <- sapply(strings, function(x) str_to_lower(strsplit(x, "")))
+warnings()
+split.strings <- sapply(strings, function(x) str_to_lower(strsplit(x, "")[[1]]))
+split.strings
+letter.mat <- matrix(0, nrow = length(strings), ncol = 26)
+rownames(letter.mat) <- strings
+colnames(letter.mat) <- letters
+letter.count <- sapply(letters, function(x) length(which(split.strings[[i]] == x))
+letter.count
+letter.count <- sapply(letters, function(x) length(which(split.strings[[i]] == x)))
+i = 1
+letter.count <- sapply(letters, function(x) length(which(split.strings[[i]] == x)))
+letter.count
+split.strings[[i]]
+for(i in 1:length(split.strings)){#
+		letter.count <- sapply(letters, function(x) length(which(split.strings[[i]] == x)))#
+		letter.mat[i,] <- letter.count#
+	}
+library(pheatmap)
+pheatmap(letter.mat)
+pheatmap(cor(t(letter.mat)))
+pdf("~/Desktop/letters.pdf", width = 40, height = 40)#
+	pheatmap(cor(t(letter.mat)))#
+	dev.off()
+pdf("~/Desktop/letters.pdf", width = 20, height = 20)#
+	pheatmap(cor(t(letter.mat)))#
+	dev.off()
+colnames(islet.drugs)
+head(islet.drugs)
+??read_xls
+library(readxl)
+?read_excel
+?read_xlsx
+?colorRamp
+length(gray.scale), col = gray.scale)
+colorRampPalette(c("blue", "red"))( 4 )
+?par
+?TukeyHSD
+?mext
+?mtext
+?barplot
+row.num <- 1:5
+col.let <- LETTERS[1:5]
+cbind(sample(row.num, 3, replace = TRUE), sample(col.let, 3, replace = TRUE))
+?interaction.plot
+test4 <- readRDS("~/Documents/Projects/Klotho/analysis/Results/for_paper/num_de_age_batch_4.txt")
+test4 <- readRDS("~/Documents/Projects/Klotho/analysis/Results/for_paper/num_de_age_batch_4.RDS")
+test3
+test4
+test12 <- readRDS("~/Documents/Projects/Klotho/analysis/Results/for_paper/num_de_age_batch_12.RDS"")
+test12 <- readRDS("~/Documents/Projects/Klotho/analysis/Results/for_paper/num_de_age_batch_12.RDS")
+test12
+testall <- readRDS("~/Documents/Projects/Klotho/analysis/Results/for_paper/num_de_all.RDS")
+testall
+setwd("~/Documents/Projects/Klotho/analysis/Results/for_paper")
+num_de_files <- list.files(".", pattern = "num_de")
+num_de_files
+num_de <- lapply(num_de_files, readRDS)
+num_de
+names(num_de) <- gsub(".RDS", "", gsub("num_de_", "", num_de_files))
+names(num_de) <- gsub(".RDS", "", gsub("num_de_", "", num_de_files))
+names(num_de)
+u_cat <- Reduce("union", lapply(num_de, names))
+u_cat
+count.table <- matrix(NA, nrow = length(num_de), ncol = length(u_cat))
+count.table <- matrix(NA, nrow = length(num_de), ncol = length(u_cat))
+rownames(count.table) <- names(num_de)
+colnames(count.table) <- u_cat
+count.table
+i = 1
+names(num_de[[i]])
+for(i in 1:length(num_de)){
+count.table[i,names(num_de[[i]])] <- num_de[[i]]
+}
+count.table
+num_de
+num_de <- num_de[c(2,1,3)] #reorder to put 4 month animals first
+u_cat <- Reduce("union", lapply(num_de, names))#
+count.table <- matrix(NA, nrow = length(num_de), ncol = length(u_cat))#
+rownames(count.table) <- names(num_de)#
+colnames(count.table) <- u_cat#
+#
+for(i in 1:length(num_de)){#
+	count.table[i,names(num_de[[i]])] <- num_de[[i]]#
+}
+count.table
+for(i in 1:length(sub.list)){#
+	colnames(count.table) <- gsub(names(sub.list)[i], sub.list[i], colnames(count.table))#
+}
+sub.list <- c("sex_ge" = "sex", "age_batch" = "age", "climb_geno" = "genotype")
+for(i in 1:length(sub.list)){#
+	colnames(count.table) <- gsub(names(sub.list)[i], sub.list[i], colnames(count.table))#
+}
+sub.list
+count.table
+rownames(count.table) <- c("4 months", "12 months", "All")
+count.table
+count.table[,c(1,4,2,3,5,6)]
+count.table[,c(1,2,4,3,5,6)]
+count.table
+write.table(count.table, "num_de_table.txt", sep = "\t", quote = FALSE)
+write.table(count.table, "num_de_table.txt", sep = "\t", quote = FALSE, na.strings = "--")
+write.table(count.table, "num_de_table.txt", sep = "\t", quote = FALSE, na = "--")
