@@ -1,0 +1,628 @@
+## Batches Pre-Normalization {.tabset .tabset-fade .tabset-pills}
+
+
+```{r pc_fun}
+plot_pc_factors <- function(expr.decomp){
+  for(i in 2:ncol(info)){
+    cat("###", colnames(info)[i], "\n")
+    pc1.var.exp <- signif(expr.decomp$var.exp[1]*100, 2)
+    pc2.var.exp <- signif(expr.decomp$var.exp[2]*100, 2)
+    
+    layout(matrix(c(1,2), nrow = 1), widths = c(1, 0.4))
+    par(mar = c(6,6,4,0))
+    if(is.factor(info[,i])){
+      plot(expr.decomp$u, pch = 16, xlab = paste0("PC1 (", pc1.var.exp, "%)"),
+        ylab = paste0("PC2 (", pc2.var.exp, "%)"), col = as.numeric(info[,i]),
+        main = colnames(info)[i])
+    }else{
+      age.cols = brewer.pal(9, "RdPu")
+      u_age <- sort(unique(info[,i]))
+      age.col <- sapply(info[,i], function(x) age.cols[which(u_age == x)])
+      plot(expr.decomp$u, pch = 16, xlab = paste0("PC1 (", pc1.var.exp, "%)"),
+        ylab = paste0("PC2 (", pc2.var.exp, "%)"), col = age.col, main = colnames(info)[i])
+    }
+    par(mar = c(6,0,4,2))
+    plot.new()
+    plot.window(xlim = c(0,1), ylim = c(0,1))
+    if(is.factor(info[,i])){
+      legend(0, 1, legend = levels(info[,i]), pch = 16, col = unique(as.numeric(info[,1])))
+    }else{
+      legend(0, 1, legend = u_age, pch = 16, col = age.cols[1:length(u_age)])
+    }
+    cat("\n\n")
+  }
+}
+```
+
+The following plots show the relationships between the first
+two PCs of the un-normalized gene expression matrix and relevant
+variables.
+
+```{r pre_norm_pc, fig.width = 6, fig.height = 5, results = "asis"}
+#pdf("~/Desktop/test.pdf", width = 6, height = 5)
+plot_pc_factors(pre.norm.decomp)
+#dev.off()
+```
+
+## Parsing biodomains
+
+
+```{r parse_bd}
+#make a list of the biodomains. Each biodomain has a subdomain
+#with a list of human genes.
+
+annotated_bd <- readRDS(file.path(biodomain.dir, "annotated_biodomains_Oct23.rds"))
+u_bd <- unique(annotated_bd$Biodomain)
+u_sbd <- unique(annotated_bd$Subdomain)
+
+bd_list <- vector(mode = "list", length = length(u_bd))
+names(bd_list) <- u_bd
+
+for(bd in 1:length(u_bd)){
+  bd.idx <- which(annotated_bd$Biodomain == u_bd[bd])
+  u_sub.bd <- unique(annotated_bd$Subdomain[bd.idx])
+  u_sub.bd[which(is.na(u_sub.bd))] <- u_bd[bd]
+  sub.list <- vector(mode = "list", length = length(u_sub.bd))
+  names(sub.list) <- u_sub.bd
+  for(sbd in 1:length(u_sub.bd)){
+    if(u_sub.bd[sbd] == u_bd[bd]){
+      sbd.idx <- which(is.na(annotated_bd$Subdomain[bd.idx]))
+    }else{
+      sbd.idx <- which(annotated_bd$Subdomain[bd.idx] == u_sub.bd[sbd])
+    }
+    sbd.genes <- Reduce("union", annotated_bd$ensembl_id[bd.idx[sbd.idx]])
+  }
+
+}
+```
+
+From 1.Klotho_Initial_Data_Visualization.Rmd after biodomain
+expression section:
+
+## Cluster Enrichment {.tabset .tabset-fade .tabset-pills}
+
+I thought it might be interesting to look at the enrichment
+of the obvious clusters in the plots above, but the enrichments
+are really redundant, so I'm taking out the plots. It will 
+probably be more informative to look at intersections with 
+GO terms and KEGG pathways.
+
+
+```{r cluster_enrich, results = "asis", fig.height = 7, fig.width = 7}
+stop()
+for(i in 1:length(gene.enrich)){
+  cat("###", names(mean.bd.vals)[i], "\n")
+  plot.enrichment.group(gene.enrich[[i]], max.term.size = 3000, 
+    n.terms = 30, cluster_cols = FALSE, plot.label = names(mean.bd.vals)[i])
+  cat("\n\n")
+}
+```
+
+
+## from KEGG and Biodomain Intersections
+
+
+To calculate a significance threshold on the largest contributing
+pathways, we need to perform permutations and calculate a null 
+distribution for something. What we are interested in is the 
+expression's ability to discriminate the genotypes, so we need
+to calculate a statistic about that. We shuffled the mouse labels,
+which breaks the correlation between genotype and expression,
+but not the correlation structure of gene expression.
+
+We need a statistic that quantifies the ability of the gene 
+expression to distinguish genotypes along the first principal
+component.
+
+```{r perm_fun}
+#This function permutes the output of merge_mean_mats()
+#This is a matrix with pathway intersections in rows and individuals
+#in columns. It shuffles the individual labels and then recalculates
+#pathway means for each genotype based on the shuffled individuals.
+#it returns the first two principal components of the shuffled matrices.
+
+perm_mean_mat <- function(ind.mean.mat, n.perm = 1000){
+    perm.genotype.score <- vector(mode = "list", length = n.perm)
+
+    for(p in 1:n.perm){
+        perm.order <- sample(1:ncol(ind.mean.mat)) #shuffle individuals
+        
+        #shuffle the individual labels on the mean gene expression
+        perm.ind.mean.mat <- ind.mean.mat[,perm.order]
+        colnames(perm.ind.mean.mat) <- colnames(sub.vals)
+
+        perm.geno.mats <- lapply(geno.idx, function(x) perm.ind.mean.mat[,x])
+        perm.geno.means <- sapply(perm.geno.mats, rowMeans)
+        
+        #plot.decomp(t(perm.geno.means), label.points = TRUE, cols = geno.cols, cex = 1.5)
+        mean.perm.decomp <- plot.decomp(t(perm.geno.means), plot.results = FALSE) 
+        perm.genotype.score[[p]] <- mean.perm.decomp$u
+    }
+
+    return(perm.genotype.score)
+}
+
+```
+
+```{r perm}
+
+true.decomp <- plot.decomp(t(sub.vals), plot.results = FALSE)
+
+nperm = 1000
+perm.geno.score <- perm_mean_mat(sub.vals, nperm)
+```
+
+The following plot shows the score for each genotype along
+PC1 against the permuted result for PC1. The VS genotypes
+do tend to be on the low end and the FC genotypes tend to
+be on the high end, but they are still well within the 
+random distributions.
+
+```{r plot_perm_pc1}
+perm1 <- t(sapply(perm.geno.score, function(x) x[,1]))
+vioplot(perm1, col = geno.cols)
+points(x = 1:length(geno.cols), y = mean.decomp$u[,1], pch = "*", cex = 3, col = "#c51b8a")
+abline(h = 0)
+```
+
+The following plot is the same as above but for PC2
+
+```{r plot_perm_pc2}
+perm2 <- t(sapply(perm.geno.score, function(x) x[,2]))
+vioplot(perm2, col = geno.cols)
+points(x = 1:length(geno.cols), y = mean.decomp$u[,2], pch = "*", cex = 3, col = "#c51b8a")
+abline(h = 0)
+```
+
+The following plot shows the calculated PC values for each genotype
+against random distrbutions of PC1 and PC2. These are not particularly
+inspiring. The VS genotypes are at the edge of their distributions, but 
+still within the random point cloud.
+
+
+```{r both_pc, fig.width = 9, fig.height = 6}
+par(mfrow = c(2,3))
+for(i in 1:ncol(perm1)){
+    xmin <- min(c(perm1[,i], mean.decomp$u[i,1]))
+    xmax <- max(c(perm1[,i], mean.decomp$u[i,1]))
+    ymin <- min(c(perm2[,i], mean.decomp$u[i,2]))
+    ymax <- max(c(perm2[,i], mean.decomp$u[i,2]))
+
+    plot(perm1[,i], perm2[,i], xlim = c(xmin, xmax), ylim = c(ymin, ymax),
+        xlab = "PC1", ylab = "PC2", main = names(geno.cols)[i],)
+    points(mean.decomp$u[i,1], mean.decomp$u[i,2], col = geno.cols[i], pch = 16, cex = 3)
+}
+
+```
+
+Maybe the individual scores don't matter? Maybe it's about how well
+they are separated or clustered? The VS genotype should group together,
+the FC genotypes should group together, and they should be separated 
+from each other.
+
+Or maybe we should test individual pathways, not overall?
+
+```{r sandbox, eval = FALSE}
+path.name <- "Ribosome"
+path.name <- "Tryptophan metabolism"
+
+
+path.idx <- which(names(mean.bd.k.vals) == path.name)
+path.decomp <- plot_mean_bd_k(mean.bd.k.vals[[path.idx]], covar.table)
+path.sub <- merge_mean_mats(mean.bd.k.vals[path.idx])
+
+geno.path <- lapply(geno.idx, function(x) path.sub[,x])
+geno.path.means <- sapply(geno.path, rowMeans)
+mean.path.decomp <- plot.decomp(t(geno.path.means), cols = geno.cols, label.points = TRUE)
+
+perm.path <- perm_mean_mat(path.sub, 1000)
+
+perm1 <- t(sapply(perm.path, function(x) x[,1]))
+vioplot(perm1, col = geno.cols, main = path.name)
+points(x = 1:length(geno.cols), y = mean.path.decomp$u[,1], pch = "*", cex = 3, col = "#c51b8a")
+abline(h = 0)
+
+
+```
+
+
+## ANOVA
+
+What if we just do an ANOVA on each intersection.
+We've done ANOVA's on individual genes, this will
+look at the means of biodomain-kegg intersections.
+
+
+```{r anova}
+
+test_pathways <- function(nested.gene.list, expr.mat){
+
+    all.aov <- max.mean.dist <- vector(mode = "list", length = length(nested.gene.list))
+    names(all.aov) <- names(max.mean.dist) <- names(nested.gene.list)
+    
+    for(bd in 1:length(nested.gene.list)){
+        bd.aov <- max.bd.dist <- vector(mode = "list", length = length(nested.gene.list[[bd]]))
+        names(bd.aov) <- names(max.bd.dist) <- names(nested.gene.list[[bd]])
+        if(length(nested.gene.list[[bd]]) == 0){next()}
+        for(k in 1:length(nested.gene.list[[bd]])){
+            gene.ids <- nested.gene.list[[bd]][[k]]
+            common.genes <- intersect(gene.ids, colnames(expr.mat))
+            gene.mat <- expr.mat[,common.genes]
+            geno.mats <- lapply(geno.idx, function(x) t(gene.mat)[,x])
+            geno.means <- sapply(geno.mats, rowMeans)
+            #boxplot(geno.means)
+            bd.aov[[k]] <- aov.by.matrix(geno.means)
+            max.bd.dist[[k]] <- as.vector(dist(t(geno.means)))
+        }
+        all.aov[[bd]] <- bd.aov
+        max.mean.dist[[bd]] <- max.bd.dist
+    }
+    return(list("aov" = all.aov, "dist" = max.mean.dist))
+}
+
+get_nested_stats <- function(anova.list, dist.list){
+    bd.p <- bd.dist <- matrix(NA, ncol = length(kegg.bd.list), nrow = length(kegg.list))
+    colnames(bd.p) <- colnames(bd.dist) <- names(kegg.bd.list)
+    rownames(bd.p) <- rownames(bd.dist) <- names(kegg.list)
+    for(bd in 1:length(kegg.bd.list)){
+        sub.p <- sapply(anova.list[[bd]], function(x) summary(x)[[1]][,"Pr(>F)"][1])
+        sub.dist <- sapply(dist.list[[bd]], max)
+        if(length(sub.p) > 0){
+            bd.p[names(sub.p),bd] <- sub.p
+            bd.dist[names(sub.dist),bd] <- sub.dist
+        }
+    }
+
+    result <- list("p" = bd.p, "dist" = bd.dist)
+}
+
+
+bd.kegg.test <- test_pathways(kegg.bd.list, adj_expr)
+bd.kegg.aov <- bd.kegg.test$aov
+bd.kegg.dist <- bd.kegg.test$dist
+
+all.dist <- unlist(bd.kegg.dist)
+hist(all.dist)
+
+nperm = 10
+perm.p <- perm.dist <- vector(mode = "list", length = nperm)
+for(p in 1:nperm){
+    print(p)
+    rnd.sample <- sample(1:nrow(adj_expr))
+    sampled.expr <- adj_expr[rnd.sample,]
+    rownames(sampled.expr) <- rownames(adj_expr)
+    bd.kegg.perm <- test_pathways(kegg.bd.list, sampled.expr)
+    
+    bd.kegg.aov.perm <- bd.kegg.perm$aov
+    bd.kegg.dist.perm <- bd.kegg.perm$dist
+
+    aov.stats <- get_nested_stats(anova.list = bd.kegg.aov.perm, dist.list =  bd.kegg.dist.perm)
+
+    perm.p[[p]] <- aov.stats$p
+    perm.dist[[p]] <- aov.stats$dist
+}
+
+qqunif.plot(as.vector(unlist(perm.p)))
+hist(as.vector(unlist(perm.dist)))
+
+pv <- as.vector(bd.p)
+pv <- pv[which(!is.na(pv))]
+adj.p <- p.adjust(pv, "fdr")
+#length(which(adj.p < 0.05))
+p.order <- order(pv, decreasing = FALSE)
+test <- cbind("p" = pv[p.order], "adjusted_p" = adj.p[p.order])
+thresh.p <- max(test[which(test[,"adjusted_p"] <= 0.00011),"p"])
+
+sig.mat <- bd.p
+sig.mat[which(sig.mat > thresh.p)] <- NA
+row.vals <- which(apply(sig.mat, 1, function(x) !all(is.na(x))))
+col.vals <- which(apply(sig.mat, 2, function(x) !all(is.na(x))))
+
+sig.p <- -log10(bd.p[row.vals, col.vals])
+sig.dist <- bd.dist[row.vals, col.vals]
+
+
+pdf("~/Desktop/sig_intersections.pdf", width = 7, height = 17)
+pheatmap(sig.p, cluster_rows = FALSE, cluster_cols = FALSE)
+pheatmap(sig.dist, cluster_rows = FALSE, cluster_cols = FALSE)
+dev.off()
+ 
+pass.thresh <- which(!is.na(sig.p), arr.ind = TRUE)
+diff.names <- apply(pass.thresh, 1, function(x) paste(rownames(sig.p)[x[1]], colnames(sig.p)[x[2]], sep = " - "))
+diff.idx <- match(diff.names, rownames(sub.vals))
+
+sub.means <- sapply(geno.idx, function(x) rowMeans(sub.vals[,x]))
+pheatmap(sub.means[diff.idx,])
+
+plot_mean_bd_k(sub.vals[diff.idx,], covar.table)
+```
+
+Is is interesting that the WT are not intermediate, but span 
+the full range? That is that Klotho nudges you to one side of
+normal or another side, but doesn't push you outside of the 
+normal range.
+
+The WT only seem intermediate because their mean is zero.
+
+
+## Individual testing of AD genes
+
+Now we pull them out of the full list tested before.
+
+```{r test_ad}
+
+ad.mean.mat <- matrix(NA, nrow = length(ad.orthos), ncol = 5)
+rownames(ad.mean.mat) <- ad.orthos
+colnames(ad.mean.mat) <- genotypes[1:5]
+gene.p <- rep(NA, length(ad.orthos))
+names(gene.p) <- ad.orthos
+
+#pdf("~/Desktop/ad_test.pdf")
+plot.results = FALSE
+for(i in 1:length(ad.orthos)){
+  if(plot.results){
+    cat("###", ad.orthos[i], "\n")
+  }
+  gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== ad.orthos[i]), "ensembl_gene_id"]
+  test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+    tx_name = gene.id, tx_label = ad.orthos[i], ylab = "Normalized Count",
+    order.by.mean = FALSE, plot.results = plot.results)
+
+  #gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== "Abca1"), "ensembl_gene_id"]
+  #gene.name = gene.info[which(gene.info[,"ensembl_gene_id" ]== gene.id), "external_gene_name"]
+  #test <- plot_tx_with_genotype(expr.mat = norm.expr, covar.table = covar.mat, tx_name = gene.id, tx_label = gene.name, ylab = "Normalized Count")
+
+
+  if(length(test[[1]]) > 0){
+    mean.vals <- sapply(test$grouped_vals[[1]], mean)
+    ad.mean.mat[i,names(mean.vals)] <- mean.vals
+    gene.p[i] <- test[[2]][1]
+  }
+  #just variant levels
+  #vioplot(test[[1]][2:5], col = "lightgray", main = ad.orthos[i])
+  #stripchart(test[[1]][2:5], col = "#2b8cbe", add = TRUE, vertical = TRUE, pch = 16,
+  #  method = "jitter")
+  if(plot.results){
+    cat("\n\n")
+  }
+}
+#dev.off()
+```
+
+
+## Testing individual factors 
+we test everything in one model now, and these variables are confusing me.
+
+We also tested the effects of each factor after adjusting
+for the other factors to get effect sizes for each.
+This allows us to make volcano plots for each factor.
+
+```{r diff_fun}
+
+test_one_var <- function(expr.mat, covar.mat, covar.names, test.var){
+
+  var.test.file <- file.path(results.dir, paste0(expression.type, "_Effects_of_", test.var, ".RDS"))
+
+  adj.covar <- setdiff(covar.names, test.var)
+  no.var.covar <- dummy_covar(covar.mat[,adj.covar,drop=FALSE])
+  adj.expr.file <- file.path(processed.data.dir, paste0("Adjusted_", expression.type, "_Expression_for_", test.var, "_test.RDS"))
+  if(file.exists(adj.expr.file)){
+    adj.expr <- readRDS(adj.expr.file)
+  }else{
+    adj.expr <- adjust(t(expr.mat), no.var.covar)
+    saveRDS(adj.expr, adj.expr.file)
+  }
+
+  #match covariates to adjusted expression matrix
+  common.ind <- intersect(rownames(adj.expr), rownames(covar.mat))
+  expr.idx <- match(common.ind, rownames(adj.expr))
+  covar.idx <- match(common.ind, rownames(covar.mat))
+
+  diff.test <- apply(adj.expr[expr.idx,], 2, function(x) lm(x~covar.mat[covar.idx,test.var]))
+  test.coef <- t(sapply(diff.test, function(x) coef(x)))
+  test.p <- t(sapply(diff.test, function(x) summary(x)$coefficients[,"Pr(>|t|)"]))
+  colnames(test.coef) <- colnames(test.p) <- gsub("covar.mat[, test.var]", "", colnames(test.coef), fixed = TRUE)
+  test.f <- lapply(diff.test, function(x) summary(x)$fstatistic)
+  overall.p <- sapply(test.f, function(x) pf(x[1],x[2],x[3],lower.tail=F))
+  test.r2 <- sapply(diff.test, function(x) summary(x)$adj.r.squared)
+  result <- list("coef" = test.coef, "coef_p_values" = test.p, "overall_p" = overall.p, "R2" = test.r2)
+  saveRDS(result, var.test.file)
+
+  return(result)
+}
+```
+
+```{r run_diff_test}
+all.tests <- vector(mode = "list", length = (length(use.covar)-1))
+names(all.tests)  <- use.covar[2:length(use.covar)]
+
+for(i in 2:length(use.covar)){
+  result.idx <- which(names(all.tests) == use.covar[i])
+  all.tests[[result.idx]] <- test_one_var(expr.mat = scaled.expr, 
+    covar.mat = plotting.df, covar.names = use.covar, 
+    test.var = use.covar[i])
+}
+```
+
+### Volcano Plots {.tabset .tabset-fade .tabset-pills}
+
+The following volcano plots show the relationship between
+coefficients and p values for each of the variables tested.
+Here, we used a p value of `r fdr.thresh` to mark genes that
+might be differentially expressed.
+
+Again, we removed the sex-specific genes (those with a 
+-log10(p) > `r sex.effect.threshold`).
+
+```{r volcano, results = "asis", fig.width = 8, fig.height = 4}
+
+#pdf("~/Desktop/volcano.pdf", width = 8, height = 4)
+#par(mfrow = c(3,2))
+de.list <- vector(mode = "list", length = length(all.tests))
+names(de.list)  <- names(all.tests)
+
+par(mfrow = c(1,2))
+for(i in 1:length(all.tests)){
+  cat("####", names(all.tests)[i], "\n")
+  p <- all.tests[[i]]$overall_p
+  coef.p <- all.tests[[i]]$coef_p_values
+  coef.table <- all.tests[[i]]$coef[,2:ncol(all.tests[[i]]$coef),drop=FALSE]
+
+  if(names(all.tests)[i] == "sex_ge"){
+    #take out the genes with the largest sex effect. These are all X and Y genes.
+    big.sex.effect <- which(-log10(p) > sex.effect.threshold)
+    big.sex.genes <- gene.info[match(gsub(".value", "", names(big.sex.effect)), gene.info[,"ensembl_gene_id"]),]
+    p <- p[-big.sex.effect]
+    coef.p <- coef.p[-big.sex.effect,,drop=FALSE]
+    coef.table <- coef.table[-big.sex.effect,,drop=FALSE]
+  }
+
+  adj.p <- p.adjust(p, "fdr")
+  sig.idx <- which(adj.p <= fdr.thresh)
+  de.list[[i]] <- sig.idx
+  #length(sig.idx)
+
+  qqunif.plot(p,  
+    plot.label = paste("qq plot for", names(all.tests)[i], 
+    "\n", length(sig.idx), "significant genes"))
+
+  sig.col <- rep("black", length(adj.p))
+  sig.col[sig.idx] <- "red"
+  coef.names <- gsub("info[, test.var]", "", colnames(coef.table), fixed = TRUE)
+  colnames(coef.table) <- coef.names  
+
+  #par(mfrow = c(2,2))
+  for(cv in 1:ncol(coef.table)){  
+    plot(coef.table[,cv], -log10(coef.p[,(cv+1)]), xlab = "Coefficient",
+      ylab = "-log10(p value)", 
+      main = paste(names(all.tests)[i], 
+        gsub("covar.mat[covar.idx, test.var]", "", colnames(coef.table)[cv], fixed = TRUE), sep = ", "), 
+      col = sig.col, pch = 16, cex = 0.7)
+  }
+
+  if(expression.type == "gene"){
+    gene.id <- rownames(scaled.expr)[sig.idx]
+    transcript.id <- sub.id[match(gene.id, sub.id[,1]),2]
+  }
+  if(expression.type == "transcript"){
+    transcript.id <- rownames(scaled.expr)[sig.idx]
+    gene.id <- sub.id[match(transcript.id, sub.id[,1]),2]
+  }
+  gene.idx <- match(gene.id, gene.info[, "ensembl_gene_id"])
+  sig.gene.info <- gene.info[gene.idx,c("external_gene_name", "chromosome_name", "start_position")]
+  sig.table <- cbind("geneID" = gene.id, "transcriptID" = transcript.id,
+    sig.gene.info,
+    "coef" = coef.table[sig.idx,],
+    "p" = as.numeric(p[sig.idx]), "p_adj" = as.numeric(adj.p[sig.idx]))
+
+  ordered.table <- sig.table[order(sig.table[,"p_adj"], decreasing = FALSE),,drop=FALSE]
+  sig.gene.file <- file.path(results.dir, paste0("Significant_", expression.type, "_", 
+    names(all.tests)[i], ".txt"))
+  write.table(ordered.table, sig.gene.file, sep = "\t", quote = FALSE, row.names = FALSE)
+  cat("\n\n")
+}
+#dev.off()
+
+#num.de <- sapply(de.list, length)
+#write.table(num.de, here("Results", "for_paper", paste0("num_de_", basename(results.dir), ".txt")),
+#  quote = FALSE, sep = "\t", col.names = FALSE)
+```
+
+## plotting and clustering differentially expressed AD genes
+
+This looks basically identical to the plots of the overall
+DEG, so it is not worth doing over in the ms.
+
+These expression patterns fall into two distinct groups:
+
+```{r ad_decomp}
+ad.decomp <- plot.decomp(ad.sig.mat, plot.results = FALSE)
+ad.cl <- pam(ad.decomp$u, k = 2)$clustering
+plot.decomp(ad.sig.mat, cols = ad.cl)
+```
+
+```{r ad_sig_gene_figure}
+if(subgroup[[1]] == 12){
+  #make sure FC up is the first cluster to match the general DEG results
+  alt.cl <- ad.cl
+  alt.cl[which(ad.cl == 1)] <- 2
+  alt.cl[which(ad.cl == 2)] <- 1
+  ad.cl <- alt.cl 
+
+  geno.order <- c(3,2,4,5)
+  cl.order <- rev(order(ad.cl))
+  ad.plot.mat <- ad.sig.mat[cl.order,geno.order]
+  scaled.mat <- t(apply(ad.plot.mat, 1, scale))
+  dimnames(scaled.mat) <- dimnames(ad.plot.mat)
+
+  png(here("Results", "for_paper", "ad_clusters.png"), width = 7, height = 3,  units = "in", res = 300)
+  layout.mat <- matrix(c(1,2), nrow = 1)
+  layout(layout.mat, widths = c(1, 0.2))
+  par(mar = c(2,4,4,1), xpd = NA)
+  imageWithText(t(scaled.mat), 
+    show.text = FALSE, use.pheatmap.colors = TRUE,
+    col.names = NULL, row.text.shift = 0.07, row.text.adj = 0.5)
+  plot.dim <- par("usr")
+  plot.height <- plot.dim[4] - plot.dim[3]
+  plot.width <- plot.dim[2] - plot.dim[1]
+  c1.mid <- mean(which(ad.cl[col.order] == 1))
+  c2.mid <- mean(which(ad.cl[col.order] == 2))
+  label.y <- (plot.dim[4]+(plot.height*0.08))
+  text(x = c1.mid, y = label.y, labels = "Neuron and Synapse")
+  text(x = c2.mid, y = label.y, labels = "Mitochondria and Ribosome")
+
+  #add colored labels for the genotypes
+  y.vals <- 1:4
+  y.shift <- plot.height*0.06
+  label.xmin <- plot.dim[1] - (plot.width*0.09)
+  label.xmax <- plot.dim[1] + (plot.width*0.03)
+  for(i in 1:length(y.vals)){
+    draw.rectangle(label.xmin, label.xmax, (y.vals[i] - y.shift), (y.vals[i] + y.shift),
+      border = geno.cols[match(rev(colnames(ad.plot.mat))[i], names(geno.cols))], 
+      lwd = 3)
+  }
+
+  #add scale bar
+  par(mar = c(2,4,4,1))
+  imageWithTextColorbar(scaled.mat, use.pheatmap.colors = TRUE, cex = 1, bar.lwd = 3)
+  dev.off()
+}
+```
+
+
+The mean expression of the genes in each group
+is shown below. The rows are scaled to accentuate
+the cross-genotype differences.
+
+```{r cl1}
+cl1.idx <- which(ad.cl == 1)
+pheatmap(ad.sig.mat[cl1.idx,ordered.geno], cluster_cols = FALSE, 
+  scale = "row", show_rownames = FALSE)
+```
+
+The enrichments for this cluster are shown below.
+
+```{r cl1_enrich}
+cl1.enrich <- gost(rownames(ad.sig.mat)[cl1.idx], organism = "mmusculus",
+  source = c("GO", "KEGG", "CORUM", "REACTOME", "HP"))
+plot.enrichment(cl1.enrich, num.terms = 25, plot.label = "Cluster 1 enrichment")
+```
+
+The mean expression of the genes in the second group is
+shown below.
+
+```{r cl2}
+cl2.idx <- which(ad.cl == 2)
+pheatmap(ad.sig.mat[cl2.idx,ordered.geno], cluster_cols = FALSE, 
+  scale = "row", show_rownames = FALSE)
+```
+
+These enrichments match the clusters seen in the differentially 
+expressed genes overall, and suggest that the differential expression
+caused by the variants is related to AD pathology.
+
+```{r cl2_enrich}
+cl2.enrich <- gost(rownames(ad.sig.mat)[cl2.idx], organism = "mmusculus",
+  source = c("GO", "KEGG", "CORUM", "REACTOME", "HP"))
+plot.enrichment(cl2.enrich, num.terms = 25, plot.label = "Cluster 2 enrichment")
+```
