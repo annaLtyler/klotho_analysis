@@ -27,6 +27,15 @@ project and with using Synapse. In this workflow we:
   between GO terms and biodomains, and intersections between boidomains
   and KEGG pathways.
 
+```{r set_version, eval = FALSE}
+#IT keeps updating R automatically, which breaks all my code.
+#this line points us to the original development library.
+#You need to run this before you can click the knit button
+#because knit calls rmarkdown::render, which is in the older 
+#library
+.libPaths(c("~/Library/R/arm64/4.4/library", .libPaths()))
+```
+
 ```{r param}
 rm(list = ls())
 
@@ -1498,15 +1507,27 @@ cluster.id <- expr.clust$clustering
 ```
 
 ```{r deg_supp_table}
+
 sig.info <- gene.info[match(rownames(mean.sig.expr), gene.info[,"ensembl_gene_id"]),]
 expr.table <- mean.sig.expr
 colnames(expr.table)  <- paste0(colnames(expr.table), "_mean_expression")
 is.agora <- rep("no", nrow(sig.info))
 is.agora[which(sig.info[,"external_gene_name"] %in% ad.orthos)] <- "yes"
-supp.table <- cbind(sig.info, expr.table, "Agora_target" = is.agora, 
+sig.gene.pval <- effect.p[match(sig.info[,1], rownames(effect.p)),"climb_geno"]
+sig.gene.fdr <- effect.fdr[match(sig.info[,1], rownames(effect.fdr)),"climb_geno"]
+supp.table <- cbind(sig.info, expr.table, "p" = sig.gene.pval,
+  "fdr" = sig.gene.fdr, "Agora_target" = is.agora, 
   "Cluster_ID" = cluster.id[rownames(mean.sig.expr)])
 write.table(supp.table, here("Results", "for_paper", "Supp_Table_DEG.csv"),
   sep = ",", quote = FALSE, row.names = FALSE)
+
+#p.order <- order(sig.gene.pval, decreasing = FALSE)
+#head(supp.table[p.order,])
+#expr.col <- grep("expression", colnames(supp.table))
+#top.decomp <- plot.decomp(supp.table[p.order[1:25],expr.col])
+#pc.order <- order(top.decomp$u[,1])
+#top.mat <- supp.table[p.order[1:25],expr.col]
+#imageWithText(top.mat, col.scale = c("blue", "brown"), split.at.vals = TRUE, grad.dir = "ends", show.text = FALSE)
 ```
 
 ## Individual AD genes {.tabset .tabset-fade .tabset-pills}
@@ -1546,6 +1567,18 @@ for(i in 1:length(ad.interest)){
   cat("\n\n")
 }
 #dev.off()
+```
+
+```{r test_genes, eval = FALSE}
+test.interest <- c("Snrnp200", "Depdc5")
+pdf("~/Desktop/test_genes.pdf")
+for(i in 1:length(test.interest)){
+  gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== test.interest[i]), "ensembl_gene_id"]
+  test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+    tx_name = gene.id, tx_label = test.interest[i], ylab = "Expression (A.U.)",
+    order.by.mean = FALSE, plot.results = TRUE)
+}
+dev.off()
 ```
 
 ```{r ad_interest_fig}

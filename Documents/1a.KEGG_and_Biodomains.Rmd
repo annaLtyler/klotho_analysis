@@ -15,6 +15,15 @@ two human Klotho variants on gene expression in mice. It
 follows directly from 1.Klotho_Initial_Data_Visualization.Rmd
 and depends on output from that workflow.
 
+```{r set_version, eval = FALSE}
+#IT keeps updating R automatically, which breaks all my code.
+#this line points us to the original development library.
+#You need to run this before you can click the knit button
+#because knit calls rmarkdown::render, which is in the older 
+#library
+.libPaths(c("~/Library/R/arm64/4.4/library", .libPaths()))
+```
+
 ```{r param}
 rm(list = ls())
 
@@ -458,6 +467,7 @@ sbd.result <- lapply(mean.sbd.vals, function(x) if(length(x) > 0){plot_mean_bd_k
 
 sbd.r2 <- lapply(sbd.result, function(x) if(length(x) > 1){x$row.r2}else{NA})
 names(sbd.r2) <- names(sub.bd.list)
+
 #r2.order <- order(sapply(sbd.r2, function(x) if(length(x) > 0){mean(x, na.rm = TRUE)})) #by biodomain mean
 r2.order <- order(bd.result$row.r2) #by overall biodomain r2
 par(mar = c(4,16,2,2))
@@ -466,7 +476,6 @@ boxplot(sbd.r2[r2.order], las = 2, horizontal = TRUE,
 abline(v = seq(0, 0.3, 0.1), lty = 2, col = "darkgray")
 points(x = bd.result$row.r2[r2.order], y = 1:length(r2.order), col = "blue",
     pch = 16)
-
 
 ```
 
@@ -480,6 +489,7 @@ points(x = bd.result$row.r2[r2.order], y = 1:length(r2.order), col = "blue",
     pch = 16)
 dev.off()
 ```
+
 
 ### Subdomain bar plots {.tabset .tabset-fade .tabset-pills}
 
@@ -652,6 +662,57 @@ text(x = (plot.dim[1]-(plot.width*3)), y = mean(plot.dim[3:4]),
 dev.off()
 ```
 
+
+```{r sig_subdomain_heat, eval = FALSE}
+#I tried making a heat map of the significant subdomains (FDR < 0.1)
+#and they don't look like much. I don't think this view is helpful.
+
+sbd.p <- lapply(sbd.result, function(x) if(length(x) > 1){x$row.p}else{NA})
+names(sbd.p) <- names(sub.bd.list)
+sbd.fdr  <- p.adjust(unlist(sbd.p), "fdr")
+sig.sbd <- which(sbd.fdr <= 0.1)
+sig.p <- unlist(sbd.p)[sig.sbd]
+
+sbd.mean.mat <- matrix(NA, nrow = length(sig.sbd), ncol = 5)
+colnames(sbd.mean.mat) <- names(geno.cols)
+rownames(sbd.mean.mat) <- names(sig.sbd)
+for(sbd in 1:length(sig.sbd)){
+    split.name <- strsplit(names(sig.sbd)[sbd], ".", fixed = TRUE)[[1]]
+    bd.name <- split.name[1] 
+    sbd.name <- split.name[2]
+    bd.idx <- which(names(sub.bd.list) == bd.name)
+    sbd.idx <- which(names(sub.bd.list[[bd.idx]]) == sbd.name)
+    geno.vals <- lapply(geno.idx, function(x) mean.sbd.vals[[bd.idx]][sbd.idx,x])
+    sbd.mean.mat[sbd,] <- sapply(geno.vals, mean)
+}
+
+sbd.decomp <- plot.decomp(sbd.mean.mat, plot.results = FALSE)
+pc.order <- order(sbd.decomp$u[,1])
+p.order <- order(sig.p, decreasing = FALSE)
+
+png("~/Desktop/sub_bd_overview.png", width = 9, height = 12, units = "in", res = 300)
+#png(here("Results", "for_paper", "Biosubdomain_overview.png"), width = 9, height = 5, units = "in", res = 300)
+layout.mat <- matrix(c(1:3), nrow = 1)
+layout(layout.mat, widths = c(1, 0.3, 0.3))
+par(mar = c(4,30,2,0), bg = NA)
+imageWithText(signif(sbd.mean.mat[pc.order,ordered.geno], 2), split.at.vals = TRUE, 
+    col.scale = c("blue", "brown"), grad.dir = "ends", col.text.shift = 0.03,
+    row.text.shift = 0.15, show.text = FALSE, row.text.cex = 1.2)
+par(mar = c(4,0,2,2))
+barplot(rev(-log10(sig.p[pc.order])), horiz = TRUE, names = NA, 
+    xlab = substitute(paste("-log"[10], "(p)")))
+plot.dim <- par("usr")
+segments(x0 = -log10(0.05/length(sbd.p)), y0 = plot.dim[3], y1 = plot.dim[4], col = "red", lty = 2)
+par(mar = c(20,4,2,3)) 
+imageWithTextColorbar(signif(sbd.mean.mat, 2), split.at.vals = TRUE, 
+    col.scale = c("blue", "brown"), grad.dir = "ends", cex = 1)
+plot.dim <- par("usr")
+plot.width <- plot.dim[2] - plot.dim[1]
+text(x = (plot.dim[1]-(plot.width*3)), y = mean(plot.dim[3:4]), 
+    labels = "Expression (A.U.)", srt = 90, cex = 1.2)
+dev.off()
+```
+
 ## KEGG pathways
 
 The plots below show results for KEGG pathways.
@@ -673,7 +734,9 @@ barplot(sort(k.result$row.r2[sig.k]), horiz = TRUE, las = 2, xlab = "Adjusted R2
     main = "KEGG pathways")
 ```
 
+
 ```{r sig_kegg_overview}
+
 k.order <- order(k.result$row.r2[sig.k], decreasing = TRUE)
 ordered.k.p <- k.adj.p[sig.k[k.order]]
 k.mean.mat <- matrix(NA, nrow = length(sig.k), ncol = 5)
@@ -690,13 +753,15 @@ pc.order <- order(k.mean.decomp$u[,1])
 cat.cols <- read.delim(here("Data", "general", "kegg_colors.txt"), comment.char = "!", sep = "\t")
 kegg.cat <- read.delim(here("Data", "general", "kegg_categories.txt"), comment.char = "#", sep = "\t")
 
-png(here("Results", "for_paper", "KEGG_overview.png"), width = 7, height = 5, units = "in", res = 300)
-layout(matrix(1:3, nrow = 1), widths = c(1.5, 0.3, 0.3))
+png(here("Results", "for_paper", "KEGG_overview.png"), width = 8.5, height = 5, units = "in", res = 300)
+#quartz(width = 8, height = 5)
+layout(matrix(c(1,2,3,1,2,4), nrow = 2, byrow = TRUE), widths = c(1.2, 0.3, 0.5))
 par(mar = c(4,26,2,0), bg = NA)
 imageWithText(signif(k.mean.mat[pc.order,ordered.geno], 2), split.at.vals = TRUE, 
     col.scale = c("blue", "brown"), grad.dir = "ends", col.text.shift = 0.03,
     row.text.shift = 0.15, show.text = FALSE, row.text.cex = 1.2)
-#categorize KEGG pathways
+
+#color KEGG pathways by category
 plot.dim <- par("usr")
 plot.width <- plot.dim[2] - plot.dim[1]
 max.x <- plot.dim[1]
@@ -704,34 +769,54 @@ rect.height <- 0.5
 
 #squish the rectangle width - we want short rectangles longer
 #and long rectangles shorter by just a bit
-cat.len <- sapply(kegg.cat[,1], nchar)
-len.scale <- 1/scale.between.vals(cat.len, 0.8, 1.05)
-#plot(cat.len, len.scale)
-#subtract a little more for short words, and a little
-#less for long words
-min.x <- (max.x - (cat.len/plot.width)*len.scale)
-#plot((cat.len/plot.width), (cat.len/plot.width)*len.scale); abline(0,1)
-#text((cat.len/plot.width), (cat.len/plot.width)*len.scale, labels = kegg.cat[,1])
+path.len <- sapply(kegg.cat[,1], nchar)
+len.scale <- 1/scale.between.vals(path.len, 0.7, 1.1)
+min.x <- (max.x - (path.len/plot.width)*len.scale)
 
+#draw on rectangles
 for(i in 1:nrow(kegg.cat)){
     path.name <- kegg.cat[i,1]
     path.cat <- kegg.cat[i,2]
-    path.col <- cat.cols[which(cat.cols[,1] == path.cat),2]
-    path.rgb <- col2rgb(path.col)/256
+    path.col <- add_alpha(cat.cols[which(cat.cols[,1] == path.cat),2], 0.5)
+    path.rgb <- col2rgb(path.col)
     path.idx <- plot.dim[4] - which(rownames(k.mean.mat)[pc.order] == path.name)
     
+    #draw.rectangle(min.x[i], max.x, path.idx-rect.height, path.idx+rect.height, 
+    #    fill = rgb(path.rgb[1,1]/256, path.rgb[2,1]/256, path.rgb[3,1]/256, alpha = 0.5), 
+    #    border = NA)
+
     draw.rectangle(min.x[i], max.x, path.idx-rect.height, path.idx+rect.height, 
-        fill = rgb(path.rgb[1,1], path.rgb[2,1], path.rgb[3,1], alpha = 0.5), 
-        border = NA)
+        fill = path.col, border = NA)
+
 }
 
+#add -log10(p) bars alongside heat map
 par(mar = c(4,0,2,0))
 barplot(rev(-log10(k.result$row.p[sig.k[k.order[pc.order]]])), horiz = TRUE, 
     names = NA, xlab = substitute(paste("-log"[10], "(p)")))
 plot.dim <- par("usr")
 segments(x0 = -log10(0.1/length(k.result$row.p)), y0 = plot.dim[3], 
     y1 = plot.dim[4], col = "red", lty = 2)
-par(mar = c(20,3,2,3)) 
+
+#add a legend for the categories
+par(mar = c(4,0,2,0))
+cat.len <- nchar(cat.cols[,1])
+scale.factor <- scale.between.vals(cat.len, 0.97, 1.03)
+cat.order <- order(cat.len, decreasing = TRUE)
+plot.new()
+plot.window(xlim = c(0, 1), ylim = c(0, 1))
+y.pos <- segment_region(0.65, 0.35, length(cat.len), "ends")
+x.max <- rev(0.5 + 2/(cat.len[cat.order]*scale.factor[cat.order]))
+x.min <- rev(0.5 - 2/(cat.len[cat.order]*scale.factor[cat.order]))
+for(i in 1:length(cat.len)){
+    draw.rectangle(x.min[i], x.max[i], y.pos[i]-0.05, y.pos[i]+0.05, 
+        fill = add_alpha(cat.cols[cat.order[i],2], 0.5), border = NA)
+    text(x = 0.5, y = y.pos[i], labels = cat.cols[cat.order[i],1], cex = 0.7)
+}
+
+
+#add a color bar for the heat map
+par(mar = c(4,6,2,7)) 
 imageWithTextColorbar(signif(k.mean.mat, 2), split.at.vals = TRUE, 
     col.scale = c("blue", "brown"), grad.dir = "ends", cex = 1.2)
 plot.dim <- par("usr")
