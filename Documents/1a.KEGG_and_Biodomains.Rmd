@@ -859,6 +859,34 @@ imageWithText(signif(kegg.mean.mat[,ordered.geno], 2), split.at.vals = TRUE,
 ```
 
 
+```{r kegg_violin_for_paper}
+#we want to highlight a couple examples in the paper
+example.path <- c("Ribosome", "Proteasome")
+for(i in 1:length(example.path)){
+    png(here("Results", "for_paper", paste("KEGG_expression_", example.path[i], ".png")), width = 5, height = 4, units = "in", res = 300)
+    geno.vals <- lapply(geno.idx, function(x) mean.k.vals[example.path[i],x])
+    #geno.order <- order(sapply(geno.vals, mean))
+    model <- lm(mean.k.vals[example.path[i],]~as.factor(covar.table[,"climb_geno"]))
+    f <- summary(model)$fstatistic
+    p <- signif(pf(f[1],f[2],f[3],lower.tail=F), 2)
+    r2 <- signif(summary(model)$r.squared, 2)
+    vioplot(geno.vals[ordered.geno], col = geno.cols[ordered.geno], 
+        main = paste(example.path[i]))
+    stripchart(geno.vals[ordered.geno], vertical = TRUE, pch = 16, method = "jitter",
+        add = TRUE, col = "#dd1c77")
+    abline(h = 0)
+    plot.dim <- par("usr")
+    plot.height <- plot.dim[2] - plot.dim[1]
+    plot.width <- plot.dim[4] - plot.dim[3]
+    text(x = plot.dim[1]+(plot.width*0.02), y = plot.dim[4]-(plot.height*0.05),
+        labels = substitute(paste(R^2, "=", nn), list(nn=r2)), adj = 0)
+    text(x = plot.dim[1]+(plot.width*0.02), y = plot.dim[4]-(plot.height*0.13), 
+        labels = paste("p =", p), adj = 0)
+    dev.off()
+}
+
+```
+
 ### KEGG overview
 
 
@@ -1603,6 +1631,7 @@ kegg.name <- "Longevity regulating pathway"
 kegg.name <- "Ribosome"
 kegg.name <- "Oxidative phosphorylation"
 kegg.name <- "Proteasome"
+kegg.name <- "Protein export"
 kegg.name <- "ECM-receptor interaction"
 kegg.name <- "Glutamatergic synapse"
 
