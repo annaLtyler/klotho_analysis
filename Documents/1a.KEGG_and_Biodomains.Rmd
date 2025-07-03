@@ -85,7 +85,7 @@ if(use.carrier.status){
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("pheatmap", "vioplot", "RColorBrewer",
   "gprofiler2", "cluster", "pathview", "clusterProfiler", "stringr", "igraph", "wordcloud",
-  "wordcloud2", "baffle", "parallel", "foreach")
+  "wordcloud2", "baffle", "parallel", "foreach", "doParallel")
 load_libraries(needed.libraries)
 ```
 
@@ -2558,7 +2558,10 @@ interaction terms above -log10(p) = 2, shown by the horizontal
 line.
 
 ```{r apoe_app}
-test.id <- bd.list$"APP Metabolism"
+term.name <- "APP Metabolism"
+#term.name <- "Oxidative Stress"
+term.idx <- which(names(bd.list) == term.name)
+test.id <- bd.list[[term.idx]]
 #test.id <- unique(unlist(kegg.bd.list)) #test everything in our intersection list
 #length(test.id)
 
@@ -2593,7 +2596,7 @@ The horizontal line marks where we have drawn our significance
 threshold.
 
 ```{r qq}
-net.thresh = 10^(-3)
+net.thresh = 10^(-4)
 qqunif.plot(as.vector(pair.int.p))
 abline(h = -log10(net.thresh))
 ```
@@ -2635,12 +2638,8 @@ net.layout <- get_layout(dir.net)
 
 #pdf("~/Desktop/dir.net.pdf", width = 10, height = 10)
 plot_net(dir.net, layout.mat = net.layout,
-    vertex.size = 1, plot.label = "APP Metabolism")
+    vertex.size = 1, plot.label = term.name)
 #dev.off()
-```
-
-```{r test_proj, eval = FALSE}
-test <- bipartite_projection(dir.net)
 ```
 
 To better illustrate why the edges are directed, we can look
@@ -2697,8 +2696,10 @@ connections going out. This suggests that Klotho genotype
 ```{r degree, fig.width = 7, fig.height = 15}
 in.deg <- degree(dir.net, mode = "in")
 out.deg <- degree(dir.net, mode = "out")
+all.deg <- degree(dir.net, mode = "all")
 #head(sort(in.deg, decreasing = TRUE))
 #head(sort(out.deg, decreasing = TRUE))
+#head(sort(all.deg, decreasing = TRUE))
 
 #pdf("~/Desktop/degree.pdf", width = 7, height = 15)
 in.deg.order <- order(in.deg, decreasing = FALSE)
