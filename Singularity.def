@@ -1,0 +1,35 @@
+Bootstrap: docker
+From: rocker/r-base:4.3.3
+Stage: spython-base
+
+%labels
+maintainer="atyler"
+%post
+export DEBIAN_FRONTEND=noninteractive; apt-get -y update \
+&& apt-get install -y libglpk-dev \
+libgmp-dev \
+libxml2-dev \
+libcurl4-openssl-dev \
+pandoc \
+
+R --slave -e 'install.packages("here",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("pheatmap",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("vioplot",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("RColorBrewer",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("gprofiler2",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("cluster",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("stringr",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("igraph",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("wordcloud",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("wordcloud2",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("baffle",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("parallel",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("foreach",repos="https://cran.rstudio.com/")'
+
+
+R --slave -e 'BiocManager::install("pathview")'
+R --slave -e 'BiocManager::install("clusterProfiler")'
+
+mkdir -p /payload/
+exec /bin/bash R --no-restore --no-save --quiet "$@"
+
