@@ -1,0 +1,17 @@
+#!/bin/bash
+#SBATCH -J klotho_kegg_biodomain
+#SBATCH -N 1 # number of nodes
+#SBATCH -n 20 # number of cores
+#SBATCH --mem=8G # memory pool for all cores
+#SBATCH -t 0-24:00 # time (D-HH:MM)
+#SBATCH -o slurm.%N.%j.out # STDOUT
+#SBATCH -e slurm.%N.%j.err # STDERR
+#SBATCH --mail-user=anna.tyler@jax.org
+#SBATCH --mail-type=END
+# example use: sbatch Klotho_intersections
+
+cd $SLURM_SUBMIT_DIR
+
+module load singularity
+
+singularity exec ../../../Containers/islet_hdma.sif R -e 'rmarkdown::render(here::here("Documents", "1a.KEGG_and_Biodomains.Rmd"))'
