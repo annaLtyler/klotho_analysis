@@ -12,6 +12,7 @@ libxml2-dev \
 libcurl4-openssl-dev \
 pandoc \
 
+R --slave -e 'install.packages("rmarkdown",repos="https://cran.rstudio.com/")'
 R --slave -e 'install.packages("here",repos="https://cran.rstudio.com/")'
 R --slave -e 'install.packages("pheatmap",repos="https://cran.rstudio.com/")'
 R --slave -e 'install.packages("vioplot",repos="https://cran.rstudio.com/")'
