@@ -2558,11 +2558,12 @@ interaction terms above -log10(p) = 2, shown by the horizontal
 line.
 
 ```{r apoe_app}
-term.name <- "APP Metabolism"
+#term.name <- "APP Metabolism"
 #term.name <- "Oxidative Stress"
-term.idx <- which(names(bd.list) == term.name)
-test.id <- bd.list[[term.idx]]
-#test.id <- unique(unlist(kegg.bd.list)) #test everything in our intersection list
+#term.idx <- which(names(bd.list) == term.name)
+#test.id <- bd.list[[term.idx]]
+term.name <- "all_genes"
+test.id <- unique(unlist(kegg.bd.list)) #test everything in our intersection list
 #length(test.id)
 
 #start.lin <- Sys.time()
