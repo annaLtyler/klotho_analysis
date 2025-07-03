@@ -8,8 +8,9 @@ dummy_covar <- function(covar.mat){
 
     u_factors <- lapply(1:ncol(covar.mat), function(x) sort(unique(covar.mat[,x])))
     num.factors <- sapply(u_factors, length)
-    total.columns <- sum(num.factors) - length(num.factors)
-    new.names <- lapply(1:length(u_factors), function(x) paste(colnames(covar.mat)[x], u_factors[[x]][2:length(u_factors[[x]])], sep = "_"))
+    use.these <- which(num.factors > 1) #we can't use anything that doesn't vary
+    total.columns <- sum(num.factors[use.these]) - length(num.factors[use.these])
+    new.names <- lapply(1:length(u_factors[use.these]), function(x) paste(colnames(covar.mat)[x], u_factors[[x]][2:length(u_factors[[x]])], sep = "_"))
     
     new.covar <- vector(mode = "list", length = length(new.names))
     for(i in 1:length(new.names)){

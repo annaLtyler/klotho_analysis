@@ -3,7 +3,6 @@
 #based on the number of columns in the matrix.
 
 aov.by.matrix <- function(matX){
-
     all.num <- as.vector(matX)
     fact.mat <- matrix(rep(1:ncol(matX), each = nrow(matX)), nrow = nrow(matX), ncol = ncol(matX))
     fact <- as.factor(as.vector(fact.mat))

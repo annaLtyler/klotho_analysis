@@ -3,18 +3,19 @@
 #returns a text statement with either "p = "
 #or "p <".
 
-threshold_p <- function(p, thresh = 2.2e-16, return.text = FALSE){
+threshold_p <- function(p, thresh = 2.2e-16, return.text = FALSE, sig.dig = 2){
 	if(p < thresh){
 		if(return.text){
 			return(paste("p <", thresh))
+            return(bquote(italic(p)<.(thresh)))
         }else{
             return(thresh)
         }
 	}else{
         if(return.text){
-            return(paste("p =", p))
+            return(bquote(italic(p)==.(signif(p, sig.dig))))
             }else{
-			return(p)
+			return(signif(p, sig.dig))
             }
 	}
 }

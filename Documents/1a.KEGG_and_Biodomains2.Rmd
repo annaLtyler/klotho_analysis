@@ -2194,56 +2194,54 @@ test_corr_int <- function(gene.id){
     return(result)
 }
 
-one_chunk_pairs <- function(all.expr, chunk.pairs, int.factor){
-    result.coef <- result.p <- matrix(0, nrow = ncol(all.expr), ncol = ncol(all.expr))
-    colnames(result.coef) <- rownames(result.coef) <- colnames(result.p) <- rownames(result.p) <- colnames(all.expr)
-    for(i in 1:nrow(chunk.pairs)){
-        gene1 <- chunk.pairs[i,1]
-        gene2 <- chunk.pairs[i,2]
-        model1 <- lm(all.expr[,gene1]~all.expr[,gene2]*int.factor)
-        model2 <- lm(all.expr[,gene2]~all.expr[,gene1]*int.factor)
+diff_cor_test <- function(gene.id, nperm = 1000, show.progress = FALSE){
+    #which genes do we have expression for?
+    common.genes <- intersect(gene.id, colnames(adj_expr))
+    #get their names
+    common.names <- mouse.genes[match(common.genes, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"]
+    #get their expression
+    expr.mat <- adj_expr[,common.genes]
+    colnames(expr.mat) <- common.names
 
-        int.idx <- which(rownames(coef(summary(model1))) == "all.expr[, gene2]:int.factor.L")
-        result.coef[gene2, gene1] <- coef(summary(model1))[int.idx,"Estimate"]
-        result.coef[gene1, gene2] <- coef(summary(model2))[int.idx,"Estimate"]
-        result.p[gene2, gene1] <- coef(summary(model1))[int.idx,"Pr(>|t|)"]
-        result.p[gene1, gene2] <- coef(summary(model2))[int.idx,"Pr(>|t|)"]
+    gene.pairs <- pair.matrix(common.names, ordered = FALSE)
+
+    pair.int.p <- pair.int.effect <- matrix(NA, nrow = length(common.names), 
+        ncol = length(common.names))
+    rownames(pair.int.p) <- colnames(pair.int.p) <- 
+        rownames(pair.int.effect) <- colnames(pair.int.effect) <- common.names
+
+    carrier.geno <- c("FC", "VS")
+    carrier.idx <- lapply(carrier.geno, function(x) grep(x, test.factor))
+    names(carrier.idx) <- carrier.geno
+
+    for(i in 1:nrow(gene.pairs)){
+        if(show.progress){
+            report.progress(i, nrow(gene.pairs))
+        } 
+        gene1 <- gene.pairs[i,1]
+        gene2 <- gene.pairs[i,2]
+        
+        data1 <- expr.mat[,gene1]
+        data2 <- expr.mat[,gene2]
+
+        cor.diff <- diff(sapply(carrier.idx, function(x) cor(data1[x], data2[x])))
+        rnd.cor.diff <- rep(NA, nperm)
+        for(i in 1:nperm){
+            rnd.factor <- sample(test.factor)
+            rnd.idx <- lapply(carrier.geno, function(x) grep(x, rnd.factor))
+            rnd.cor.diff[i] <- diff(sapply(rnd.idx, function(x) cor(data1[x], data2[x])))
+        }
+        #hist(rnd.cor.diff, xlim = c(-2, 2));abline(v = cor.diff)
+        #par(mfrow = c(1,2));lapply(carrier.idx, function(x) plot.with.model(data1[x], data2[x], report = "cor.test"))
+        emp.p <- one.sided.emp.p(cor.diff, rnd.cor.diff)
+
+        pair.int.effect[gene1, gene2] <- cor.diff
+        pair.int.p[gene1, gene2] <- min(emp.p)
     }
-    return(list("coef" = result.coef, "p" = result.p))
-}
 
-#how do we parallelize testing all directed pairs?
-#break the pair list into ncores chunks, send the
-#required expression matrix and the list of pairs
-#to the node, and just perform those tests.
-test_corr_int_parallel <- function(expr.mat, int.factor, ncores = 4){
-
-    gene.pairs <- pair.matrix(colnames(expr.mat))
-
-    if(nrow(gene.pairs) > ncores){
-        chunked_pairs <- lapply(chunkV(1:nrow(gene.pairs), ncores), function(x) gene.pairs[x,])
-    }else{
-        chunked_pairs <- lapply(list(1:nrow(gene.pairs)), function(x) gene.pairs[x,])
-    }
-
-    #break up the expression matrix into just the chunks that will go to each node
-    chunked.genes <- lapply(chunked_pairs, function(x) unique(as.vector(x)))
-
-    cl <- makeCluster(ncores)
-    registerDoParallel(cl)
-    pair_results_list <- foreach(m = 1:length(chunked_pairs), .export = c("one_chunk_pairs")) %dopar% {
-      one_chunk_pairs(expr.mat, chunk.pairs = chunked_pairs[[m]], int.factor)
-    }
-    stopCluster(cl)
-
-    #put everything back together
-    pair.int.coef <- Reduce("+", lapply(pair_results_list, function(x) x[[1]]))
-    pair.int.p <- Reduce("+", lapply(pair_results_list, function(x) x[[2]]))
-    
-    result <- list("Estimate" = pair.int.coef, "p" = pair.int.p)
+    result <- list("Estimate" = pair.int.effect, "p" = pair.int.p)
     return(result)
 }
-
 
 
 #builds a network out of the results from test_corr_int
@@ -2314,19 +2312,19 @@ net_by_geno <- function(int_result, p.thresh = 0.001, plot.result = FALSE,
         global.min <- min(c(E(fc.net)$weight, E(vs.net)$weight))
         global.max <- max(c(E(fc.net)$weight, E(vs.net)$weight))
         
-        cat(title.level, "FC\n")
-        plot_net(fc.net, layout.mat = layout.mat, global.min = global.min, 
+        #cat(title.level, "FC\n")
+        plot_net(net = fc.net, layout.mat = layout.mat, global.min = global.min, 
             global.max = global.max, vertex.size = vertex.size, 
             plot.label = "FC", edge.arrow.size = edge.arrow.size, 
             edge.width.factor = edge.width.factor)
-        cat("\n\n")
+        #cat("\n\n")
 
-        cat(title.level, "VS\n")
+        #cat(title.level, "VS\n")
         plot_net(vs.net, layout.mat = layout.mat, global.min = global.min, 
             global.max = global.max, vertex.size = vertex.size, 
             plot.label = "VS", edge.arrow.size = edge.arrow.size, 
             edge.width.factor = edge.width.factor)
-        cat("\n\n")
+        #cat("\n\n")
     }
 
     result <- list("FC_net" = fc.net, "VS_net" = vs.net)
@@ -2364,9 +2362,22 @@ plot_net <- function(net, layout.mat = NULL, global.min = NULL, global.max = NUL
         global.max <- max(E(net)$weight)
     }
 
-    edge.col <- colors.from.values(E(net)$weight, split.at.vals = TRUE,
-        col.scale = c("blue", "brown"), grad.dir = "ends", light.dark = "f", 
-        global.color.scale = TRUE, global.min = global.min, global.max = global.max)
+    if(length(unique(sign(E(net)$weight))) == 1){ #if all edge weights are positive or negative
+        if(all(sign(E(net)$weight) < 0)){
+            col.scale <- "blue"
+            grad.dir <- "low"
+        }else{
+            col.scale <- "brown"
+            grad.dir <- "high"
+        }
+        edge.col <- colors.from.values(E(net)$weight, split.at.vals = TRUE,
+            col.scale = col.scale, grad.dir = grad.dir, light.dark = "f", 
+            global.color.scale = TRUE, global.min = global.min, global.max = global.max)
+    }else{
+        edge.col <- colors.from.values(E(net)$weight, split.at.vals = TRUE,
+            col.scale = c("blue", "brown"), grad.dir = "ends", light.dark = "f", 
+            global.color.scale = TRUE, global.min = global.min, global.max = global.max)
+    }
 
     par(mar = c(0,0,4,0))
     plot(net, edge.color = edge.col, 
@@ -2474,14 +2485,9 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
     g2.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene2), "ensembl_gene_id"]
     if(length(g2.id) == 0){stop(paste("I couldn't find", gene2))}
 
+    
     resid.forward <- resid(lm(adj_expr[,g2.id]~adj_expr[,g1.id]+test.factor))
     resid.reverse <- resid(lm(adj_expr[,g1.id]~adj_expr[,g2.id]+test.factor))
-
-    int.forward <- lm(adj_expr[,g2.id]~adj_expr[,g1.id]*test.factor)
-    int.reverse <- lm(adj_expr[,g1.id]~adj_expr[,g2.id]*test.factor)
-    int.idx <- which(rownames(coef(summary(int.forward))) == "adj_expr[, g1.id]:test.factor.L")
-    forward.int.p <- threshold_p(coef(summary(int.forward))[int.idx,"Pr(>|t|)"])
-    reverse.int.p <- threshold_p(coef(summary(int.reverse))[int.idx,"Pr(>|t|)"])
 
     if(plot.results){
         layout.mat <- get.layout.mat((length(geno.idx)*2))
@@ -2519,6 +2525,7 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
             ylab = "Correlation Coefficient", main = "Correlations")
         abline(h = 0)
 
+
         #compare the p values
         barplot(-log10(rbind(forward.stats[,2], reverse.stats[,2])), beside = TRUE, 
             col = rbind(geno.cols, geno.cols), density = c(NA, 50), 
@@ -2528,8 +2535,8 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
 
         #add labels for forward and reverse:
         par(mar = c(0,4,0,4))
-        plot.text(paste("Forward Direction:", gene1, "->", gene2, "\np =", forward.int.p), cex = 2, font = 2)
-        plot.text(paste("Reverse Direction:", gene2, "->", gene1, "\np =", reverse.int.p), cex = 2, font = 2, x = 0.75)
+        plot.text(paste("Forward Direction:", gene1, "->", gene2), cex = 2, font = 2)
+        plot.text(paste("Reverse Direction:", gene2, "->", gene1), cex = 2, font = 2, x = 0.75)
 
         #add a legend for the two bar plots
         plot.new()
@@ -2556,83 +2563,115 @@ interaction terms above -log10(p) = 2, shown by the horizontal
 line.
 
 ```{r apoe_app}
-test.id <- bd.list$"APP Metabolism"
-test.id <- unique(unlist(kegg.bd.list)) #test everything in our intersection list
+#test.id <- bd.list$"APP Metabolism"
+#test.id <- kegg.bd.list$"Lipid Metabolism"
+test.id <- kegg.bd.list$"Synapse"
 #length(test.id)
+#barplot(sapply(test.id, length))
 
-#start.lin <- Sys.time()
-#corr_result <- test_corr_int(test.id)
-#end.lin <- Sys.time()
-#time.lin <- end.lin - start.lin
-#print(time.lin)
-
-#start.par <- Sys.time()
-common.id <- intersect(test.id, colnames(adj_expr)) #we can only test what we have expression data for
-corr_result <- test_corr_int_parallel(adj_expr[,common.id], test.factor, ncores = (detectCores()-1))
-#end.par <- Sys.time()
-#time.par <- end.par - start.par
-#print(time.par)
-
-#plot(corr_result[[1]], corr_result2[[1]])
+corr_result <- vector(mode = "list", length = length(test.id))
+names(corr_result) <- names(test.id)
+idx <- 1
+for(i in 1:length(test.id)){
+    print(i)    
+    corr_result[[idx]] <- test_corr_int(test.id[[i]])
+    idx <- idx + 1
+}
 
 #corr_result <- diff_cor_test(test.id, nperm = 1000, show.progress = TRUE)
-pair.int.effect <- corr_result[[1]]
-pair.int.p <- corr_result[[2]]
+pair.int.effect <- lapply(corr_result, function(x) x[[1]])
+pair.int.p <- lapply(corr_result, function(x) x[[2]])
 ```
+
+### Intersection p values {.tabset .tabset-fade .tabset-pills}
 
 The plot below shows the qq plot for the interaction p values.
 The horizontal line marks where we have drawn our significance
 threshold.
 
-```{r qq}
-net.thresh = 10^(-3)
-qqunif.plot(as.vector(pair.int.p))
-abline(h = -log10(net.thresh))
+```{r qq, results = "asis"}
+#pdf("~/Desktop/qq.pdf")
+for(i in 1:length(pair.int.p)){
+    cat("####", names(pair.int.p)[i], "\n")
+    net.thresh = 10^(-3)
+    qqunif.plot(as.vector(pair.int.p[[i]]), plot.label = names(pair.int.p)[i])
+    abline(h = -log10(net.thresh))
+    cat("\n\n")
+}
+#dev.off()
 ```
+
+### Volcano plots {.tabset .tabset-fade .tabset-pills}
 
 The following volcano plot shows the effect sizes of the 
 interaction term compared with the -log10(p) of the interaction
 term. The horizontal line shows the threshold above which we 
 are considering the interactions significant.
 
-```{r kl_int}
-plot(pair.int.effect, -log10(pair.int.p), xlab = "Effect Size", ylab = "-log10(p)")
-abline(h = -log10(net.thresh))
+```{r kl_int, results = "asis"}
 
-sig.effect <- which(-log10(pair.int.p) > net.thresh, arr.ind = TRUE); #significant
+#pdf("~/Desktop/volcano.pdf")
+for(i in 1:length(pair.int.effect)){
+    cat("####", names(pair.int.effect)[i], "\n")
+    plot(pair.int.effect[[i]], -log10(pair.int.p[[i]]), xlab = "Effect Size", ylab = "-log10(p)")
+    abline(h = -log10(net.thresh))
+    cat("\n\n")
+}
+#dev.off()
+```
+
+### Intersection Significance
+
+The barplot below shows how many of the total edges in each 
+intersection were significantly differentially expressed across
+genotypes.
+
+```{r frac_sig}
+sig.effect <- lapply(pair.int.p, function(x) which(x <= net.thresh, arr.ind = TRUE)); #significant
 #sig.effect <- which(-log10(pair.int.p) < 1e-3, arr.ind = TRUE); #not significant
 #sig.genes <- cbind(colnames(pair.int.p)[sig.effect[,1]], colnames(pair.int.p)[sig.effect[,2]])
 #i = i + 1;test <- plot_one_interaction(sig.genes[i,1], sig.genes[i,2])
 #plot_one_mediation(sig.genes[i,1], sig.genes[i,2])
-total.pairs <- length(pair.int.p)-ncol(pair.int.p)
-frac.sig <- nrow(sig.effect)/total.pairs
+total.pairs <- sapply(pair.int.p, function(x) length(x) - ncol(x))
+frac.sig <- sapply(1:length(sig.effect), function(x) nrow(sig.effect[[x]])/total.pairs[x])
+
+sig.int <- which(frac.sig > 0)
+
+pdf("~/Desktop/frac_sig.pdf", height = 28, width = 7)
+par(mar = c(4, 20, 4, 2))
+barplot(sort(frac.sig[sig.int]), horiz = TRUE, las = 2, cex.names = 0.7,
+    main = "Intersections in\nSynapse with significantly\ndifferential correlations")
+dev.off()
 ```
 
-There were `r total.pairs` total correlations among the `r ncol(pair.int.p)`
-genes in this biodomain. At p value of `r 1/(10^net.thresh)`, there were 
-`r nrow(sig.effect)` correlations that depended significantly on 
-genotype (`r signif(frac.sig*100, 2)`%).
+There were `r length(frac.sig)` KEGG-biodomain intersections 
+in this biodomain, and `r length(sig.int)`
+had significantly differentially correlated genes across genotypes.
 
-The interaction network is directed because the interaction term
+### Directed networks {.tabset .tabset-fade .tabset-pills}
+
+The interaction networks are directed because the interaction term
 when one gene is the explanatory variable is differet from when 
 the other gene is the explanatory variable. Below we plot the 
 directed network for the APP Metabolism biodomain. The blue 
 edges denote negative interactions and the brown arrows denote 
 positive interactions. 
 
-```{r dir_net, fig.width = 10, fig.height = 10}
-#get a layout for all networks
-dir.net <- corr_net(int_result = corr_result, p.thresh = net.thresh, plot.result = FALSE)
-net.layout <- get_layout(dir.net)
-
+```{r dir_net, fig.width = 10, fig.height = 10, results = "asis"}
 #pdf("~/Desktop/dir.net.pdf", width = 10, height = 10)
-plot_net(dir.net, layout.mat = net.layout,
-    vertex.size = 1, plot.label = "APP Metabolism")
-#dev.off()
-```
+dir.nets <- net.layouts <- vector(mode = "list", length = length(corr_result))
+names(dir.nets) <- names(net.layouts) <- names(corr_result)
+for(i in sig.int){
+    #get a layout for all networks
+    dir.nets[[i]] <- corr_net(int_result = corr_result[[i]], 
+        p.thresh = net.thresh, plot.result = FALSE)
+    net.layouts[[i]] <- get_layout(dir.nets[[i]])
 
-```{r test_proj, eval = FALSE}
-test <- bipartite_projection(dir.net)
+    plot_net(net = dir.nets[[i]], layout.mat = net.layouts[[i]],
+        vertex.size = 1, plot.label = names(sig.int)[i])
+
+}
+#dev.off()
 ```
 
 To better illustrate why the edges are directed, we can look
@@ -2664,7 +2703,7 @@ and protein deubiquitination.
 #gene1  <- "App"; gene2 <- "Bace1" #example of bi-directional interaction
 gene1 <- "Mmp2"; gene2 <- "Usp8" #example of one-way interaction
 #gene1  <- "Apoe"; gene2 <- "App"
-#gene1  <- "Grin2a"; gene2 <- "Bace1"
+#gene1  <- "Apoe"; gene2 <- "App"
 
 #quartz(width = 8, height = 6); stats <- plot_one_interaction(gene1, gene2, report = "cor.test")
 #quartz(width = 8, height = 6);plot_directionality(gene1, gene2)
@@ -2686,7 +2725,7 @@ The following bar plots show the in and out degree of each gene
 in the network. App is the hub of the network, and primarily has
 connections going out. This suggests that Klotho genotype 
 
-```{r degree, fig.width = 7, fig.height = 15}
+```{r degree, fig.width = 7, fig.height = 15, eval = FALSE}
 in.deg <- degree(dir.net, mode = "in")
 out.deg <- degree(dir.net, mode = "out")
 #head(sort(in.deg, decreasing = TRUE))
@@ -2709,20 +2748,29 @@ the VS carriers seem to have stronger correlations.
 
 ```{r diff_net, fig.width = 10, fig.height = 10, results = "asis"}
 
-#pdf("~/Desktop/geno_nets.pdf", width = 10, height = 10)
-geno.nets <- net_by_geno(int_result = corr_result, p.thresh = net.thresh, 
-    plot.result = TRUE, layout.mat = net.layout, title.level = "###")
+#pdf("~/Desktop/geno_nets.pdf", width = 20, height = 10)
+all.geno.nets <- vector(mode = "list", length = length(corr_net))
+names(all.geno.nets) <- names(corr_net)
+for(i in 1:length(sig.int)){
+    cat("###", names(sig.int)[i], "\n")
+    par(mfrow = c(1,2))
+    all.geno.nets[[i]] <- net_by_geno(int_result = corr_result[[sig.int[i]]], 
+        p.thresh = net.thresh, plot.result = TRUE, layout.mat = net.layouts[[sig.int[i]]], 
+        title.level = "###")
+    mtext(names(sig.int)[i], side = 3, outer = TRUE, line = -1.5, font = 2, cex = 1.5)
+    cat("\n\n")
+}
 #dev.off()
 
 
-large.comp <- largest_component(dir.net)
+#large.comp <- largest_component(dir.net)
 #large.enrich <- gost(V(large.comp)$name, organism = "mmusculus")
 #plot.enrichment(large.enrich, num.terms = 30)
 ```
 
 What do these interactions look like up close? The plot below shows an example.
 
-```{r app_int, fig.width = 10, fig.height = 7}
+```{r app_int, fig.width = 10, fig.height = 7, eval = FALSE}
 app.out <- direct_connect(dir.net, "App", mode = "out")
 app.in <- direct_connect(dir.net, "App", mode = "in")
 ```

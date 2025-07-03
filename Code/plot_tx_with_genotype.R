@@ -7,7 +7,7 @@ plot_tx_with_genotype <- function(expr.mat, covar.table, tx_name,
   order.by.mean = TRUE){
 
 
-  not.genotype <- which(colnames(covar.table) != "climb_geno")
+  not.genotype <- setdiff(1:ncol(covar.table), grep("geno", colnames(covar.table)))
   dummy.mat <- dummy_covar(covar.table[,not.genotype])
 
   tx_idx <- which(rownames(expr.mat) == tx_name)

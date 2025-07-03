@@ -345,49 +345,144 @@ normal range.
 The WT only seem intermediate because their mean is zero.
 
 
-## Individual testing of AD genes
 
-Now we pull them out of the full list tested before.
+## AD gene enrichment stats
 
-```{r test_ad}
+Originally, I had a wanted to show that the DEG in the Klotho
+mice were enriched for "AD genes." I did this by getting a 
+list of AD genes and doing a hypergeometric test to see if
+this list were enriched in the DEG. The list I used was the
+Agora list, which Greg said might be too controversial to use.
 
-ad.mean.mat <- matrix(NA, nrow = length(ad.orthos), ncol = 5)
-rownames(ad.mean.mat) <- ad.orthos
-colnames(ad.mean.mat) <- genotypes[1:5]
-gene.p <- rep(NA, length(ad.orthos))
-names(gene.p) <- ad.orthos
+He also suggested that a Venn diagram might not be the most
+effective way of showing the enrichment. He suggested instead
+going back to the AD-gene heatmap I had at the very beginning
+where I had a short-list of genes shown to be genetically 
+associated with AD risk. I showed that a number of them, including
+APOE and APP were differentially expressed across the Klotho
+genotypes. 
 
-#pdf("~/Desktop/ad_test.pdf")
-plot.results = FALSE
-for(i in 1:length(ad.orthos)){
-  if(plot.results){
-    cat("###", ad.orthos[i], "\n")
-  }
-  gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== ad.orthos[i]), "ensembl_gene_id"]
-  test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-    tx_name = gene.id, tx_label = ad.orthos[i], ylab = "Normalized Count",
-    order.by.mean = FALSE, plot.results = plot.results)
+So I'm taking out the enrichment stastics and Venn diagrams 
+and replacing them with a heatmap. Greg suggested that we can
+even show individual stats in the heatmap by having a colum for
+each mouse with delimiters, rather than showing means for each
+group.
 
-  #gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== "Abca1"), "ensembl_gene_id"]
-  #gene.name = gene.info[which(gene.info[,"ensembl_gene_id" ]== gene.id), "external_gene_name"]
-  #test <- plot_tx_with_genotype(expr.mat = norm.expr, covar.table = covar.mat, tx_name = gene.id, tx_label = gene.name, ylab = "Normalized Count")
+The following plot shows how the differentially expressed
+genes and AD-associated genes interact with each other.
+
+```{r venn_fig}
+sig.list <- list("All genes" = rownames(effect.fdr), "DEG" = rownames(mean.sig.expr),
+  "AD Genes" = ad.ensembl)
+#plotVenn(Vlist = sig.list)
+
+circle.cols <- c("all" = "black", "deg" = "#bf812d", "ad" = "#756bb1")
+
+ind.num <- sapply(sig.list, length)
+deg.only <- length(setdiff(sig.list$DEG, sig.list$"AD Genes"))
+ad.only <- length(setdiff(sig.list$"AD Genes", sig.list$DEG))
+deg.and.ad <- length(intersect(sig.list$"AD Genes", sig.list$DEG))
+
+par(mar = c(0,0,0,0))
+plot.new()
+plot.window(xlim = c(0, 1), ylim = c(0,1))
+
+inner.center <- 0.45
+inner.label.y <- 0.62
+deg.center <- 0.4 
+ad.center <- 0.7
+label.cex <- 1.2
+
+#all.circle <- get_circle(radius = 0.45, center_x = 0.5, center_y = inner.center)
+#points(all.circle$x, all.circle$y, col = circle.cols["all"], type = "l", lwd = 3)
+draw.rectangle(min.x = 0.12, max.x = 0.92, min.y = 0.15, max.y = 0.85, border = circle.cols["all"], lwd = 3)
+deg.circle <- get_circle(radius = 0.25, center_x = 0.4, center_y = inner.center)
+points(deg.circle$x, deg.circle$y, col = circle.cols["deg"], type = "l", lwd = 3)
+ad.circle <- get_circle(radius = 0.15, center_x = 0.7, center_y = inner.center)
+points(ad.circle$x, ad.circle$y, col = circle.cols["ad"], type = "l", lwd = 3)
 
 
-  if(length(test[[1]]) > 0){
-    mean.vals <- sapply(test$grouped_vals[[1]], mean)
-    ad.mean.mat[i,names(mean.vals)] <- mean.vals
-    gene.p[i] <- test[[2]][1]
-  }
-  #just variant levels
-  #vioplot(test[[1]][2:5], col = "lightgray", main = ad.orthos[i])
-  #stripchart(test[[1]][2:5], col = "#2b8cbe", add = TRUE, vertical = TRUE, pch = 16,
-  #  method = "jitter")
-  if(plot.results){
-    cat("\n\n")
-  }
-}
-#dev.off()
+text(x = 0.52, y = 0.81, labels = paste0("All (", ind.num["All genes"], ")"), 
+  col = circle.cols["all"], font = 2, cex = label.cex)
+text(x = deg.center, y = inner.label.y, labels = paste0("DEG (", ind.num["DEG"], ")"), 
+  col = circle.cols["deg"], font = 2, cex = label.cex)
+text(x = ad.center+0.035, y = inner.label.y, labels = paste0("AD (", ind.num["AD Genes"], ")"), 
+  col = circle.cols["ad"], font = 2, cex = label.cex)
+
+text(x = deg.center, y = inner.center, labels = deg.only, font = 2, cex = label.cex, col = circle.cols["deg"])
+text(x = ad.center+0.02, y = inner.center, labels = ad.only, font = 2, cex = label.cex, col = circle.cols["ad"])
+text(x = 0.6, y = inner.center, labels = deg.and.ad, font = 2, cex = label.cex, col = mix_colors(circle.cols["deg"], circle.cols["ad"]))
 ```
+
+
+## AD gene overview
+
+Are AD genes enriched among the differentially expressed genes?
+Are there more AD genes among the DEG than we would expect by 
+chance? We used the hypergeometric distribution to answer this.
+
+We have an urn with $N$ total marbles. Some of these marbles
+($K$ red marbles) are differentially expressed. $N-K$ green
+marbles are not differentially expressed. If we draw $n$ AD 
+genes, what is the probability that exaclty $k$ of them are 
+red (i.e. differentially expressed)?
+
+. We want to know
+the probability of drawing $k$    
+
+```{r hyper, fig.width = 5, fig.height = 5}
+#quartz(width = 5, height = 5)
+plot.new()
+par(mar = c(1,1,1,1))
+plot.window(xlim = c(0, 1), ylim = c(0, 1))
+draw.rectangle(0.1, 0.9, 0.1, 0.9)
+
+gene.circle <- get_circle(radius = 0.25, center_x = 0.4, center_y = 0.5)
+lower.idx <- which(gene.circle$y <= 0.5)
+upper.idx <- which(gene.circle$y >= 0.5)
+plot.poly.xy(gene.circle$x[upper.idx], gene.circle$y[upper.idx], 
+  gene.circle$x[lower.idx], gene.circle$y[lower.idx], border = NA,
+  col = rgb(190/256,174/256,212/256))
+points(gene.circle$x, gene.circle$y, type = "l")
+
+ad.circle <- get_circle(radius = 0.25, center_x = 0.6, center_y = 0.5)
+lower.idx <- which(ad.circle$y <= 0.5)
+upper.idx <- which(ad.circle$y >= 0.5)
+plot.poly.xy(ad.circle$x[upper.idx], ad.circle$y[upper.idx], 
+  ad.circle$x[lower.idx], ad.circle$y[lower.idx], border = NA,
+  col = rgb(127/256,201/256,127/256, alpha = 0.5))
+points(ad.circle$x, ad.circle$y, type = "l")
+
+#add labels
+text(x = 0.72, y = 0.12, labels = "All genes = N", adj = 0)
+text(x = 0.25, y = 0.76, labels = "DEG = K")
+text(x = 0.83, y = 0.76, labels = "AD genes = n", adj = 1)
+text(x = 0.5, y = 0.5, labels = "AD and DEG = k")
+mtext("What is the probability that in our draw of AD genes\n
+  we get k that are differentially expressed?",
+  side = 1, line = -2.5, padj = 0)
+```
+
+```{r ad_enrich}
+#from: https://montilab.github.io/BS831/articles/docs/HyperEnrichment.html
+
+all.gene.id <- gsub(".value", "", rownames(full.model.result$p_values))
+all.gene.name <- gene.info[match(all.gene.id, gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+sig.deg <- rownames(sig.expr)
+#ad.orthos
+
+p.of.draw <- phyper(q = length(ad.sig)-1, #number of red marbles in our draw (number of AD genes that are DEG)
+  m = length(sig.deg), #number of red marbles (DEG) in the urn
+  n = length(all.gene.id) - length(sig.deg), #number of green marbles (not DEG)
+  k = length(ad.orthos), #number of drawn marbles (AD genes)
+  lower.tail = FALSE #compute P(X > 1 overlap), hence the -1 above.
+)
+```
+
+The calculated probability of there `r length(ad.sig)` differentially
+expressed AD genes without enrichment in the set of all DEGs is 
+`r signif(p.of.draw, 2)`, which we correct to `r threshold_p(p.of.draw)`.
+
 
 
 ## Testing individual factors 
@@ -625,4 +720,176 @@ caused by the variants is related to AD pathology.
 cl2.enrich <- gost(rownames(ad.sig.mat)[cl2.idx], organism = "mmusculus",
   source = c("GO", "KEGG", "CORUM", "REACTOME", "HP"))
 plot.enrichment(cl2.enrich, num.terms = 25, plot.label = "Cluster 2 enrichment")
+```
+
+
+```{r wgcna, eval = FALSE}
+#I checked WGCNA. Unfortunately, it didn't really yield much.
+
+library(WGCNA)
+
+enableWGCNAThreads()
+
+powers = c(c(1:10), seq(from = 12, to=20, by=2))
+sft = pickSoftThreshold(adj_expr, powerVector = powers, verbose = 5)
+use.power <- sft$powerEstimate
+if(is.na(use.power)){use.power = 6}
+use.power
+
+#signed if no negative values
+#unsigned if negative values are included
+#type = "unsigned"
+type = "signed"
+net = blockwiseModules(adj_expr, power = use.power, 
+    TOMType = type, minModuleSize = 10, 
+    reassignThreshold = 0, mergeCutHeight = 0.25, 
+    numericLabels = TRUE, pamRespectsDendro = FALSE, 
+    saveTOMs = FALSE,verbose = 3)
+
+mergedColors = labels2colors(net$colors)
+modules <- net$colors
+num.wgcna.modules <- length(unique(modules))
+
+u_mods <- sort(unique(modules))
+mod.size <- sapply(u_mods, function(x) length(which(modules == x)))
+barplot(mod.size)
+
+
+enrich.file <- file.path(results.dir, paste0("WGCNA_Module_Enrichment_", type, ".RDS"))
+if(!file.exists(enrich.file)){
+    mod.enrich <- lapply(u_mods, function(x) gost(names(which(modules == x)), 
+        organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP")))
+    saveRDS(mod.enrich, enrich.file)
+}else{
+    mod.enrich <- readRDS(enrich.file)
+}
+
+pdf("~/Desktop/enrichment.pdf", width = 9, height = 40)
+plot.enrichment.group(mod.enrich, max.term.size = 3000, transformation = "sqrt")
+dev.off()
+
+wgcna.list <- lapply(u_mods, function(x) names(which(modules == x)))
+gene.r2 <- vector(mode = "list", length = length(wgcna.list))
+mod.r2 <- rep(NA, length(wgcna.list))
+
+for(i in 1:length(u_mods)){
+    print(i)
+    ind.genes <- lapply(wgcna.list[[i]], function(x) x)
+    wgcna.vals <- non_nested_mean_vals(ind.genes, adj_expr, 
+        group.representation = group.representation)
+    rownames(wgcna.vals) <- unlist(ind.genes)
+    wgcna.result <- plot_mean_bd_k(wgcna.vals, covar.mat = covar.table, plot.results = FALSE)
+    gene.r2[[i]] <- wgcna.result$row.r2
+    mod.r2[i] <- wgcna.result$overall.r2
+}
+
+barplot(sort(mod.r2))
+
+mod.order <- order(mod.r2, decreasing = TRUE)
+i = 1
+ind.result <- plot_individual_genes(gene.list = names(which(modules == u_mods[mod.order[i]])))
+
+#quartz()
+plot.enrichment(mod.enrich[[u_mods[high.pred[i]]]], max.term.size = 3000)
+
+
+hist(unlist(gene.r2))
+
+sorted.genes <- sort(unlist(gene.r2), decreasing = TRUE)
+plot(sorted.genes)
+
+
+#This gives basically the same results to other analyses.
+library(fgsea)
+#gsea.enrich <- fgsea::fgsea(kegg.list, sorted.genes, scoreType = "pos")
+#gsea.enrich <- fgsea::fgsea(bd.list, sorted.genes, scoreType = "pos")
+gsea.enrich <- fgsea::fgsea(unlist(kegg.bd.list, recursive = FALSE), sorted.genes, scoreType = "pos")
+
+
+norm.es <- as.numeric(as.matrix(gsea.enrich[,"NES"]))
+names(norm.es) <- gsea.enrich$pathway
+
+par(mar = c(4,24, 2,2))
+barplot(tail(sort(norm.es), 19), las = 2, horiz = TRUE)
+```
+
+## Latent Pathway Identification Analysis (LPIA)
+
+Here we use a method developed in Pham et al. 2011
+called Latent Pathway Identification Analyais (LPIA).
+This is a network-based method that combines expression
+data with GO-KEGG intersections into a network in which
+an edge exists if there are genes in the GO-KEGG intersection.
+The edge is weighted by the product of two terms: (1) the 
+Jaccard index of the two terms (in terms of genes), and 
+(2) the differential expression of the genes in the overlapping
+genes. In Pam et al. they were comparing two groups, so they 
+used the median differential expression. We could compare the
+FC and VS carriers directly to do this, or we can use a different
+term that is based on our linear model with ordered groups.
+
+They then project this bipartite network onto the the KEGG 
+terms. The nodes in this network are linked if they share 
+at least one biological process. The edge weights are larger
+if the two KEGG terms relate more GO terms. We would maybe
+use the Biodomain projection? We can try both. 
+
+They use eigenvector centrality to calculate centrality for 
+each pathway.
+
+```{r lpia}
+#sub.vals
+intersect.result = sub.val.result
+intersect.jaccard = kegg.bd.jaccard
+
+#generate a network between all Biodomains and KEGG pathways
+#that combines the Jaccard index of the pathways and the 
+#degree to which the intersection is differentially expressed.
+
+lpia_adj <- function(intersect.result, intersect.jaccard){
+    net.adj <- matrix(0, nrow = nrow(intersect.jaccard), ncol = ncol(intersect.jaccard))
+    dimnames(net.adj) <- dimnames(intersect.jaccard)
+    split.name <- strsplit(names(intersect.result$row.r2), " : ")
+    row.kegg <- sapply(split.name, function(x) x[1])
+    row.bd <- sapply(split.name, function(x) x[2])
+
+    for(bd in 1:nrow(intersect.jaccard)){
+        bd.idx <- which(row.bd == rownames(net.adj)[bd])
+        kegg.idx <- match(row.kegg[bd.idx], colnames(net.adj))
+        intersect.r2 <- intersect.result$row.r2[bd.idx]
+        #edge weight is the R2 times the jaccard indes
+        eweight <- intersect.r2*intersect.jaccard[bd,kegg.idx]
+        net.adj[bd, kegg.idx] <- eweight
+    }
+    return(net.adj)
+}
+
+#create a biadjacency matrix in which the edge weights 
+#are a product of the KEGG-Biodomain Jaccard index and the
+#R2 of the effect of genotoype on the intersection (we might
+#want to change this to better capture effect size).
+lpia_mat <- lpia_adj(sub.val.result, kegg.bd.jaccard)
+lpia_mat[which(lpia_mat < 0)] <- 0 #zero out any negative numbers
+lpia_net <- graph_from_biadjacency_matrix(lpia_mat)
+lpia_net <- delete_vertices(lpia_net, which(degree(lpia_net) == 0))
+#plot(lpia_net)
+
+lpia_proj <- bipartite_projection(lpia_net)
+
+
+bd.proj <- lpia_proj[[1]]
+bd.proj <- delete_vertices(bd.proj, which(degree(bd.proj) == 0))
+
+kegg.proj <- lpia_proj[[2]]
+kegg.proj <- delete_vertices(kegg.proj, which(degree(kegg.proj) == 0))
+
+
+#plot(bd.proj)
+#plot(kegg.proj)
+bd_cent <- eigen_centrality(bd.proj)
+kegg_cent <- eigen_centrality(kegg.proj)
+
+barplot(bd_cent$vector, las = 2)
+par(mar = c(4,16,4,2))
+barplot(tail(sort(kegg_cent$vector), 10), las = 2, horiz = TRUE)
 ```
