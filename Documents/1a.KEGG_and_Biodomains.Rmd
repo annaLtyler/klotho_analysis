@@ -85,7 +85,7 @@ if(use.carrier.status){
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("pheatmap", "vioplot", "RColorBrewer",
   "gprofiler2", "cluster", "pathview", "clusterProfiler", "stringr", "igraph", "wordcloud",
-  "wordcloud2", "baffle")
+  "wordcloud2", "baffle", "parallel", "foreach")
 load_libraries(needed.libraries)
 ```
 
@@ -2240,11 +2240,13 @@ test_corr_int_parallel <- function(expr.mat, int.factor, ncores = 4){
     pair.int.coef <- Reduce("+", lapply(pair_results_list, function(x) x[[1]]))
     pair.int.p <- Reduce("+", lapply(pair_results_list, function(x) x[[2]]))
     
+    #convert diagonal to NA
+    diag(pair.int.coef) <- NA
+    diag(pair.int.p) <- NA
+
     result <- list("Estimate" = pair.int.coef, "p" = pair.int.p)
     return(result)
 }
-
-
 
 #builds a network out of the results from test_corr_int
 corr_net <- function(int_result, p.thresh = 0.001, plot.results = FALSE,
@@ -2557,23 +2559,29 @@ line.
 
 ```{r apoe_app}
 test.id <- bd.list$"APP Metabolism"
-test.id <- unique(unlist(kegg.bd.list)) #test everything in our intersection list
+#test.id <- unique(unlist(kegg.bd.list)) #test everything in our intersection list
 #length(test.id)
 
 #start.lin <- Sys.time()
-#corr_result <- test_corr_int(test.id)
+#corr_result1 <- test_corr_int(test.id)
 #end.lin <- Sys.time()
 #time.lin <- end.lin - start.lin
 #print(time.lin)
 
 #start.par <- Sys.time()
+#pull out the expression of the genes we want to test
 common.id <- intersect(test.id, colnames(adj_expr)) #we can only test what we have expression data for
-corr_result <- test_corr_int_parallel(adj_expr[,common.id], test.factor, ncores = (detectCores()-1))
+sub.expr <- adj_expr[,common.id]
+#and give the genes human-readable names
+common.names <- mouse.genes[match(common.id, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"]
+colnames(sub.expr) <- common.names
+corr_result <- test_corr_int_parallel(sub.expr, test.factor, ncores = (detectCores()-1))
 #end.par <- Sys.time()
 #time.par <- end.par - start.par
 #print(time.par)
 
-#plot(corr_result[[1]], corr_result2[[1]])
+#plot(corr_result1[[1]], corr_result[[1]])
+#plot(-log10(corr_result1[[2]]), -log10(corr_result[[2]]))
 
 #corr_result <- diff_cor_test(test.id, nperm = 1000, show.progress = TRUE)
 pair.int.effect <- corr_result[[1]]
@@ -2599,7 +2607,7 @@ are considering the interactions significant.
 plot(pair.int.effect, -log10(pair.int.p), xlab = "Effect Size", ylab = "-log10(p)")
 abline(h = -log10(net.thresh))
 
-sig.effect <- which(-log10(pair.int.p) > net.thresh, arr.ind = TRUE); #significant
+sig.effect <- which(pair.int.p <= net.thresh, arr.ind = TRUE); #significant
 #sig.effect <- which(-log10(pair.int.p) < 1e-3, arr.ind = TRUE); #not significant
 #sig.genes <- cbind(colnames(pair.int.p)[sig.effect[,1]], colnames(pair.int.p)[sig.effect[,2]])
 #i = i + 1;test <- plot_one_interaction(sig.genes[i,1], sig.genes[i,2])
