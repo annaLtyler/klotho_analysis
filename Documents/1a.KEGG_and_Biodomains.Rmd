@@ -2571,17 +2571,24 @@ test.id <- bd.list[[term.idx]]
 #time.lin <- end.lin - start.lin
 #print(time.lin)
 
-#start.par <- Sys.time()
-#pull out the expression of the genes we want to test
-common.id <- intersect(test.id, colnames(adj_expr)) #we can only test what we have expression data for
-sub.expr <- adj_expr[,common.id]
-#and give the genes human-readable names
-common.names <- mouse.genes[match(common.id, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"]
-colnames(sub.expr) <- common.names
-corr_result <- test_corr_int_parallel(sub.expr, test.factor, ncores = (detectCores()-1))
-#end.par <- Sys.time()
-#time.par <- end.par - start.par
-#print(time.par)
+corr_result_file <- file.path(results.dir, "gene_gene_correlations.RDS")
+if(!file.exists(corr_result_file)){
+    #start.par <- Sys.time()
+    #pull out the expression of the genes we want to test
+    common.id <- intersect(test.id, colnames(adj_expr)) #we can only test what we have expression data for
+    sub.expr <- adj_expr[,common.id]
+    #and give the genes human-readable names
+    common.names <- mouse.genes[match(common.id, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"]
+    colnames(sub.expr) <- common.names
+    corr_result <- test_corr_int_parallel(sub.expr, test.factor, ncores = (detectCores()-1))
+    #end.par <- Sys.time()
+    #time.par <- end.par - start.par
+    #print(time.par)
+    saveRDS(corr_result, corr_result_file)
+}else{
+    corr_result <- readRDS(corr_result_file)
+}
+
 
 #plot(corr_result1[[1]], corr_result[[1]])
 #plot(-log10(corr_result1[[2]]), -log10(corr_result[[2]]))
