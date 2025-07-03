@@ -84,7 +84,7 @@ if(use.carrier.status){
 
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("pheatmap", "vioplot", "RColorBrewer",
-  "gprofiler2", "cluster", "pathview", "clusterProfiler", "stringr", "igraph", "wordcloud",
+  "gprofiler2", "cluster", "pathview", "stringr", "igraph", "wordcloud",
   "wordcloud2", "baffle", "parallel", "foreach", "doParallel")
 load_libraries(needed.libraries)
 ```
