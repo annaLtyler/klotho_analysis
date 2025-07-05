@@ -2581,7 +2581,7 @@ if(!file.exists(corr_result_file)){
     #and give the genes human-readable names
     common.names <- mouse.genes[match(common.id, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"]
     colnames(sub.expr) <- common.names
-    corr_result <- test_corr_int_parallel(sub.expr, test.factor, ncores = 8)
+    corr_result <- test_corr_int_parallel(sub.expr, test.factor, ncores = 20)
     #end.par <- Sys.time()
     #time.par <- end.par - start.par
     #print(time.par)
