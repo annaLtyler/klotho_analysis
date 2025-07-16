@@ -258,7 +258,7 @@ nested_mean_vals <- function(nested_gene_list, expr.mat, organization = c("outer
 
 test_effect <- function(values, test.factor, return.text = FALSE,
     plot.results = FALSE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
-    plot.label = "", autoflip.stat.y = FALSE){
+    cex.lab = 1, plot.label = "", ylab = "Expression", autoflip.stat.y = FALSE){
     
     model <- lm(values~test.factor)
     #summary(model)
@@ -275,7 +275,9 @@ test_effect <- function(values, test.factor, return.text = FALSE,
                 text.p <- threshold_p(p, return.text = TRUE)
             }
             box.cols <- sapply(levels(test.factor), function(x) geno.cols[which(names(geno.cols) == x)])
-            vioplot(values~test.factor, col = box.cols, xlab = "", main = plot.label, ylab = "Expression")
+            vioplot(values~test.factor, col = box.cols, xlab = "", main = plot.label, 
+                ylab = "", cex.names = cex.lab)
+            mtext(ylab, side = 2, cex = cex.lab, line = 2)
             stripchart(values~test.factor, vertical = TRUE, pch = 16, method = "jitter",
                 add = TRUE, col = "#dd1c77")
             plot.dim <- par("usr")
@@ -305,7 +307,7 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
     order.by = c("PC", "top.rank", "means", "genotype", "none"),
     path.stats = c("R2", "effect.size"), 
     plot.results = TRUE, global.min = NULL, global.max = NULL, 
-    stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15){
+    stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, plot.enrich = FALSE){
 
     order.by <- order.by[1]
     sub.decomp <- NULL
@@ -482,9 +484,15 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
                 plot.text("Not enough rows to decompose")
             }        
 
-            #put dummy in here for now
-            plot.new()
-            plot.window(xlim = c(0,1), ylim = c(0,1))
+            #plot enrichment if requested
+            if(plot.enrich){
+                enrich <- gost(gsub("*", "", rownames(sub.mat), fixed = TRUE), organism = "mmusculus")
+                plot.enrichment(enrich, max.term.size = 3000, num.terms = 20)
+            }else{
+                #otherwise, plot nothing
+                plot.new()
+                plot.window(xlim = c(0,1), ylim = c(0,1))
+            }
 
             #pane 4 is color bars for individual gentotypes
             #par(mar = c(2,label.margin,0,0))
@@ -572,13 +580,26 @@ merge_mean_mats <- function(mat_list){
     return(sub.vals)
 }
 
+#individuals is a vector of individual names if you only want to plot
+#a subset of individuals
 gene_vioplot <- function(gene.name, plot.label = "", 
-    stat.x = 0.1, stat.y = 0.9, autoflip.stat.y = FALSE){
+    stat.x = 0.1, stat.y = 0.9, autoflip.stat.y = FALSE, plot.results = TRUE,
+    individuals = NULL){
+
+    if(is.null(individuals)){
+        ind.idx <- 1:nrow(adj_expr)
+    }else{
+        ind.idx <- match(individuals, rownames(adj_expr))
+    }
+
     gene.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene.name),"ensembl_gene_id"]
     geno.expr <- lapply(geno.idx, function(x) adj_expr[x,gene.id])
-    test_effect(adj_expr[,gene.id], test.factor, 
-        plot.result = TRUE, stat.x = stat.x, stat.y = stat.y,
-        autoflip.stat.y = autoflip.stat.y, plot.label = gene.name)
+    if(plot.results){
+        test_effect(adj_expr[ind.idx,gene.id], test.factor[ind.idx], 
+            plot.result = TRUE, stat.x = stat.x, stat.y = stat.y,
+            autoflip.stat.y = autoflip.stat.y, plot.label = gene.name)
+    }
+    invisible(geno.expr)
 }
 
 #if inner.term is NULL, a matrix is assumed.
@@ -646,7 +667,6 @@ module_expr <- function(geneID, expr.mat){
     boxplot(t(gene.mat[mouse.order,]), col = mouse.cols[mouse.order], las = 2)
     dev.off()
 }
-   
 
 ```
 
@@ -669,7 +689,7 @@ expr.mat <- adj_expr
 We first looked at biodomains and KEGG pathways separately
 The plots below show the results for Biodomains.
 
-```{r biodomains, fig.width = 10, fig.height = 5}
+```{r biodomain_means, fig.width = 10, fig.height = 5}
 mean.bd.vals <- non_nested_mean_vals(non_nested_gene_list = bd.list, 
     expr.mat = adj_expr, group.representation = group.representation)
 
@@ -1528,9 +1548,9 @@ across the genotypes.
 
 plot_individual_genes <- function(intersection.name = NULL, gene.list = NULL, 
     plot.type = c("individual", "means", "boxes"), plot.label = "",
-    label.margin = 4, order.by = c("PC", "top.rank", "mean", "genotype", "none"), show.text = TRUE,
-    legend.x = NULL, legend.y = NULL, stat.x = 0.1, stat.y = 0.9, 
-    return.full.result = FALSE){
+    label.margin = 4, order.by = c("PC", "top.rank", "mean", "genotype", "none"), 
+    show.text = TRUE, legend.x = NULL, legend.y = NULL, stat.x = 0.1, stat.y = 0.9, 
+    return.full.result = FALSE, plot.enrich = FALSE){
 
     order.by = order.by[1]
     plot.type = plot.type[1]
@@ -1580,7 +1600,7 @@ plot_individual_genes <- function(intersection.name = NULL, gene.list = NULL,
         full.result <- plot_mean_bd_k(mean.bd.k.mat = t(term.expr[,gene.order,drop=FALSE]), 
             covar.mat = covar.table, plot.label = plot.label, 
             label.margin = label.margin, order.by = order.by, 
-            stat.x = stat.x, stat.y = stat.y)
+            stat.x = stat.x, stat.y = stat.y, plot.enrich = plot.enrich)
     }
 
     if(plot.type == "means"){
@@ -1604,7 +1624,8 @@ plot_individual_genes <- function(intersection.name = NULL, gene.list = NULL,
     }
 }
 
-expr_loadings <- function(term.name, gene.list, expr.mat, group.list){
+expr_loadings <- function(term.name, gene.list, expr.mat, group.list,
+    loading.type = c("mean.diff", "PC")){
     
     term.idx <- which(names(gene.list) == term.name)
     if(length(term.idx) == 0){stop("Can't find ", term.name)}
@@ -1619,14 +1640,20 @@ expr_loadings <- function(term.name, gene.list, expr.mat, group.list){
     gene.names <- mouse.genes[match(common.genes, mouse.genes[,"ensembl_gene_id"]), "entrezgene_id"]
     rownames(term.expr) <- gene.names
     group.means <- lapply(group.list, function(x) rowMeans(term.expr[,x]))
-    mean.diff <- group.means[[2]] - group.means[[1]]
-    #hist(mean.diff)
-    #gene.decomp <- plot.decomp(t(term.expr), label.points = TRUE)
-    #gene.decomp <- plot.decomp(term.expr, plot.results = FALSE)
-    #gene.v <- gene.decomp$v[,1]
-    #names(gene.v)  <- gene.names
-    #return(gene.v)  
-    return(mean.diff)
+
+    if(loading.type == "mean.diff"){
+        mean.diff <- group.means[[2]] - group.means[[1]]
+        #hist(mean.diff)
+        return(mean.diff)
+    }
+    if(loading.type == "PC"){
+        #gene.decomp <- plot.decomp(t(term.expr), label.points = TRUE)
+        gene.decomp <- plot.decomp(term.expr, plot.results = FALSE)
+        gene.v <- gene.decomp$u[,1]
+        names(gene.v)  <- gene.names
+        return(gene.v)  
+    }
+    
 }
 ```
 
@@ -1640,19 +1667,24 @@ expr_loadings <- function(term.name, gene.list, expr.mat, group.list){
 #term.name <- "Ribosome : Synapse"
 #term.name <- "Ribosome : Immune Response"
 #term.name <- "Long-term potentiation : Lipid Metabolism"
-#term.name <- "Nicotine addiction : APP Metabolism"
-term.name <- "Dopaminergic synapse : APP Metabolism"
+term.name <- "Nicotine addiction : APP Metabolism"
+#term.name <- "Dopaminergic synapse : APP Metabolism"
 #term.name <- "Inflammatory mediator regulation of TRP channels : Lipid Metabolism"
 
+app.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == "App"), "ensembl_gene_id"]
 
 order.type  <- c("PC", "means", "genotype", "top.rank")
 x <- c(0.8, 0.8, 0.05, 0.8)
 for(i in 1:length(order.type)){
-    png(paste0("~/Desktop/", "ordered_by_", order.type[i], ".png"), width = 10, height = 5, units = "in", res = 300)
+    png(paste0("~/Desktop/", "ordered_by_", order.type[i], ".png"), width = 10, height = 6, units = "in", res = 300)
     par(bg = NA)
     int.genes <- plot_individual_genes(intersection.name = term.name, 
-        plot.type = "individual", order.by = order.type[i], stat.x = x[i], 
-        stat.y = 0.2)
+        plot.type = "individual", order.by = order.type[i], stat.x = 0.03, 
+        stat.y = 0.8)
+
+    int.genes <- plot_individual_genes(gene.list = c(int.genes, app.id), 
+        plot.type = "individual", order.by = order.type[i], stat.x = 0.03, 
+        stat.y = 0.8)    
     dev.off()
 }
 #enrich <- gost(int.genes, organism = "mmusculus")
@@ -1969,7 +2001,7 @@ connector.order <- order(connector.result$decomp$v[,1])
 #pdf("~/Desktop/connector_levels.pdf", width = 9, height = 9)
 layout(get.layout.mat(min(c(9, length(connector.names)))))
 for(i in 1:length(connector.names)){
-    gene_vioplot(connector.names[connector.order[i]], autoflip.stat.y = TRUE)
+    gene_vioplot(gsub("*", "", connector.names[connector.order[i]], fixed = TRUE), autoflip.stat.y = TRUE)
 }
 #dev.off()
 ```
@@ -2013,8 +2045,14 @@ kegg.name <- "Proteasome"
 kegg.name <- "Protein export"
 kegg.name <- "ECM-receptor interaction"
 kegg.name <- "Glutamatergic synapse"
+kegg.name <- "Alzheimer disease"
 
-expr.vals <- expr_loadings(kegg.name, kegg.list, t(adj_expr), comp_groups)
+#plot_individual_genes(gene.list = kegg.list$"Alzheimer disease")
+
+#give each gene a "loading", which is a comparison of expression
+#between the FC and VS groups
+expr.vals <- expr_loadings(term.name = kegg.name, gene.list = kegg.list, 
+    expr.mat = t(adj_expr), group.list = comp_groups, loading.type = "PC")
 #hist(expr.vals)
 scaled.vals <- scale.between.vals(expr.vals, -1, 1)
 #hist(scaled.vals)
@@ -2283,7 +2321,9 @@ corr_net <- function(int_result, p.thresh = 0.001, plot.results = FALSE,
 #are undirected.
 net_by_geno <- function(int_result, p.thresh = 0.001, plot.result = FALSE, 
     layout.mat = NULL, vertex.size = 0.5, edge.arrow.size = 0.7, 
-    edge.width.factor = 5, title.level = "####"){
+    edge.width.factor = 5, title.level = "####", highlight.nodes = NULL, 
+    highlight.width = 0.08, highlight.height = 0.05, 
+    highlight.cex = 1, highlight.lwd = 2, highlight.font = 2){
 
     gene.names <- colnames(int_result[[1]])
     sig.effect <- which(int_result[[2]] <= p.thresh, arr.ind = TRUE)
@@ -2320,14 +2360,22 @@ net_by_geno <- function(int_result, p.thresh = 0.001, plot.result = FALSE,
         plot_net(fc.net, layout.mat = layout.mat, global.min = global.min, 
             global.max = global.max, vertex.size = vertex.size, 
             plot.label = "FC", edge.arrow.size = edge.arrow.size, 
-            edge.width.factor = edge.width.factor)
+            edge.width.factor = edge.width.factor, highlight.nodes = 
+            highlight.nodes, highlight.width = highlight.width, 
+            highlight.height = highlight.height, 
+            highlight.cex = highlight.cex, highlight.lwd = highlight.lwd, 
+            highlight.font = highlight.font)
         cat("\n\n")
 
         cat(title.level, "VS\n")
         plot_net(vs.net, layout.mat = layout.mat, global.min = global.min, 
             global.max = global.max, vertex.size = vertex.size, 
             plot.label = "VS", edge.arrow.size = edge.arrow.size, 
-            edge.width.factor = edge.width.factor)
+            edge.width.factor = edge.width.factor, highlight.nodes = 
+            highlight.nodes, highlight.width = highlight.width, 
+            highlight.height = highlight.height, 
+            highlight.cex = highlight.cex, highlight.lwd = highlight.lwd, 
+            highlight.font = highlight.font)
         cat("\n\n")
     }
 
@@ -2344,7 +2392,9 @@ get_layout <- function(net){
 }
 
 plot_net <- function(net, layout.mat = NULL, global.min = NULL, global.max = NULL,
-    vertex.size = 0.5, plot.label = "", edge.arrow.size = 0.7, edge.width.factor = 5){
+    vertex.size = 0.5, plot.label = "", edge.arrow.size = 0.7, edge.width.factor = 5,
+    highlight.nodes = NULL, highlight.width = 0.08, highlight.height = 0.05, 
+    highlight.cex = 1, highlight.lwd = 2, highlight.font = 2){
 
     if(!is.null(layout.mat)){
         layout.names <- rownames(layout.mat)
@@ -2370,11 +2420,32 @@ plot_net <- function(net, layout.mat = NULL, global.min = NULL, global.max = NUL
         col.scale = c("blue", "brown"), grad.dir = "ends", light.dark = "f", 
         global.color.scale = TRUE, global.min = global.min, global.max = global.max)
 
+    if(!is.null(V(net)$weight)){
+        node.col <- colors.from.values(V(net)$weight, split.at.vals = TRUE,
+        col.scale = c("blue", "brown"), grad.dir = "ends", light.dark = "f", 
+        global.color.scale = TRUE, global.min = global.min, global.max = global.max)
+    }else{
+        node.col = "lightblue"
+    }
+
     par(mar = c(0,0,4,0))
-    plot(net, edge.color = edge.col, 
+    plot(net, edge.color = edge.col, vertex.color = node.col,
         vertex.size = vertex.size, layout = plot.layout, main = plot.label, 
         edge.width = abs(E(net)$weight)*edge.width.factor, 
         edge.arrow.size = edge.arrow.size)
+
+    if(!is.null(highlight.nodes)){
+        scaled.coord <- apply(plot.layout, 2, function(x) scale.between.vals(x, -1, 1))
+        for(i in 1:length(highlight.nodes)){
+            node.idx <- which(rownames(scaled.coord) == highlight.nodes[i])
+            node.coord <- scaled.coord[node.idx,]
+            draw.rectangle(node.coord[1]-highlight.width, node.coord[1]+highlight.width, 
+                node.coord[2]-highlight.height, node.coord[2]+highlight.height, fill = "white",
+                border = "black", lwd = highlight.lwd)
+            text(node.coord[1], node.coord[2], highlight.nodes[i], cex = highlight.cex, 
+                font = highlight.font)
+        }
+    }
 }
 
 direct_connect <- function(net, gene.name, mode = c("all", "out", "in","total")){
@@ -2469,24 +2540,109 @@ plot_directionality <- function(gene1, gene2, plot.results = TRUE, report = "cor
 }
 
 
-directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.test"){
+directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.test", 
+    cex.lab = 1, stat.x = 0.1, stat.y = 0.9, plot.predictions = FALSE, 
+    plot.geno.effect = FALSE){
+
     ind.col <- sapply(test.factor, function(x) geno.cols[which(names(geno.cols) == x)])
     g1.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene1), "ensembl_gene_id"]
     if(length(g1.id) == 0){stop(paste("I couldn't find", gene1))}
     g2.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene2), "ensembl_gene_id"]
     if(length(g2.id) == 0){stop(paste("I couldn't find", gene2))}
 
-    resid.forward <- resid(lm(adj_expr[,g2.id]~adj_expr[,g1.id]+test.factor))
-    resid.reverse <- resid(lm(adj_expr[,g1.id]~adj_expr[,g2.id]+test.factor))
+    #fit additive models explaining each gene's expression with
+    #the other gene's expression and genotype
+    #get the residuals from the model
+    add.forward <- lm(adj_expr[,g2.id]~adj_expr[,g1.id]+test.factor)
+    add.reverse <- lm(adj_expr[,g1.id]~adj_expr[,g2.id]+test.factor)
+    resid.forward <- resid(add.forward)
+    resid.reverse <- resid(add.reverse)
 
+    #fit the interaction models
     int.forward <- lm(adj_expr[,g2.id]~adj_expr[,g1.id]*test.factor)
     int.reverse <- lm(adj_expr[,g1.id]~adj_expr[,g2.id]*test.factor)
+
+    if(plot.predictions){
+        min.forward <- lm(adj_expr[,g2.id]~adj_expr[,g1.id])
+        min.reverse <- lm(adj_expr[,g1.id]~adj_expr[,g2.id])
+
+        pred.forward.min <- predict(min.forward) #predict gene2 expression using just gene1
+        pred.reverse.min <- predict(min.reverse) #predict gene1 expression using just gene2
+        pred.forward.add <- predict(add.forward) #predict gene2 expression using gene1 and genotype as an additive variable
+        pred.reverse.add <- predict(add.reverse) #predict gene1 expression using gene2 and genotype as an additive variable
+        pred.forward.int <- predict(int.forward) #predict gene2 expression using gene1 and genotype as an interactive variable
+        pred.reverse.int <- predict(int.reverse) #predict gene1 expression using gene2 and genotype as an interactive variable
+
+        #quartz(width = 5, height = 7.5)
+        par(mfrow = c(3,2))
+        plot.with.model(adj_expr[,g2.id], pred.forward.min, main = "forward no genotype", col = ind.col,
+            xlab = gene1, ylab = paste("predicted", gene2), cex.lab = cex.lab)
+        plot.with.model(adj_expr[,g1.id], pred.reverse.min, main = "reverse no genotype", col = ind.col,
+            xlab = gene2, ylab = paste("predicted", gene1), cex.lab = cex.lab)
+        plot.with.model(adj_expr[,g2.id], pred.forward.add, main = "forward additive", col = ind.col,
+            xlab = gene1, ylab = paste("predicted", gene2), cex.lab = cex.lab)
+        plot.with.model(adj_expr[,g1.id], pred.reverse.add, main = "reverse additive", col = ind.col,
+            xlab = gene2, ylab = paste("predicted", gene1), cex.lab = cex.lab)
+        plot.with.model(adj_expr[,g2.id], pred.forward.int, main = "forward interactive", col = ind.col,
+            xlab = gene1, ylab = paste("predicted", gene2), cex.lab = cex.lab)
+        plot.with.model(adj_expr[,g1.id], pred.reverse.int, main = "reverse interactive", col = ind.col,
+            xlab = gene2, ylab = paste("predicted", gene1), cex.lab = cex.lab)
+    }
+
+    #plot the effect of genotype on gene1/2 when the other gene is high/low
+    if(plot.geno.effect){
+    
+        #try looking at boxplots of gene expression of gene2 at high and 
+        #low levels of gene1
+        layout.mat <- matrix(c(5,5,1,2,6,6,3,4), ncol = 2, byrow = TRUE)
+        layout(layout.mat, heights = c(0.2, 1, 0.2, 1))
+
+        #forward direction
+        par(mar = c(4,4,4,2), xpd = NA)
+
+        #forward direction: gene2 is the response variable
+        split.idx <- list("low" = which(adj_expr[,g1.id] < mean(adj_expr[,g1.id])),
+            "high" = which(adj_expr[,g1.id] > mean(adj_expr[,g1.id])))
+        test_effect(adj_expr[split.idx$low,g2.id], test.factor[split.idx$low],
+            plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
+            stat.y.spread = stat.y.spread, plot.label = paste("Low expression of", gene1),
+            cex.lab = cex.lab, ylab = gene2)
+
+        test_effect(adj_expr[split.idx$high,g2.id], test.factor[split.idx$high],
+            plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
+            stat.y.spread = stat.y.spread, plot.label = paste("High expression of", gene1),
+            cex.lab = cex.lab, ylab = gene2)
+
+
+        #reverse direction: gene1 is the response variable
+        split.idx <- list("low" = which(adj_expr[,g2.id] < mean(adj_expr[,g2.id])),
+            "high" = which(adj_expr[,g2.id] > mean(adj_expr[,g2.id])))
+        test_effect(adj_expr[split.idx$low,g1.id], test.factor[split.idx$low],
+            plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
+            stat.y.spread = stat.y.spread, plot.label = paste("Low expression of", gene2),
+            cex.lab = cex.lab, ylab = gene1)
+
+        test_effect(adj_expr[split.idx$high,g1.id], test.factor[split.idx$high],
+            plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
+            stat.y.spread = stat.y.spread, plot.label = paste("High expression of", gene2),
+            cex.lab = cex.lab, ylab = gene1)
+
+        #add labels
+        par(mar = c(0,0,0,0))
+        plot.text(paste(gene1, "->", gene2), cex = 2, font = 2)
+        plot.text(paste(gene2, "->", gene1), cex = 2, font = 2)
+    }
+
+
+    #get the p values for the interaction terms
     int.idx <- which(rownames(coef(summary(int.forward))) == "adj_expr[, g1.id]:test.factor.L")
     forward.int.p <- threshold_p(coef(summary(int.forward))[int.idx,"Pr(>|t|)"])
     reverse.int.p <- threshold_p(coef(summary(int.reverse))[int.idx,"Pr(>|t|)"])
 
     if(plot.results){
-        layout.mat <- get.layout.mat((length(geno.idx)*2))
+        
+        #layout.mat <- get.layout.mat((length(geno.idx)*2))
+        layout.mat <- matrix(1:((length(geno.idx)+1)*2), nrow = 2, byrow = TRUE)
         #add a plot at end of each row for the correlations and the p values
         layout.mat <- cbind(layout.mat, c((max(layout.mat)+1):(max(layout.mat)+2)))
         #add a row for the forward label
@@ -2495,43 +2651,61 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
         reverse.label <- rep((max(layout.mat)+1), ncol(layout.mat))
         reverse.label[length(reverse.label)] <- (reverse.label[1]+1)
         layout.mat <- rbind(layout.mat[1:2,], reverse.label, layout.mat[3,])
-        layout(layout.mat, widths = c(rep(0.8, 3), 1), heights = c(0.2, 1, 0.2, 1))
-    
+        layout(layout.mat, widths = c(rep(0.8, 4), 1), heights = c(0.2, 1, 0.2, 1))
+        #layout.show(max(layout.mat))
+
         #forward direction
         forward.stats <- reverse.stats <- matrix(NA, ncol = 2, nrow = length(geno.idx))
         rownames(forward.stats) <- rownames(reverse.stats) <- names(geno.idx)
         colnames(forward.stats) <- colnames(reverse.stats) <- c("r", "p")
+
+        #remove the effect of genotype
+        dummy.factor <- dummy_covar(as.matrix(test.factor, ncol = 1))
+        adj1 <- adjust(adj_expr[,g1.id,drop=FALSE], dummy.factor)
+        adj2 <- adjust(adj_expr[,g2.id,drop=FALSE], dummy.factor)
+        
+        plot.with.model(adj1, adj2, col = ind.col,
+            xlab = gene1, ylab = gene2, 
+            main = "overall", report = "cor.test", cex.lab = cex.lab)
+
         for(g in 1:length(geno.idx)){
             ind.idx <- geno.idx[[g]]
-            forward.stats[g,] <- plot.with.model(adj_expr[ind.idx,g1.id], resid.forward[ind.idx], col = geno.cols[g],
-                xlab = gene1, ylab = paste(gene2, "residuals"), main = names(geno.cols)[g],
-                report = "cor.test")
+            forward.stats[g,] <- plot.with.model(adj_expr[ind.idx,g1.id], resid.forward[ind.idx], 
+                col = geno.cols[g], xlab = gene1, ylab = paste(gene2, "residuals"), 
+                main = names(geno.cols)[g], report = "cor.test", cex.lab = cex.lab)
         }
+        
+        plot.with.model(adj2, adj1, col = ind.col,
+            xlab = gene2, ylab = gene1, 
+            main = "all", report = "cor.test", cex.lab = cex.lab)
+        
         #reverse direction
         for(g in 1:length(geno.idx)){
             ind.idx <- geno.idx[[g]]
-            reverse.stats[g,] <- plot.with.model(adj_expr[ind.idx,g2.id], resid.reverse[ind.idx], col = geno.cols[g],
-                xlab = gene2, ylab = paste(gene1, "residuals"), main = names(geno.cols)[g], 
-                report = "cor.test")
+            reverse.stats[g,] <- plot.with.model(adj_expr[ind.idx,g2.id], resid.reverse[ind.idx], 
+                col = geno.cols[g], xlab = gene2, ylab = paste(gene1, "residuals"), 
+                main = names(geno.cols)[g], report = "cor.test", cex.lab = cex.lab)
         }
         
         #compare the correlation coefficients
         barplot(rbind(forward.stats[,1], reverse.stats[,1]), beside = TRUE, 
             col = rbind(geno.cols, geno.cols), density = c(NA, 50), 
-            ylab = "Correlation Coefficient", main = "Correlations")
+            ylab = "Correlation Coefficient", main = "Correlations",
+            cex.names = cex.lab, cex.lab = cex.lab)
         abline(h = 0)
 
         #compare the p values
         barplot(-log10(rbind(forward.stats[,2], reverse.stats[,2])), beside = TRUE, 
             col = rbind(geno.cols, geno.cols), density = c(NA, 50), 
-            ylab = "-log10(p)", main = "-log10(p)")
+            ylab = "-log10(p)", main = "-log10(p)", cex.names = cex.lab,
+            cex.lab = cex.lab)
         plot.dim <- par("usr")
         abline(h = 0) 
 
         #add labels for forward and reverse:
         par(mar = c(0,4,0,4))
         plot.text(paste("Forward Direction:", gene1, "->", gene2, "\np =", forward.int.p), cex = 2, font = 2)
-        plot.text(paste("Reverse Direction:", gene2, "->", gene1, "\np =", reverse.int.p), cex = 2, font = 2, x = 0.75)
+        plot.text(paste("Reverse Direction:", gene1, "<-", gene2, "\np =", reverse.int.p), cex = 2, font = 2, x = 0.75)
 
         #add a legend for the two bar plots
         plot.new()
@@ -2539,9 +2713,10 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
         legend(x = 0.2, y = 1, legend = names(geno.cols), fill = geno.cols)
         legend(x = 0.6, y = 1, legend = c("forward", "reverse"), 
             fill = c("white", "darkgray"), density = c(0, 50))
+        
+        result <- list("forward.stats" = forward.stats, "reverse.stats" = reverse.stats)
+        invisible(result)
     }
-    result <- list("forward.stats" = forward.stats, "reverse.stats" = reverse.stats)
-    invisible(result)
 }
 
 ```
@@ -2562,7 +2737,7 @@ line.
 #term.name <- "Oxidative Stress"
 #term.idx <- which(names(bd.list) == term.name)
 #test.id <- bd.list[[term.idx]]
-term.name <- "all_genes"
+term.name <- "all_genes" #this takes over 1 day and 12 hours on the cluster with 20 cores and 40 gigs of memory
 test.id <- unique(unlist(kegg.bd.list)) #test everything in our intersection list
 #length(test.id)
 
@@ -2581,7 +2756,7 @@ if(!file.exists(corr_result_file)){
     #and give the genes human-readable names
     common.names <- mouse.genes[match(common.id, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"]
     colnames(sub.expr) <- common.names
-    corr_result <- test_corr_int_parallel(sub.expr, test.factor, ncores = 20)
+    corr_result <- test_corr_int_parallel(sub.expr, test.factor, ncores = 7)
     #end.par <- Sys.time()
     #time.par <- end.par - start.par
     #print(time.par)
@@ -2590,21 +2765,18 @@ if(!file.exists(corr_result_file)){
     corr_result <- readRDS(corr_result_file)
 }
 
-
-#plot(corr_result1[[1]], corr_result[[1]])
-#plot(-log10(corr_result1[[2]]), -log10(corr_result[[2]]))
-
-#corr_result <- diff_cor_test(test.id, nperm = 1000, show.progress = TRUE)
 pair.int.effect <- corr_result[[1]]
 pair.int.p <- corr_result[[2]]
 ```
+
+### Gene-gene interaction significance
 
 The plot below shows the qq plot for the interaction p values.
 The horizontal line marks where we have drawn our significance
 threshold.
 
 ```{r qq}
-net.thresh = 10^(-4)
+net.thresh = 10^(-6)
 qqunif.plot(as.vector(pair.int.p))
 abline(h = -log10(net.thresh))
 ```
@@ -2614,10 +2786,14 @@ interaction term compared with the -log10(p) of the interaction
 term. The horizontal line shows the threshold above which we 
 are considering the interactions significant.
 
-```{r kl_int}
+I've turned off plotting, because the data are huge
+
+```{r kl_int, eval = FALSE}
 plot(pair.int.effect, -log10(pair.int.p), xlab = "Effect Size", ylab = "-log10(p)")
 abline(h = -log10(net.thresh))
+``
 
+```{r get_sig}
 sig.effect <- which(pair.int.p <= net.thresh, arr.ind = TRUE); #significant
 #sig.effect <- which(-log10(pair.int.p) < 1e-3, arr.ind = TRUE); #not significant
 #sig.genes <- cbind(colnames(pair.int.p)[sig.effect[,1]], colnames(pair.int.p)[sig.effect[,2]])
@@ -2627,10 +2803,12 @@ total.pairs <- length(pair.int.p)-ncol(pair.int.p)
 frac.sig <- nrow(sig.effect)/total.pairs
 ```
 
-There were `r total.pairs` total correlations among the `r ncol(pair.int.p)`
-genes in this biodomain. At p value of `r 1/(10^net.thresh)`, there were 
+We tested `r total.pairs` total correlations among `r ncol(pair.int.p)`
+genes. At p value of `r net.thresh`, there were 
 `r nrow(sig.effect)` correlations that depended significantly on 
 genotype (`r signif(frac.sig*100, 2)`%).
+
+### A directed network
 
 The interaction network is directed because the interaction term
 when one gene is the explanatory variable is differet from when 
@@ -2675,75 +2853,442 @@ activity and is involved in the response to amyloid beta. Usp8
 deubiquitinase activity and is involved in endosome organization 
 and protein deubiquitination.
 
-```{r dir_test, fig.width = 11, fig.height = 7}
-#gene1  <- "App"; gene2 <- "Bace1" #example of bi-directional interaction
+```{r dir_test, fig.width = 11, fig.height = 6}
+stop()
+#gene1  <- "App"; gene2 <- "Apoe" #example of bi-directional interaction
 gene1 <- "Mmp2"; gene2 <- "Usp8" #example of one-way interaction
 #gene1  <- "Apoe"; gene2 <- "App"
-#gene1  <- "Grin2a"; gene2 <- "Bace1"
+#gene1  <- "Srsf5"; gene2 <- "Adra1a"
+
+#gene_vioplot(gene1)
+#gene_vioplot(gene2, stat.y = 0.2)
+#gene_vioplot(gene2, stat.y = 0.9)
 
 #quartz(width = 8, height = 6); stats <- plot_one_interaction(gene1, gene2, report = "cor.test")
 #quartz(width = 8, height = 6);plot_directionality(gene1, gene2)
-#quartz(width = 11, height = 7)
-directed_residuals(gene1, gene2)
+#quartz(width = 11, height = 6)
+directed_residuals(gene1, gene2, cex.lab = 1.5)
+
+#quartz(width = 5, height = 7.5)
+directed_residuals(gene1, gene2, plot.results = FALSE, plot.predictions = TRUE, cex.lab = 1.5)
+
+#quartz(width = 6, height = 7)
+directed_residuals(gene1, gene2, plot.results = FALSE, plot.geno.effect = TRUE, 
+    stat.y = 0.2, cex.lab = 1.2)
+
+test.gene <- "Srsf5"
+srsf5.conn <- direct_connect(dir.net, test.gene)
+u_conn <- unique(names(srsf5.conn))
+conn.id <- mouse.genes[match(u_conn, mouse.genes[,"external_gene_name"]),"ensembl_gene_id"]
+#cat(conn.id, sep = "\n")
+
+srsf5.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == test.gene),"ensembl_gene_id"]
+high.idx <- which(adj_expr[,srsf5.id] > mean(adj_expr[,srsf5.id]))
+low.idx <- which(adj_expr[,srsf5.id] < mean(adj_expr[,srsf5.id]))
+
+high.expr <- sapply(conn.id, function(x) coef(lm(adj_expr[high.idx,x]~test.factor[high.idx]))[2])
+low.expr <- sapply(conn.id, function(x) coef(lm(adj_expr[low.idx,x]~test.factor[low.idx]))[2])
+names(high.expr) <- names(low.expr) <- u_conn
+response.mat <- cbind(low.expr, high.expr)
+row.order <- hclust(dist(response.mat))$order
+colnames(response.mat) <- paste(c("low", "high"), test.gene)
+pheatmap(response.mat[row.order,], cluster_cols = FALSE, cluster_rows = FALSE)
+
+straight.cor <- sapply(conn.id, function(x) cor(adj_expr[,x], adj_expr[,srsf5.id]))
+imageWithTextColorbar(response.mat, use.pheatmap.colors = TRUE, cex = 1, bar.lwd = 3)
+
+up.with.kl <- which(low.expr > 0)
+down.with.kl <- which(low.expr < 0)
+#cat(names(up.with.kl), sep = "\n")
+#cat(names(down.with.kl), sep = "\n")
+
+```
+
+```{r lookup_genes, eval = FALSE}
+#try looking up some of the connector genes in relation to 
+#various topics
+library(easyPubMed)
+
+#search_string <- "App"
+search_string <- c("App", "glutamatergic", "Klotho", "Alzheimer", "proteasome")
+
+hit_mat <- matrix(0, nrow = (length(u_conn)+1), ncol = length(search_string))
+rownames(hit_mat) <- c("Srsf5", u_conn)
+colnames(hit_mat) <- search_string
+
+pdf("~/Desktop/term_search.pdf")
+for(i in 1:length(search_string)){
+    all.pubmed <- lapply(c("Srsf5", u_conn), function(x) get_pubmed_ids(paste(search_string[i], "AND", x)))
+    num.articles <- as.numeric(sapply(all.pubmed, function(x) x$Count))
+    names(num.articles)  <- c("Srsf5", u_conn)
+    hit_mat[,i] <- num.articles
+    barplot(tail(sort(num.articles, decreasing = FALSE), 25), las = 2, horiz = TRUE, 
+        main = search_string[i])
+    #abstracts <- fetch_pubmed_data(all.pubmed, format = "medline")
+}
+dev.off()
+
+has.hits <- which(rowSums(hit_mat) > 0)
+pheatmap(log10(hit_mat[has.hits,]+1))
+
+hit.list <- lapply(1:ncol(hit_mat), function(x) names(which(hit_mat[,x] > 0)))
+names(hit.list) <- search_string
+plotVenn(hit.list)
+Reduce("intersect", hit.list)
+
+test.gene <- "Thy1"
+complex.search.term <- paste0(test.gene, " AND (", paste(search_string[1:3], collapse = " OR "), ")")
+all.pubmed <- get_pubmed_ids(complex.search.term)
+all.pubmed$Count
+
+
 ```
 
 I've checked quite a few of these, and the directionality
 of the interactions doesn't seem to be terribly useful.
 There are some interactions, like the Mmp2-Usp8 one that,
 really do seem to be directional, but many of them have
-similar interaction profiles going forward and backward.
-Thus, genotype really does affect the relationship, but
-that influence isn't really directed. So we can analyze
-the network safely, but I don't think we should put too
-much stock in the directionality.
+similar interaction profiles going forward and backward,
+but the significance of those interaction is on one side
+of our threshold or the other.
 
-The following bar plots show the in and out degree of each gene
-in the network. App is the hub of the network, and primarily has
-connections going out. This suggests that Klotho genotype 
+Thus, genotype really does affect the relationship, but
+that influence isn't really directed. So I think the
+network itself is interesting, but I think we should
+look at it as an undirected network.
+
+### Network hubs
+
+The barplot below shows the top 20 genes in the network
+in terms of degree. 
 
 ```{r degree, fig.width = 7, fig.height = 15}
-in.deg <- degree(dir.net, mode = "in")
-out.deg <- degree(dir.net, mode = "out")
-all.deg <- degree(dir.net, mode = "all")
-#head(sort(in.deg, decreasing = TRUE))
-#head(sort(out.deg, decreasing = TRUE))
-#head(sort(all.deg, decreasing = TRUE))
+deg <- degree(dir.net)
 
-#pdf("~/Desktop/degree.pdf", width = 7, height = 15)
-in.deg.order <- order(in.deg, decreasing = FALSE)
-barplot(rbind(in.deg[in.deg.order], out.deg[in.deg.order]), beside = TRUE,
-    horiz = TRUE, las = 2, col = c("#7fc97f", "#beaed4"), xlab = "Degree", cex.names = 0.5)
-legend("bottomright", fill = c("#7fc97f", "#beaed4"), title = "Degree", 
-    legend = c("in", "out"))
-#dev.off()
+show.n <- min(c(20, length(deg)))
+top.deg <- rev(sort(deg, decreasing = TRUE)[1:show.n])
+in_ad <- which(!is.na(match(names(top.deg), ad.genes[,1])))
+#top.deg[in_ad]
 ```
 
-## Correlations by carrier status {.tabset .tabset-fade .tabset-pills}
+The degree by frequency of each degree is shown below on a log-log
+scale. This network is pretty modular. There are many nodes with 
+degree 1, and there is a heavy tail of high-degree nodes.
+
+```{r deg_freq}
+deg.freq <- sapply(1:max(deg), function(x) length(which(deg == x)))
+no.zero <- which(deg.freq > 0)
+plot(c(1:max(deg))[no.zero], deg.freq[no.zero], log = "xy", xlab = "Degree", ylab = "Frequency")
+```
+
+
+### Correlations by carrier status {.tabset .tabset-fade .tabset-pills}
 
 The following plots show the correlation networks for significant
-edges in the two genotypes (FC carriers and VS carriers.) Overall,
-the VS carriers seem to have stronger correlations.
+edges in the two genotypes (FC carriers and VS carriers.) 
+
+The FC and VS carriers have strong correlations in different parts
+of the network.
 
 ```{r diff_net, fig.width = 10, fig.height = 10, results = "asis"}
 
-#pdf("~/Desktop/geno_nets.pdf", width = 10, height = 10)
+#pdf("~/Desktop/geno_nets.pdf", width = 20, height = 20)
 geno.nets <- net_by_geno(int_result = corr_result, p.thresh = net.thresh, 
-    plot.result = TRUE, layout.mat = net.layout, title.level = "###")
+    plot.result = TRUE, layout.mat = net.layout, title.level = "####")
+#dev.off()
+```
+
+### Edge weight comparison
+
+The plot below shows that the correlations between genes tend to
+oppose each other in the two genotypes. Is this just an artifact
+of the way we are doing the test? It might be. Let's not put too
+much into this.
+
+```{r edge_comparison}
+plot(E(geno.nets$FC_net)$weight, E(geno.nets$VS_net)$weight, xlab = "FC edge weights",
+    ylab = "VS edge weights")
+abline(v = 0, h = 0)
+```
+
+### The large connected component
+
+The following plot shows the functional enrichment for the genes
+in the large connected component. It is mostly the same as the 
+differential expression: synapse and ribosome.
+
+```{r large_enrich}
+large.comp <- largest_component(dir.net)
+large.enrich <- gost(V(large.comp)$name, organism = "mmusculus")
+plot.enrichment(large.enrich, num.terms = 30, max.term.size = 3000,
+    plot.label = "Connected Component Enrichment")
+```
+
+Below we explore this large connected component more.
+The connected component is highly modular. 
+
+The plot below shows just the large connected component
+with the top 20 hubs highlighted.
+
+```{r large_comp, fig.width = 20, fig.height = 20}
+
+large.name <- V(large.comp)$name
+comp.layout <- net.layout[match(large.name, rownames(net.layout)),]
+
+#plot the large component alone and with the top 20 hubs labeled
+#pdf("~/Desktop/large_comp.pdf", width = 20, height = 20)
+#plot_net(large.comp, layout.mat = comp.layout)
+plot_net(large.comp, layout.mat = comp.layout, highlight.nodes = names(top.deg),
+    highlight.width = 0.05, highlight.height = 0.02, highlight.cex = 1.5,
+    highlight.lwd = 3)
+#dev.off()
+```
+
+### Differential expression in the large connected component
+
+The plot below shows the expression results for the genes
+in the large connected component.
+
+```{r, fig.width = 11, fig.height = 7}
+#diff expp
+
+#png("~/Desktop/large_expression.png", width = 11, height = 7, units = "in", res = 300)
+large.id <- mouse.genes[match(large.name, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+large.stats <- plot_individual_genes(gene.list = large.id, order.by = "PC", 
+    plot.label = "Large Connected Component", return.full.result = TRUE, plot.enrich = TRUE)
+#dev.off()
+```
+
+The plot below shows the relative VS expression for each gene
+in this connected component. Brown means that the gene is 
+upregulated in VS animals. Blue means it is downregulated in
+VS animals. There is no obvious pattern.
+
+```{r relative_expr, fig.width = 20, fig.height = 20}
+
+#weight the nodes based on relative VS expression
+large.expr <- lapply(large.name, function(x) gene_vioplot(x, plot.results = FALSE))
+large.mean <- t(sapply(large.expr, function(x) sapply(x, mean)))
+rel.vs <- large.mean[,3] - large.mean[,1]
+V(large.comp)$weight <- rel.vs
+
+#pdf("~/Desktop/large_comp_vertex.pdf", width = 20, height = 20)
+plot_net(large.comp, layout.mat = comp.layout, vertex.size = 5, edge.width.factor = 1,
+    highlight.nodes = names(top.deg), highlight.width = 0.05, highlight.height = 0.02, 
+    highlight.cex = 1.5)
+#dev.off()
+```
+
+### Biodomains and KEGG pathways in the large connected component
+
+How are the biodomains and KEGG pathways distributed in this component?
+The bar plots below show the -log10(p) for the enrichments of each 
+biodomain, and the top 20 KEGG pathways, in the large connected
+component.
+
+Ribosome and proteostasis really shine through.
+
+```{r biodomain_enrich, fig.width = 10, fig.height = 7}
+bd.enrich.p <- sapply(bd.list, function(x) gene_set_enrich(x, large.id, test.id))
+par(mar = c(4,16,4,2))
+barplot(sort(-log10(bd.enrich.p)), las = 2, horiz = TRUE, xlab = "-log10(p)",
+    main = "Biodomains enriched in large connected component")
+
+kegg.enrich.p <- sapply(kegg.list, function(x) gene_set_enrich(x, large.id, test.id))
+par(mar = c(4,24,4,2))
+barplot(rev(sort(-log10(kegg.enrich.p), decreasing = TRUE)[1:20]), las = 2, horiz = TRUE, xlab = "-log10(p)",
+    main = "KEGG pathways enriched in\nlarge connected component")
+```
+
+What about localization in the network? How spread out 
+are these nodes? Does that matter?
+
+I selected 5000 random samples of genes using the number of 
+genes in the biodomains. I got a distribution of node sizes 
+and average node distances for each group. There are a couple 
+domains in Proteostasis and Structural Stabilization that have
+lower distances relative to their size than the random distribution.
+They are in Ribosome and COVID (read virus response?) KEGG pathways.
+
+So Ribosome genes and COVID (virus response genes?) are closer
+to each other in this network than we expect by chance. Not 
+particularly interesting...
+
+```{r node_clustering, eval = FALSE}
+
+get_list_dist <- function(net, gene.list, plot.results = TRUE){
+    edges <- as_edgelist(net) #we need to remove the weights from the network
+    flat.net <- graph_from_edgelist(edges, directed = FALSE)
+    node.dist <- distances(flat.net)
+
+    gene.name <- lapply(gene.list, function(x) mouse.genes[match(x, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"])
+    common.name <- lapply(gene.name, function(x) intersect(V(flat.net)$name, x))
+    common.dist <- lapply(common.name, function(x) node.dist[x,x])
+    avg.dist <- sapply(common.dist, mean)
+    
+    if(plot.results){
+        par(mfrow = c(1,2), mar = c(4,12,4,2))
+        barplot(sort(avg.dist, decreasing = TRUE), las = 2, horiz = TRUE)
+
+        par(mar = c(4,4,4,2))
+        n.nodes <- sapply(common.name, length)
+        plot(n.nodes, avg.dist)
+        #boxplot(lapply(bd.dist, function(x) x[upper.tri(x, diag = FALSE)]), las = 2)
+    }
+    invisible(common.dist)
+}
+
+bd.list.len <- sapply(bd.list, length)
+rnd_sample <- lapply(1:5000, function(x) sample(unique(unlist(bd.list)), sample(bd.list.len, 1))) #pull some random samples from the biodomainlist
+rnd_cl <- get_list_dist(large.comp, rnd_sample, plot.results = FALSE)
+rnd.dist <- sapply(rnd_cl, mean)
+rnd.nodes <- sapply(rnd_cl, function(x) if(class(x)[1] == "matrix"){nrow(x)}else{0})
+#plot(rnd.nodes, rnd.dist) #the randomly sampled cluster sizes and distances in the large component
+#plot.hexbin.as.plot(rnd.nodes, rnd.dist)
+
+pdf("~/Desktop/cl_test.pdf", width = 5, height = 5)
+for(bd in 1:length(kegg.bd.list)){
+    if(length(kegg.bd.list[[bd]]) > 0){
+        test <- get_list_dist(large.comp, kegg.bd.list[[bd]], plot.results = FALSE)
+        test.dist <- sapply(test, mean)
+        test.nodes <- sapply(test, function(x) if(class(x)[1] == "matrix"){nrow(x)}else{0})
+        plot.hexbin.as.plot(rnd.nodes, rnd.dist, main = names(kegg.bd.list)[bd], xlim = c(0, 200))
+        points(test.nodes, test.dist, pch = 16)
+
+        #check <- intersect(which(test.nodes > 25), which(test.dist < 4))
+        #names(kegg.bd.list[[bd]])[check]
+    }
+}
+dev.off()
+```
+
+ 
+The biodomain-KEGG intersections that were significantly
+enriched in the large connected component are the following.
+Purple vertices show biodomains, green show Kegg pathways.
+Edge color and width reflect the -log10(p) of the enrichment.
+
+```{r enrich_int, fig.width = 7, fig.height = 7}
+enrich.p.mat <- matrix(NA, nrow = length(bd.list), ncol = length(kegg.list))
+rownames(enrich.p.mat) <- names(bd.list)
+colnames(enrich.p.mat) <- names(kegg.list)
+for(bd in 1:length(kegg.bd.list)){
+    bd.name <- names(kegg.bd.list)[bd]
+    if(length(kegg.bd.list[[bd]]) == 0){next()}
+    for(k in 1:length(kegg.bd.list[[bd]])){
+        kegg.name <- names(kegg.bd.list[[bd]])[k]
+        test.set <- kegg.bd.list[[bd]][[k]]
+        sub.enrich <- gene_set_enrich(test.set, large.id, test.id)
+        enrich.p.mat[bd.name, kegg.name] <- sub.enrich
+    }
+}
+sig.enrich <- which(enrich.p.mat <= 1e-5, arr.ind = TRUE)
+int.enrich <- cbind(rownames(enrich.p.mat)[sig.enrich[,1]], colnames(enrich.p.mat)[sig.enrich[,2]])
+test <- graph_from_edgelist(int.enrich, directed = FALSE)
+ecol <- colors.from.values(-log10(enrich.p.mat[sig.enrich]), col.scale = "blue", grad.dir = "high")
+vcol <- rep("#7FC97F", vcount(test)) #kegg color
+vcol[which(V(test)$name %in% names(bd.list))] <- "#beaed4" #biodomain color
+
+par(mar = c(0,8,0,6))
+plot(test, vertex.color = vcol, edge.color = ecol, edge.width = -log10(enrich.p.mat[sig.enrich])/2)
+
+#imageWithTextColorbar(matrix(-log10(enrich.p.mat[sig.enrich]), ncol = 1), col.scale = "blue", 
+#    grad.dir = "high", cex = 1, bar.lwd = 2)
+```
+
+### Enrichments Localized {.tabset .tabset-fade .tabset-pills}
+
+The following plots show where these intersections lie in the 
+network.
+
+```{r enrich_net, fig.width = 20, fig.height = 20, results = "asis"}
+#pdf("~/Desktop/enriched_intersections.pdf", width = 20, height = 20)
+for(i in 1:nrow(int.enrich)){
+    bd.name <- int.enrich[i,1]
+    bd.idx <- which(names(kegg.bd.list) == bd.name)
+    kegg.name <- int.enrich[i,2]
+    kegg.idx <- which(names(kegg.bd.list[[bd.idx]]) == kegg.name)
+    cat("####", bd.name, "-", kegg.name, "\n")
+
+    int.genes <- kegg.bd.list[[bd.idx]][[kegg.idx]]
+    int.names <- mouse.genes[match(int.genes, mouse.genes[,"ensembl_gene_id"]),"external_gene_name"]
+    common.genes <- intersect(int.names, large.name)
+
+    plot_net(large.comp, layout.mat = comp.layout, vertex.size = 5, edge.width.factor = 5,
+    highlight.nodes = common.genes, highlight.width = 0.05, highlight.height = 0.02, 
+    highlight.cex = 1.5, plot.label = paste(bd.name, kegg.name, sep = " - "))
+    cat("\n\n")
+}
+#dev.off()
+```
+
+### Networks by genotoype {.tabset .tabset-fade .tabset-pills}
+
+The following plots how the genes in the network are differentially
+correlated in the VS and FC genotypes.
+
+```{r, results = "asis", fig.width = 20, fig.height = 20}
+#geno nets just for connected component
+large.idx <- match(large.name, colnames(corr_result[[1]]))
+large.result <- lapply(corr_result, function(x) x[large.idx, large.idx])
+
+#pdf("~/Desktop/geno_nets_large.pdf", width = 20, height = 20)
+geno.nets <- net_by_geno(int_result = large.result, p.thresh = net.thresh, 
+    plot.result = TRUE, layout.mat = net.layout, title.level = "####",
+    highlight.nodes = names(top.deg),
+    highlight.width = 0.05, highlight.height = 0.02, highlight.cex = 1.5,
+    highlight.lwd = 3)
+
+#without labels
+geno.nets <- net_by_geno(int_result = large.result, p.thresh = net.thresh, 
+    plot.result = TRUE, layout.mat = net.layout, title.level = "####")
+
+#dev.off()
+
+```
+
+### Hub Neighborhoods {.tabset .tabset-fade .tabset-pills}
+
+The following plots show the expression results for the genes
+in the neighborhood of each of the top 20 hubs.
+
+```{r connect_enrich, results = "asis", fig.width = 11, fig.height = 7}
+#gene.name = "Srsf5"
+#gene.name <- c("Mylpf", "Atp2a1", "Tnnc2")
+gene.name <- names(top.deg) #top 20 hubs
+
+connected <- lapply(gene.name, function(x) names(direct_connect(dir.net, x)))
+#cat(connected, sep = "\n")
+connected.id <- lapply(connected, function(x) mouse.genes[match(x, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"])
+names(connected.id) <- gene.name
+#connect.enrich <- gost(connected[[1]], organism = "mmusculus")
+#plot.enrichment(connect.enrich, max.term.size = 3000, num.terms = 20, plot.label = gene.name)
+
+
+for(i in 1:length(gene.name)){
+    cat("####", gene.name[i], "\n")
+    hub.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene.name[i]),"ensembl_gene_id"]
+    #png(paste0("~/Desktop/hub_neighborhoods/", gene.name[i], ".png"), width = 11, height = 7, units = "in", res = 300)
+    gene.stats <- plot_individual_genes(gene.list = c(hub.id, connected.id[[i]]), 
+        plot.label = paste("genes connected to", gene.name[i]), plot.enrich = TRUE,
+        return.full.result = TRUE)
+    #test <- gost(c(hub.id, connected.id[[i]]), organism = "mmusculus")
+    #plot.enrichment(test)
+    #dev.off()
+    cat("\n\n")
+}
+cat("#### All connected genes")
+all.connected <- unique(unlist(connected.id))
+#png(paste0("~/Desktop/all_connected.png"), width = 11, height = 7, units = "in", res = 300)
+plot_individual_genes(gene.list = all.connected, 
+    plot.label = "genes connected to all genes", plot.enrich = TRUE)
+cat("\n\n")
 #dev.off()
 
 
-large.comp <- largest_component(dir.net)
-#large.enrich <- gost(V(large.comp)$name, organism = "mmusculus")
-#plot.enrichment(large.enrich, num.terms = 30)
 ```
 
-What do these interactions look like up close? The plot below shows an example.
-
-```{r app_int, fig.width = 10, fig.height = 7}
-app.out <- direct_connect(dir.net, "App", mode = "out")
-app.in <- direct_connect(dir.net, "App", mode = "in")
-```
-
+### Remaining analysis
 
 ```{r ind_terms, eval = FALSE}
 #here we plot violin plots of specific terms we are interested in.
@@ -2760,65 +3305,6 @@ term_vioplot(outer.term = "Type II diabetes mellitus", mean.term.vals = mean.k.v
 term_vioplot(outer.term = "Proteasome", mean.term.vals = mean.k.vals, stat.y = 0.95)
 ```
 
-## KEGG pathways with altered intersections {.tabset .tabset-fade .tabset-pills}
-
-We then looked at all the KEGG intersections with the 
-APP Processing biodomain. Because we've already calculated
-all the significant correlations in the APP biodomain, we
-can just look for where these fall in the overlapping 
-KEGG pathways.
-
-```{r all_intersections}
-app.list <- kegg.bd.list$"APP Metabolism"
-app.kegg.sig <- vector(mode = "list", length = length(app.list))
-names(app.kegg.sig) <- names(app.list)
-for(i in 2:length(app.list)){
-    overlapping.genes <- app.list[[i]]
-    overlapping.names <- mouse.genes[match(overlapping.genes, mouse.genes[,"ensembl_gene_id"]),"external_gene_name"]
-    common.names <- intersect(overlapping.names, colnames(corr_result[[1]]))
-    sub.net <- corr_result[[1]][common.names, common.names]
-    sub.p <- corr_result[[2]][common.names, common.names]
-    sig.sub <- which(sub.p <= 0.001, arr.ind = TRUE)
-    if(nrow(sig.sub) > 0){
-        sig.sub.names <- cbind(colnames(sub.net)[sig.sub[,1]], colnames(sub.net)[sig.sub[,2]])
-        sig.sub.result <- cbind(sig.sub.names, sub.net[sig.sub], sub.p[sig.sub])
-        colnames(sig.sub.result) <- c("gene1", "gene2", "effect", "p")
-        app.kegg.sig[[i]] <- sig.sub.result
-    }
-}
-has.vals <- which(sapply(app.kegg.sig, length) > 0)
-sig.app.k.list <- app.kegg.sig[has.vals]
-```
-
-There were `r length(app.kegg.sig)` KEGG pathways with genes overlapping
-the APP processing biodomain. Of these `r length(sig.app.k.list)` had
-gene-gene correlations that were significantly dependent on Klotho genotype.
-
-The bar plot below shows how many gene pairs in each term had altered
-correlations across genotypes.
-
-```{r num_alt}
-num.pairs <- sapply(sig.app.k.list, nrow)
-par(mar = c(4,22,4,2))
-barplot_with_num(sort(num.pairs), horiz = TRUE, las = 2, xlab = "Number of Gene Pairs",
-    main = "KEGG pathways in APP Metabolism\nwith altered gene-gene correlations")
-```
-
-```{r plot_kegg, results = "asis", fig.width = 10, fig.height = 10}
-#pdf("~/Desktop/kegg_overlaps.pdf", width = 10, height = 10)
-for(i in 1:length(sig.app.k.list)){
-    cat("###", names(sig.app.k.list)[i], "\n")
-    plot_net(dir.net, layout.mat = net.layout, plot.label = names(sig.app.k.list)[i])
-    common.genes <- unique(as.vector(sig.app.k.list[[i]][,1:2]))
-    common.idx <- match(common.genes, rownames(net.layout))
-    scaled.idx <- net.layout
-    scaled.idx[,1] <- scale.between.vals(net.layout[,1], -1, 1)
-    scaled.idx[,2] <- scale.between.vals(net.layout[,2], -1, 1)
-    points(scaled.idx[common.idx,1], scaled.idx[common.idx,2], cex = 2, col = "red", pch = 16)
-    cat("\n\n")
-}
-#dev.off()
-```
 
 
 ```{r ind_gene, eval = FALSE}

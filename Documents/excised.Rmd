@@ -893,3 +893,65 @@ barplot(bd_cent$vector, las = 2)
 par(mar = c(4,16,4,2))
 barplot(tail(sort(kegg_cent$vector), 10), las = 2, horiz = TRUE)
 ```
+
+## From smaller intersection analysis
+
+## KEGG pathways with altered intersections {.tabset .tabset-fade .tabset-pills}
+
+We then looked at all the KEGG intersections with the 
+APP Processing biodomain. Because we've already calculated
+all the significant correlations in the APP biodomain, we
+can just look for where these fall in the overlapping 
+KEGG pathways.
+
+```{r all_intersections}
+app.list <- kegg.bd.list$"APP Metabolism"
+app.kegg.sig <- vector(mode = "list", length = length(app.list))
+names(app.kegg.sig) <- names(app.list)
+for(i in 2:length(app.list)){
+    overlapping.genes <- app.list[[i]]
+    overlapping.names <- mouse.genes[match(overlapping.genes, mouse.genes[,"ensembl_gene_id"]),"external_gene_name"]
+    common.names <- intersect(overlapping.names, colnames(corr_result[[1]]))
+    sub.net <- corr_result[[1]][common.names, common.names]
+    sub.p <- corr_result[[2]][common.names, common.names]
+    sig.sub <- which(sub.p <= 0.001, arr.ind = TRUE)
+    if(nrow(sig.sub) > 0){
+        sig.sub.names <- cbind(colnames(sub.net)[sig.sub[,1]], colnames(sub.net)[sig.sub[,2]])
+        sig.sub.result <- cbind(sig.sub.names, sub.net[sig.sub], sub.p[sig.sub])
+        colnames(sig.sub.result) <- c("gene1", "gene2", "effect", "p")
+        app.kegg.sig[[i]] <- sig.sub.result
+    }
+}
+has.vals <- which(sapply(app.kegg.sig, length) > 0)
+sig.app.k.list <- app.kegg.sig[has.vals]
+```
+
+There were `r length(app.kegg.sig)` KEGG pathways with genes overlapping
+the APP processing biodomain. Of these `r length(sig.app.k.list)` had
+gene-gene correlations that were significantly dependent on Klotho genotype.
+
+The bar plot below shows how many gene pairs in each term had altered
+correlations across genotypes.
+
+```{r num_alt}
+num.pairs <- sapply(sig.app.k.list, nrow)
+par(mar = c(4,22,4,2))
+barplot_with_num(sort(num.pairs), horiz = TRUE, las = 2, xlab = "Number of Gene Pairs",
+    main = "KEGG pathways in APP Metabolism\nwith altered gene-gene correlations")
+```
+
+```{r plot_kegg, results = "asis", fig.width = 10, fig.height = 10}
+#pdf("~/Desktop/kegg_overlaps.pdf", width = 10, height = 10)
+for(i in 1:length(sig.app.k.list)){
+    cat("###", names(sig.app.k.list)[i], "\n")
+    plot_net(dir.net, layout.mat = net.layout, plot.label = names(sig.app.k.list)[i])
+    common.genes <- unique(as.vector(sig.app.k.list[[i]][,1:2]))
+    common.idx <- match(common.genes, rownames(net.layout))
+    scaled.idx <- net.layout
+    scaled.idx[,1] <- scale.between.vals(net.layout[,1], -1, 1)
+    scaled.idx[,2] <- scale.between.vals(net.layout[,2], -1, 1)
+    points(scaled.idx[common.idx,1], scaled.idx[common.idx,2], cex = 2, col = "red", pch = 16)
+    cat("\n\n")
+}
+#dev.off()
+```

@@ -155,9 +155,56 @@ if(expression.type == "transcript"){
 }else{
   count.data <- read.delim(file.path(mouse.data.dir, "rsem.merged.gene_counts.tsv"))
 }
-
 ```
 
+```{r pathview}
+#get kegg data now for use later
+
+mouse.kegg.file <- file.path(general.data.dir, "KEGG.Mouse.RDS")
+if(!file.exists(mouse.kegg.file)){
+    all.mouse.kegg <- download_KEGG("mmu", "KEGG", "kegg")
+    saveRDS(all.mouse.kegg, mouse.kegg.file)
+}else{
+    all.mouse.kegg <- readRDS(mouse.kegg.file)
+}
+
+human.kegg.file <- file.path(general.data.dir, "KEGG.Human.RDS")
+if(!file.exists(human.kegg.file)){
+    all.human.kegg <- download_KEGG("hsa", "KEGG", "kegg")
+    saveRDS(all.human.kegg, human.kegg.file)
+}else{
+    all.human.kegg <- readRDS(human.kegg.file)
+}
+
+
+#convert mouse entrez IDs to ensembl IDs
+u_path <- gsub(" - Mus musculus (house mouse)", "", all.mouse.kegg[[2]][,"to"], fixed = TRUE)
+
+path.id <- all.mouse.kegg[[2]][,1]
+path.idx <- lapply(path.id, function(x) which(all.mouse.kegg[[1]][,1] == unlist(x)[1]))
+path.gene.id <- lapply(path.idx, function(x) all.mouse.kegg[[1]][x,2])
+names(path.gene.id) <- u_path
+
+mouse.path.gene.ensembl <- lapply(path.gene.id, 
+    function(x) mouse.gene.table[match(x, mouse.gene.table[,"entrezgene_id"]), "ensembl_gene_id"])
+
+saveRDS(mouse.path.gene.ensembl, file.path(general.processed.data.dir, "Mouse_KEGG_for_GSEA.RDS"))
+
+
+#convert human entrez IDs to ensembl IDs
+u_path <- all.human.kegg[[2]][,"to"]
+path.id <- all.human.kegg[[2]][,1]
+path.idx <- lapply(path.id, function(x) which(all.human.kegg[[1]][,1] == unlist(x)[1]))
+path.gene.id <- lapply(path.idx, function(x) all.human.kegg[[1]][x,2])
+names(path.gene.id) <- u_path
+
+#use the ortholog table to convert. We only care about genes
+#that have mouse orthologs anyway (I think).
+hum.path.gene.ensembl <- lapply(path.gene.id, 
+    function(x) orthos[match(x, orthos[,"Human.Entrez"]), "Human.Ensembl"])
+
+saveRDS(hum.path.gene.ensembl, file.path(general.processed.data.dir, "Human_KEGG_for_GSEA.RDS"))
+```
 
 ```{r split_ind}
 u_id <- unique(mouse.info[,"animalName"])
@@ -419,6 +466,21 @@ colnames(count.num) <- gsub("X", "", colnames(count.num))
 included.idx <- match(condensed.table[,1], colnames(count.num))
 #cbind(colnames(count.num)[included.idx], condensed.table[,1])
 sub.count <- count.num[,included.idx]
+```
+
+```{r check_counts, eval = FALSE}
+gene.name <- "Srsf5"
+#gene.name <- "Apoe"
+gene.id <- mouse.gene.table[which(mouse.gene.table[,"external_gene_name"] == gene.name), "ensembl_gene_id"]
+gene.idx <- which(rownames(sub.count) == gene.id)
+gene.counts <- sub.count[gene.idx,]
+hist(log10(as.vector(sub.count)), main = paste("All log10 counts with", gene.name, "marked"),
+  xlab = "log10 count")
+abline(v = mean(log10(gene.counts)), col = "red")
+vioplot(log10(gene.counts)~as.factor(condensed.table[,"climb_geno"]), col = geno.cols, 
+  xlab = "", main = gene.name, ylab = "log10 gene count")
+test <- lm(log10(gene.counts)~as.factor(condensed.table[,"climb_geno"]))
+anova(test)[,"Pr(>F)"][1]
 ```
 
 Use DESeq2 to filter out low-expressing genes and to normalize.
@@ -1370,7 +1432,8 @@ We only need one AD list.
 ```{r ad_genes}
 #list.which <- "Agora"
 #list.which <- "meta"
-list.which <- "Bellenguez"
+#list.which <- "Bellenguez"
+list.which <- "KEGG"
 
 if(list.which == "Agora"){
   #ad.gene.list <- read.delim(here("Data", "Human", "AD_genes.txt"), header = FALSE) #from book
@@ -1412,6 +1475,13 @@ if(list.which == "Bellenguez"){
   #ad.genes <- unique(c(tbl1[,"Gene"], "APOE"))
 }
   
+if(list.which == "KEGG"){
+  kegg.idx <- which(names(hum.path.gene.ensembl) == "Alzheimer disease")
+  ad.id <- hum.path.gene.ensembl[[kegg.idx]]
+  ad.id <- ad.id[which(!is.na(ad.id))]
+  ad.genes <- orthos[match(ad.id, orthos[,"Human.Ensembl"]),"Human.Gene.Name"]
+}
+
 
 common.ad <- intersect(ad.genes, orthos[,"Human.Gene.Name"])
 ad.orthos <- orthos[match(common.ad, orthos[,"Human.Gene.Name"]),"Mouse.Ortholog.Name"]
@@ -1467,7 +1537,6 @@ rownames(mean.ad) <- paste0(ad.names, sig.star)
 row.order <- order(plot.decomp(mean.ad, plot.results = FALSE)$u[,1])
 
 png("~/Desktop/ad_means.png", width = 12, height = 4, units = "in", res = 300)
-#png("~/Desktop/ad_means_sig.png", width = 5, height = 3, units = "in", res = 300)
 par(bg = NA)
 imageWithText(t(mean.ad[row.order,]), use.pheatmap.colors = TRUE, show.text = FALSE,
   row.text.shift = 0.02, row.text.adj = 1, col.text.shift = 0.13)
@@ -1477,6 +1546,32 @@ for(i in 1:length(ordered.geno)){
 }
 dev.off()
 
+mean.sig <- sapply(allele.idx[ordered.geno], function(x) rowMeans(scaled.expr[ad.sig,x]))
+rownames(mean.sig) <- gene.info[match(rownames(mean.sig), gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+row.order <- order(plot.decomp(mean.sig, plot.results = FALSE)$u[,1])
+
+png("~/Desktop/ad_means_sig.png", width = 10, height = 3, units = "in", res = 300)
+par(bg = NA)
+imageWithText(t(mean.sig[row.order,]), use.pheatmap.colors = TRUE, show.text = FALSE,
+  row.text.shift = 0.02, row.text.adj = 1, col.text.shift = 0.13)
+plot.dim <- par("usr")
+for(i in 1:length(ordered.geno)){
+  draw.rectangle(-35.5, 0, 6-i-0.4, 6-i+0.4, border = geno.cols[ordered.geno[i]], lwd = 3, fill = NA)
+}
+dev.off()
+
+#enrichments of these groups don't tell us much, because they
+#are just enriched for AD genes, which is why we selected them.
+#sig.decomp <- plot.decomp(mean.sig)
+#abline(v = 0.01)
+#c1 <- which(sig.decomp$u[,1] < 0.01)
+#c2 <- which(sig.decomp$u[,1] > 0.01)
+#cenrich <- lapply(list("c1" = ad.sig[c1], "c2" = ad.sig[c2]), function(x) gost(x, organism = 'mmusculus'))
+#plot.enrichment.group(cenrich, transformation = "sqrt")
+
+#plot.enrichment(cenrich[[1]], num.terms = 30)
+#plot.enrichment(cenrich[[2]], num.terms = 30)
+
 #quartz(width = 1.5, height = 3)
 #imageWithTextColorbar(mean.ad, use.pheatmap.colors = TRUE, cex = 0.7, bar.lwd = 3)
 ```
@@ -1484,6 +1579,7 @@ dev.off()
 
 
 ```{r fig_ad_marked}
+stop()
 if(subgroup[[1]] == 12){
   
 cluster.id <- expr.clust$clustering
@@ -1495,7 +1591,8 @@ cluster.id <- expr.clust$clustering
   layout.mat <- matrix(c(1,2), nrow = 1)
   layout(layout.mat, widths = c(1, 0.2))
   par(mar = c(2,4,4,1), xpd = NA)
-  imageWithText(t(scaled.mat), show.text = FALSE, use.pheatmap.colors = TRUE,
+  imageWithText(t(scaled.mat), show.text = FALSE, split.at.vals = TRUE, 
+    col.scale = c("blue", "brown"), grad.dir = "ends",
     col.names = NULL, row.text.shift = 0.07, row.text.adj = 0.5)
   plot.dim <- par("usr")
   plot.height <- plot.dim[4] - plot.dim[3]
@@ -1532,7 +1629,9 @@ cluster.id <- expr.clust$clustering
 
   #add scale bar
   par(mar = c(2,4,4,1))
-  imageWithTextColorbar(mean.sig.expr, use.pheatmap.colors = TRUE, cex = 1, bar.lwd = 3)
+  imageWithTextColorbar(mean.sig.expr, split.at.vals = TRUE, 
+    col.scale = c("blue", "brown"), cex = 1, bar.lwd = 3, 
+    grad.dir = "ends")
   dev.off()
 }
 
@@ -2044,54 +2143,6 @@ segments(x0 = c(-0.1, 0, 0.1), y0 = 0, y1 = plot.dim[4], lty = c(2,1,2))
 KEGG pathways are AD-agnostic and are organized into different
 functional groups that could be informative. We also looked at
 gene expression based on KEGG pathways.
-
-```{r pathview}
-
-mouse.kegg.file <- file.path(general.data.dir, "KEGG.Mouse.RDS")
-if(!file.exists(mouse.kegg.file)){
-    all.mouse.kegg <- download_KEGG("mmu", "KEGG", "kegg")
-    saveRDS(all.mouse.kegg, mouse.kegg.file)
-}else{
-    all.mouse.kegg <- readRDS(mouse.kegg.file)
-}
-
-human.kegg.file <- file.path(general.data.dir, "KEGG.Human.RDS")
-if(!file.exists(human.kegg.file)){
-    all.human.kegg <- download_KEGG("hsa", "KEGG", "kegg")
-    saveRDS(all.human.kegg, human.kegg.file)
-}else{
-    all.human.kegg <- readRDS(human.kegg.file)
-}
-
-
-#convert mouse entrez IDs to ensembl IDs
-u_path <- gsub(" - Mus musculus (house mouse)", "", all.mouse.kegg[[2]][,"to"], fixed = TRUE)
-
-path.id <- all.mouse.kegg[[2]][,1]
-path.idx <- lapply(path.id, function(x) which(all.mouse.kegg[[1]][,1] == unlist(x)[1]))
-path.gene.id <- lapply(path.idx, function(x) all.mouse.kegg[[1]][x,2])
-names(path.gene.id) <- u_path
-
-mouse.path.gene.ensembl <- lapply(path.gene.id, 
-    function(x) mouse.gene.table[match(x, mouse.gene.table[,"entrezgene_id"]), "ensembl_gene_id"])
-
-saveRDS(mouse.path.gene.ensembl, file.path(general.processed.data.dir, "Mouse_KEGG_for_GSEA.RDS"))
-
-
-#convert human entrez IDs to ensembl IDs
-u_path <- all.human.kegg[[2]][,"to"]
-path.id <- all.human.kegg[[2]][,1]
-path.idx <- lapply(path.id, function(x) which(all.human.kegg[[1]][,1] == unlist(x)[1]))
-path.gene.id <- lapply(path.idx, function(x) all.human.kegg[[1]][x,2])
-names(path.gene.id) <- u_path
-
-#use the ortholog table to convert. We only care about genes
-#that have mouse orthologs anyway (I think).
-hum.path.gene.ensembl <- lapply(path.gene.id, 
-    function(x) orthos[match(x, orthos[,"Human.Entrez"]), "Human.Ensembl"])
-
-saveRDS(hum.path.gene.ensembl, file.path(general.processed.data.dir, "Human_KEGG_for_GSEA.RDS"))
-```
 
 For each mouse KEGG pathway, is there differential expression across genotypes?
 The results are printed to pdfs in the results folder. There are too many
