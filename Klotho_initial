@@ -14,4 +14,4 @@ cd $SLURM_SUBMIT_DIR
 
 module load singularity
 
-singularity exec ../../Containers/R_klotho.sif R -e 'rmarkdown::render(here::here("Documents", "1.Klotho_Initial_Data_Visualization.Rmd"))'
+singularity exec ../../Containers/klotho2.sif R -e 'rmarkdown::render(here::here("Documents", "1.Klotho_Initial_Data_Visualization.Rmd"))'
