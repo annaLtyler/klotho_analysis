@@ -77,7 +77,7 @@ remove.qc <- TRUE #if 1a_Klotho_QC.Rmd has been run, and animals were identified
 
 ordered.geno <- c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
 
-use.carrier.status = TRUE #if true, fits models with the ordered factor FC > WT > VS
+use.carrier.status <- TRUE #if true, fits models with the ordered factor FC > WT > VS
                           #if false, fits modesl with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
 if(use.carrier.status){
   geno.used = c("FC, WT, VS"); carrier.text = "carriers"
@@ -91,6 +91,32 @@ if(use.carrier.status){
                             #matrix
                             #this is giving very strange results, so I'm abandoning it for now
 group.representation = "means"
+
+```
+
+```{r is_final}
+#set flag for writing out results to a for_paper directory
+#only write out results if we are using the final parameters
+#we've decided on for the paper. This check can be reset when
+#we decide on the final settings.
+
+#set to TRUE. If any of the following conditions are met, 
+#we are not using the final prameters.
+final.params <- TRUE 
+
+if(expression.type == "transcript"){final.params = FALSE}
+if(min.term.size != 10){final.params = FALSE}
+if(fdr.thresh != 0.1){final.params = FALSE}
+if(length(subgroup) != 1 && subgroup[[1]] != 12){final.params = FALSE}
+if(!remove.qc){final.params = FALSE}
+if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC > WT > VS
+if(group.representation != "means"){final.params = FALSE}
+
+if(final.params){
+  final.text <- "This IS the final set of parameters for the paper."
+}else{
+  final.text <- "This IS NOT not the final set of parameters for the paper."
+}
 ```
 
 ## Paramters set
@@ -107,6 +133,7 @@ Minimum number of genes in a group: `r min.term.size`
 
 FDR threshold for significance: `r fdr.thresh`
 
+`r final.text`
 
 ```{r load_code}
 all.fun <- list.files(here("Code"), full.names = TRUE)
@@ -380,9 +407,12 @@ full.count.table <- Reduce("cbind", count.tables)
 colnames(full.count.table) <- paste(rep(names(count.tables), 
   each = length(count.tables)), colnames(full.count.table), sep = "_")
 keep.rows <- which(!is.na(row.names(full.count.table)))
-write.table(full.count.table[keep.rows,], 
-  here("Results", "for_paper", "mouse_count_table.txt"), sep = "\t",
-  quote = FALSE)
+
+if(final.params){
+  write.table(full.count.table[keep.rows,], 
+    here("Results", "for_paper", "mouse_count_table.txt"), sep = "\t",
+    quote = FALSE)
+}
 ```
 
 The following grid shows how many animals are in each 
@@ -453,15 +483,6 @@ Use DESeq2 to filter out low-expressing genes and to normalize.
 We use the vst normalization. 
 
 ```{r normalize_filter}
-#make a data frame with relevant covariate and group data.
-#we are adding Ide expression because of a newly discovered
-#variant in B6 animals that affects Ide expression.
-gene.id <- mouse.gene.table[which(mouse.gene.table[,"external_gene_name"] == "Ide"), "ensembl_gene_id"]
-gene.idx <- which(rownames(sub.count) == gene.id)
-gene.counts <- sub.count[gene.idx,]
-scaled.counts <- scale(gene.counts)
-ordered.scaled <- scaled.counts[match(rownames(scaled.counts), condensed.table[,"animalName"])]
-#hist(ordered.scaled, breaks = 25)
 
 #add genotype based on whether we are looking at all genotypes or carrier status
 if(use.carrier.status){
@@ -476,21 +497,20 @@ if(use.carrier.status){
   geno_factor <- ordered(condensed.table[,"climb_geno"], levels = ordered.geno)
 }
 
-
-#treat everything except gene expression as a factor
+#treat everything as a factor
 info <- data.frame("sequencingBatch" = as.factor(condensed.table[,"sequencingBatch"]),
   "sex_ge" = as.factor(condensed.table[,"sex_ge"]),
   "age_batch" = ordered(condensed.table[,"age_batch"], levels = c("4", "12")),
-  "ordered_geno" = geno_factor,
-  "scaled_Ide_expression" = ordered.scaled) 
+  "ordered_geno" = geno_factor) 
 rownames(info) <- condensed.table[,"animalName"]
-write.table(info, file.path(processed.data.dir, "mouse_info.csv"), sep = ",", row.names = TRUE)
+write.table(info, file.path(processed.data.dir, 
+  paste0("mouse_info_", carrier.text, ".csv")), sep = ",", row.names = TRUE)
 
 # Create design matrices: Include both the condition of interest and the batch variable.
 # Assuming 'genotype' is your condition and 'sequencingBatch' is the batch factor
 # age_m and sex_ge are potential covariates
 
-possible.covar <- c("sequencingBatch", "sex_ge", "age_batch", "ordered_geno", "scaled_Ide_expression")
+possible.covar <- c("sequencingBatch", "sex_ge", "age_batch", "ordered_geno")
 #possible.covar <- c("sequencingBatch")
 use.covar <- setdiff(possible.covar, names(subgroup))
 fmla <- as.formula(paste0("~", paste(use.covar, collapse = " + ")))
@@ -507,19 +527,9 @@ dds <- dds[keep,]
 #nrow(dds)
 
 sub.id <- count.id[keep,]
-
 vsd <- vst(dds, blind = FALSE)
-
-#pre.norm.decomp <- plot.decomp(t(assay(dds)), plot.results = FALSE)
-#post.norm.decomp <- plot.decomp(t(assay(vsd)), plot.results = FALSE)
-
-#take invariant covariates out of info
-#num.var <- apply(info, 2, function(x) length(unique(x)))
-#keep.var <- which(num.var > 1)
-#covar.mat <- info[,keep.var]
-covar.mat <- info
-write.table(covar.mat, file.path(results.dir, "covariates.csv"), sep = ",", quote = FALSE)
 ```
+
 
 
 ```{r transcript_info}
@@ -549,7 +559,6 @@ if(expression.type == "transcript"){
     }
 }
 
-
 if(expression.type == "gene"){
   gene.info.file <- file.path(general.data.dir, "mouse_gene_info.txt")
   
@@ -572,6 +581,31 @@ if(expression.type == "gene"){
     gene.info <- read.delim(gene.info.file)
     }
 }
+```
+
+Add Ide gene expression to the covariates. A variant was recently
+discovered in the B6 mouse population that greatly affects gene 
+expression. If this variant is present in our population, it 
+could affect the traits we are measuring here. To address this 
+possibility, we added Ide expression as a covariate.
+
+```{r covar_mat}
+
+#make a data frame with relevant covariate and group data.
+#we are adding Ide expression because of a newly discovered
+#variant in B6 animals that affects Ide expression.
+gene.id <- gene.info[which(gene.info[,"external_gene_name"] == "Ide"), id_col]
+gene.idx <- which(rownames(sub.count) %in% gene.id[1]) #use the first transcript. This is the only one expressed at reasonably high levels
+gene.counts <- sub.count[gene.idx,]
+#boxplot(log(t(gene.counts+1)))
+scaled.counts <- scale(gene.counts)
+ordered.scaled <- scaled.counts[match(rownames(scaled.counts), rownames(info))]
+#hist(ordered.scaled, breaks = 25)
+
+info$scaled_Ide_expression <- ordered.scaled
+covar.mat <- info
+write.table(covar.mat, file.path(processed.data.dir, 
+  paste0("covariates_", carrier.text, ".csv")), sep = ",", quote = FALSE)
 ```
 
 
@@ -603,7 +637,9 @@ path.idx <- lapply(path.id, function(x) which(all.mouse.kegg[[1]][,1] == unlist(
 path.gene.id <- lapply(path.idx, function(x) all.mouse.kegg[[1]][x,2])
 names(path.gene.id) <- u_path
 
-mouse.path.ensembl.file <- file.path(general.processed.data.dir, paste0("Mouse_KEGG_", expression.type, "_for_GSEA.RDS"))
+mouse.path.ensembl.file <- file.path(general.processed.data.dir, 
+  paste0("Mouse_KEGG_", expression.type, "_for_GSEA.RDS"))
+
 mouse.path.gene.ensembl <- lapply(path.gene.id, 
     function(x) mouse.gene.table[match(as.numeric(x), mouse.gene.table[,"entrezgene_id"]), "ensembl_gene_id"])
 if(expression.type == "transcript"){
@@ -828,7 +864,8 @@ sig.idx <- which(model.p < top.var.alpha.thresh)
 #covar.mat <- cbind(covar.mat, "carrier.status" = as.factor(carrier.status))
 
 pdf(file.path(results.dir, 
-  paste0("PCs_and_factors_pval_less_than_", top.var.alpha.thresh, ".pdf")), width = 12, height = 8)
+  paste0("PCs_and_factors_pval_less_than_", top.var.alpha.thresh, "_", 
+    carrier.text, ".pdf")), width = 12, height = 8)
 plot_pc_factors(expr.mat = t(expr[sig.idx,]), factors = covar.mat, n.pc = 4)
 dev.off()
 ```
@@ -886,12 +923,14 @@ expression.
 ```{r klotho, fig.width = 4, fig.height = 4}
 
 norm.expr <- assay(vsd)
-saveRDS(norm.expr, file.path(processed.data.dir, "Normalized_Expression.RDS"))
+saveRDS(norm.expr, file.path(processed.data.dir, 
+  paste0("Normalized_Expression_", carrier.text, ".RDS")))
 
 #scale expression across individuals
 scaled.expr <- t(apply(norm.expr, 1, scale))
 dimnames(scaled.expr) <- dimnames(norm.expr)
-saveRDS(scaled.expr, file.path(processed.data.dir, "Scaled_Expression.RDS"))
+saveRDS(scaled.expr, file.path(processed.data.dir, 
+  paste0("Scaled_Expression_", carrier.text, ".RDS")))
 
 if(expression.type == "transcript"){
   tx.id <- sub.id[which(sub.id[,"gene_id"] == kl.ensembl),"transcript_id"]  
@@ -955,7 +994,7 @@ plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat,
   tx_name = tx.id, tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
   ylab = "Expression (A.U.)", order.by.mean = FALSE)
 
-if(subgroup[[1]] == 12){
+if(final.params){
   pdf(here("Results", "for_paper", 
     paste0("Klotho_expression_by_genotype_", basename(results.dir), "_months.pdf")), 
     width = 5, height = 6)
@@ -978,7 +1017,7 @@ plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat,
   tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
   ylab = "Expression (A.U.)")
 
-if(subgroup[[1]] == 12){
+if(final.params){
   pdf(here("Results", "for_paper", 
     paste0("Klotho_expression_by_sex_", basename(results.dir), "_months.pdf")), 
     width = 5, height = 5)
@@ -1004,7 +1043,7 @@ if(age.varies > 0){
   plot.text("Age does not vary in this population")
 }
 
-if(age.varies > 0){
+if(age.varies > 0 && use.carrier.status){
   pdf(here("Results", "for_paper", 
     paste0("Klotho_expression_by_sex_", basename(results.dir), "_months.pdf")), 
     width = 5, height = 5)
@@ -1070,7 +1109,8 @@ factors and test for the final factor.
 ```{r one_model}
 test_full_model <- function(expr.mat, covar.mat){
   
-  full.model.file <- file.path(results.dir, "Full_Model_Results.RDS")
+  full.model.file <- file.path(results.dir, 
+    paste0("Full_Model_Results_", carrier.text, ".RDS"))
   
   if(!file.exists(full.model.file)){
     #match covariates to adjusted expression matrix
@@ -1203,8 +1243,10 @@ sig.factor <- apply(factor.fdr, 2, function(x) which(x <= fdr.thresh))
 num.sig <- sapply(sig.factor, length)
 par(mar = c(12, 4, 4, 2))
 barplot_with_num(num.sig, las = 2, ylab = "Count")
-saveRDS(num.sig, 
-  here("Results", "for_paper", paste0("num_de_", basename(results.dir), ".RDS")))
+
+if(final.params){
+  saveRDS(num.sig, here("Results", "for_paper", paste0("num_de_", basename(results.dir), ".RDS")))
+}
 ```
 
 The following heat map shows enrichments for genes that were
@@ -1229,7 +1271,8 @@ if(length(age.geno.col) > 0){
   sig.idx <- which(factor.fdr[,age.geno.col] <= fdr.thresh)
 
   if(length(sig.idx) > 0){
-    pdf(file.path(results.dir, "age_geno_int.pdf"), width = 7, height = 5)
+    pdf(file.path(results.dir, paste0("age_geno_int_", carrier.text, ".pdf")), 
+      width = 7, height = 5)
       for(i in 1:length(sig.idx)){
         gene.id <- rownames(factor.fdr)[sig.idx[i]]
         model <- lm(adj.expr[,gene.id]~covar.mat[,"age_batch"]*covar.mat[,"ordered_geno"])
@@ -1257,7 +1300,8 @@ if(length(sex.geno.col) > 0){
   sig.idx <- which(factor.fdr[,sex.geno.col] <= fdr.thresh)
 
   if(length(sig.idx) > 0){
-    pdf(file.path(results.dir, "sex_geno_int.pdf"), width = 7, height = 5)
+    pdf(file.path(results.dir, paste0("sex_geno_int_", carrier.text, ".pdf")), 
+      width = 7, height = 5)
     for(i in 1:length(sig.idx)){
       gene.id <- rownames(factor.fdr)[sig.idx[i]]
       model <- lm(adj.expr[,gene.id]~covar.mat[,"sex_ge"]*covar.mat[,"ordered_geno"])
@@ -1274,6 +1318,9 @@ if(length(sex.geno.col) > 0){
 ```
 
 ```{r write_de_table}
+#all parameter iterations are written out to compare later
+#for the paper, so these are written regardless of whether
+#final.params is TRUE or FALSE
 de.files <- get.files(here("Results", "for_paper"), want = c("num_de", "RDS"), full.names = TRUE)
 factor.labels <- c("sex_ge" = "sex", "ordered_geno" = "Klotho genotype", "age_batch" = "age")
 
@@ -1336,12 +1383,13 @@ pheatmap(t(mean.sig.expr[col.order,alleles]), show_colnames = FALSE, cluster_col
 gene.names <- gene.info[match(rownames(annot.col), 
   gene.info[,id_col]), "external_gene_name"]
 write.table(cbind(gene.names, mean.sig.expr, annot.col)[order(annot.col[,1]),], 
-  file.path(results.dir, "DEG_clusters.txt"), sep = "\t", quote = FALSE)
+  file.path(results.dir, paste0("DEG_clusters_", carrier.text, ".txt")), 
+  sep = "\t", quote = FALSE)
 ```
 
 ```{r deg_fig}
 cluster.id <- expr.clust$clustering
-if(subgroup[[1]] == 12){
+if(final.params){
   png(here("Results", "for_paper", "deg_clusters.png"), width = 7, height = 3,  units = "in", res = 300)
   scaled.mat <- t(apply(mean.sig.expr[col.order,alleles], 1, scale))
   dimnames(scaled.mat) <- dimnames(mean.sig.expr[,alleles])
@@ -1390,7 +1438,7 @@ plot.enrichment.group(group.enrich, max.term.size = 3000, n.terms = 15)
 ```
 
 ```{r enrichment_tables}
-if(subgroup[[1]] == 12){
+if(final.params){
   pdf(here("Results", "for_paper", "Enrichment.pdf"), width = 8, height = 7)
   for(i in 1:length(group.enrich)){
     plot.enrichment(group.enrich[[i]], plot.label = paste("Cluster", i), 
@@ -1680,7 +1728,7 @@ dev.off()
 
 
 ```{r fig_ad_marked}
-if(subgroup[[1]] == 12){
+if(final.params){
   
 cluster.id <- expr.clust$clustering
   png(here("Results", "for_paper", "deg_clusters.png"), width = 7, height = 3.5,  units = "in", res = 300)
@@ -1749,8 +1797,11 @@ sig.gene.fdr <- effect.fdr[match(sig.info[,1], rownames(effect.fdr)),"ordered_ge
 supp.table <- cbind(sig.info, expr.table, "p" = sig.gene.pval,
   "fdr" = sig.gene.fdr, "Agora_target" = is.agora, 
   "Cluster_ID" = cluster.id[rownames(mean.sig.expr)])
-write.table(supp.table, here("Results", "for_paper", "Supp_Table_DEG.csv"),
-  sep = ",", quote = FALSE, row.names = FALSE)
+
+if(final.params){
+  write.table(supp.table, here("Results", "for_paper", "Supp_Table_DEG.csv"),
+    sep = ",", quote = FALSE, row.names = FALSE)
+}
 
 #p.order <- order(sig.gene.pval, decreasing = FALSE)
 #head(supp.table[p.order,])
@@ -1840,7 +1891,7 @@ dev.off()
 ```
 
 ```{r ad_interest_fig}
-if(subgroup[[1]] == 12){
+if(final.params){
   pdf(here("Results", "for_paper", "AD-related_expression.pdf"), width = 7, height = 7)
   for(i in 1:length(ad.interest)){
     gene.id <- gene.info[which(gene.info[,"external_gene_name" ]%in% ad.interest[i]), id_col]
@@ -2039,7 +2090,8 @@ transcripts, so the means can be significantly different even
 if they don't look that different.
 
 ```{r biodomain_expression}
-mean.bd.val.file <- file.path(processed.data.dir, "mean_biodomain_expression.RDS")
+mean.bd.val.file <- file.path(processed.data.dir, 
+  paste0("mean_biodomain_expression_", carrier.text, ".RDS"))
 
 if(!file.exists(mean.bd.val.file)){
   mean.bd.vals <- vector(mode = "list", length = length(mouse.bd.genes))
@@ -2072,8 +2124,8 @@ if(!file.exists(mean.bd.val.file)){
 #so I am just setting k = 2 here to save time, but leaving the 
 #code for testing for future work. 
 
-clustered.gene.file <- file.path(results.dir, "Clustered_Coef.RDS")
-clustered.enrich.file <- file.path(results.dir, "Clustered_Enrich.RDS")
+clustered.gene.file <- file.path(results.dir, paste0("Clustered_Coef_", carrier.text, ".RDS"))
+clustered.enrich.file <- file.path(results.dir, paste0("Clustered_Enrich_", carrier.text, ".RDS"))
 
 if(!file.exists(clustered.gene.file)){
   #k.seq = 2:4
@@ -2186,7 +2238,7 @@ across each subdomain. Each has been clustered by medoid
 clustering.
 
 ```{r subdomain_expression}
-sbd.mean.file <- file.path(results.dir, "Subdomain_Mean_Expr.RDS")
+sbd.mean.file <- file.path(results.dir, paste0("Subdomain_Mean_Expr_", carrier.text, ".RDS"))
 if(!file.exists(sbd.mean.file)){
   mean.sbd.vals <- vector(mode = "list", length = length(mouse.sbd.genes))
   names(mean.sbd.vals) <- names(mouse.sbd.genes)
@@ -2219,7 +2271,7 @@ if(!file.exists(sbd.mean.file)){
 ```
 
 ```{r cluster_sbd}
-clustered.sd.file <- file.path(results.dir, "Clustered_Coef_SBD.RDS")
+clustered.sd.file <- file.path(results.dir, paste0("Clustered_Coef_SBD_", carrier.text, ".RDS"))
 #clustered.sd.enrich.file <- file.path(results.dir, "Clustered_Enrich_SBD.RDS")
 
 if(!file.exists(clustered.sd.file)){
@@ -2346,7 +2398,8 @@ KEGG pathways to display here.
 
 
 ```{r diff_kegg, fig.width = 7, fig.height = 12}
-mean.kegg.val.file <- file.path(results.dir, "mean_kegg_expression.RDS")
+mean.kegg.val.file <- file.path(results.dir, 
+  paste0("mean_kegg_expression_", carrier.text, ".RDS"))
 
 if(!file.exists(mean.kegg.val.file)){
   mean.kegg.vals <- vector(mode = "list", length = length(mouse.path.gene.ensembl))
@@ -2387,7 +2440,7 @@ The heat map below shows the average expression in the top
 KEGG pathways for each genotype. The pathways are the same 
 as we've seen before: metabolism and neurodegeneration.
 
-```{r plot_example_kegg, fig.height = 7, fig.width = 5}
+```{r plot_example_kegg, fig.height = 7, fig.width = 7}
 if(group.representation == "means"){
   mean.mean <- t(sapply(mean.kegg.vals, colMeans))
 }
