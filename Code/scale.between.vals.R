@@ -3,6 +3,8 @@
 
 scale.between.vals <- function(V, target.min = 0, target.max = 1){
 
+    if(length(unique(V)) == 1){return(rep(target.min, length(V)))}
+
     r.min <- min(V, na.rm = TRUE)
     r.max <- max(V, na.rm = TRUE)
 

@@ -30,13 +30,16 @@ if(is.na(subgroup)){
   #subgroup <- list("age_batch" = 4, "sex_climb" = "Female") #example with more than one filter
 }
 
+#expression.type = "transcript"; id_col = "ensembl_transcript_id"
+expression.type = "gene"; id_col = "ensembl_gene_id"
+
 if(subgroup == "all ages"){
-  results.dir <- here("Results", "all")
+  results.dir <- here("Results", paste("all", expression.type, sep = "_"))
 }else{
   subgroup.results <- paste(sapply(1:length(subgroup), 
     function(x) paste(names(subgroup)[x], subgroup[[x]], sep = "_")), 
     collapse = "_")
-  results.dir <- here("Results", subgroup.results)
+  results.dir <- here("Results", paste(subgroup.results, expression.type, sep = "_"))
 }
 
 general.data.dir <- here("Data", "general")
@@ -92,7 +95,7 @@ load_libraries(needed.libraries)
 ```{r read_data}
 mouse.info <- read.csv(file.path(mouse.data.dir, "metadata_validated.csv"))
 orthos <- read.delim(file.path(general.data.dir, "human.mouse.orthologs.txt"))
-mouse.genes <- read.delim(here("Data", "general", "mouse_gene_info.txt"))
+mouse.genes <- read.delim(here("Data", "general", paste0("mouse_", expression.type, "_info.txt")))
 covar.table <- read.table(file.path(processed.data.dir, "mouse_info.csv"), sep = ",", header = TRUE, row.names = 1)
 
 #add factors for ordered genotypes and ordered carrier status
@@ -129,10 +132,63 @@ kegg.bd.jaccard <- readRDS(file.path(general.processed.data.dir, "Mouse_KEGG_Int
 ad.genes <- read.delim(file.path(results.dir, "AD_genes.txt"), comment.char = "#")
 ```
 
+## Ide
+
+A newly discovered variant in B6 mice affects expression of the
+gene insulin degrading enzyme (Ide) encoded on chromosome 19 at
+37 Mb. This gene has been associated with AD before, and we want
+to make sure that variation we see in this experiment is not related
+to untracked variation in Ide. Here we look at Ide expression in our
+mouse population, identify any correlated genes, and add Ide expression
+as a covariate in case it is having an effect on our results.
+
+The histogram below shows scale Ide expression in out population. 
+There is a clear bimodal distribution. 
+
+```{r ide}
+ide.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == "Ide"), "ensembl_gene_id"]
+ide.idx <- which(rownames(scaled.expr) == ide.id)
+hist(scaled.expr[ide.idx,], breaks = 25, xlab = "Ide expression")
+abline(v = 0.5)
+```
+
+The high- and low-expressers are distributed across the genotypes.
+
+```{r ide_dist}
+vioplot(scaled.expr[ide.idx,]~covar.table$carrier_status, col = geno.cols,
+    xlab = "genotype", ylab = "Scaled Ide expression")
+stripchart(scaled.expr[ide.idx,]~covar.table$carrier_status, col = "#dd1c77",
+    add = TRUE, method = "jitter", vertical = TRUE, pch = 16)
+
+expr.level <- scaled.expr[ide.idx,]
+expr.class <- expr.level
+expr.class[which(expr.level < 0.5)] <- "low"
+expr.class[which(expr.level > 0.5)] <- "high"
+expr.class[intersect(which(expr.level > 0.3), which(expr.level < 0.5))] <- "mid"
+
+#write out a table for Dylan
+animal.id <- names(expr.class)
+geno.call <- sapply(animal.id, function(x) covar.table[which(rownames(covar.table) == x),"carrier_status"])
+raw.ide.idx <- which(raw.expr[,"gene_id"] == ide.id)
+raw.ide <- unlist(raw.expr[raw.ide.idx, match(animal.id, gsub("X", "", colnames(raw.expr)))])
+ide.table <- cbind("animalID" = animal.id, "carrier_status" = geno.call, 
+    "normalized_Ide_expr" = expr.level, "Ide_expr" = raw.ide, "Ide_class" = expr.class)
+write.table(ide.table, "~/Desktop/Ide_expression.csv", sep = ",", row.names = FALSE)
+
+#stripchart(as.numeric(ide.table[,"Ide_expr"])~as.factor(ide.table[,"carrier_status"]), vertical = TRUE, method = "jitter")
+#stripchart(as.numeric(ide.table[,"normalized_Ide_expr"])~as.factor(ide.table[,"carrier_status"]), vertical = TRUE, method = "jitter")
+
+#add Ide as a covariate. This has a new variant in B6 that causes
+#high variation in gene expression. It is also an AD gene, so may
+#be relevant here.
+ordered.ide <- scaled.expr[ide.idx, match(rownames(covar.table), colnames(scaled.expr))]
+covar.table$Ide <- ordered.ide
+```
+
 We adjusted the expression by non-age covariates.
 
 ```{r adjust}
-dummy.covar <- dummy_covar(covar.table[,c("sequencingBatch", "sex_ge")])
+dummy.covar <- dummy_covar(covar.table[,c("sequencingBatch", "sex_ge", "Ide")])
 adj_expr <- adjust(t(scaled.expr), dummy.covar)
 ```
 
@@ -256,17 +312,19 @@ nested_mean_vals <- function(nested_gene_list, expr.mat, organization = c("outer
 }
 
 
-test_effect <- function(values, test.factor, return.text = FALSE,
+test_effect <- function(values, plot.factor, return.text = FALSE,
     plot.results = FALSE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
-    cex.lab = 1, plot.label = "", ylab = "Expression", autoflip.stat.y = FALSE){
+    cex.lab = 1, plot.label = "", ylab = "Expression", autoflip.stat.y = FALSE,
+    autoplace.text = FALSE, x.samples = 5, y.samples = 20, text.window.x = 2,
+    text.window.y = 4){
     
-    model <- lm(values~test.factor)
+    model <- lm(values~plot.factor)
     #summary(model)
 
     r2 <- summary(model)$adj.r.squared
     p <- threshold_p(anova(model)$"Pr(>F)"[1], sig.dig = 2, return.text = return.text)
-    linear.effect.size <- coefficients(summary(model))["test.factor.L","Estimate"]
-    linear.effect.p <- coefficients(summary(model))["test.factor.L","Pr(>|t|)"]
+    linear.effect.size <- coefficients(summary(model))["plot.factor.L","Estimate"]
+    linear.effect.p <- coefficients(summary(model))["plot.factor.L","Pr(>|t|)"]
     
         if(plot.results){
             if(return.text){
@@ -274,14 +332,26 @@ test_effect <- function(values, test.factor, return.text = FALSE,
             }else{
                 text.p <- threshold_p(p, return.text = TRUE)
             }
-            box.cols <- sapply(levels(test.factor), function(x) geno.cols[which(names(geno.cols) == x)])
-            vioplot(values~test.factor, col = box.cols, xlab = "", main = plot.label, 
+            box.cols <- sapply(levels(plot.factor), function(x) geno.cols[which(names(geno.cols) == x)])
+            vioplot(values~plot.factor, col = box.cols, xlab = "", main = plot.label, 
                 ylab = "", cex.names = cex.lab)
             mtext(ylab, side = 2, cex = cex.lab, line = 2)
-            stripchart(values~test.factor, vertical = TRUE, pch = 16, method = "jitter",
+            stripchart(values~plot.factor, vertical = TRUE, pch = 16, method = "jitter",
                 add = TRUE, col = "#dd1c77")
             plot.dim <- par("usr")
             segments(x0 = plot.dim[1], x1 = plot.dim[2], y0 = 0)
+            
+            if(autoplace.text){
+                possible.coord <- autoplace_text(x = jitter(as.numeric(plot.factor), factor = 2), 
+                    y = values, x.samples = x.samples, y.samples = y.samples, 
+                    text.window.x = text.window.x, text.window.y = text.window.y)
+                if(length(possible.coord) > 0){
+                    #convert from absolute coordinates back to relative coordinates
+                    #to fit with our original method of placing stats
+                    stat.x <- (possible.coord[1,1]-plot.dim[1])/(plot.dim[2]-plot.dim[1])
+                    stat.y <- (possible.coord[1,2]-plot.dim[3])/(plot.dim[4]-plot.dim[3])
+                }
+            }
             text.x <- fractional_pos(plot.dim[1], plot.dim[2], stat.x)
             if(autoflip.stat.y){
                 if(linear.effect.size < 0){
@@ -583,7 +653,8 @@ merge_mean_mats <- function(mat_list){
 #individuals is a vector of individual names if you only want to plot
 #a subset of individuals
 gene_vioplot <- function(gene.name, plot.label = "", 
-    stat.x = 0.1, stat.y = 0.9, autoflip.stat.y = FALSE, plot.results = TRUE,
+    stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
+    autoflip.stat.y = FALSE, plot.results = TRUE,
     individuals = NULL){
 
     if(is.null(individuals)){
@@ -597,7 +668,8 @@ gene_vioplot <- function(gene.name, plot.label = "",
     if(plot.results){
         test_effect(adj_expr[ind.idx,gene.id], test.factor[ind.idx], 
             plot.result = TRUE, stat.x = stat.x, stat.y = stat.y,
-            autoflip.stat.y = autoflip.stat.y, plot.label = gene.name)
+            autoflip.stat.y = autoflip.stat.y, plot.label = gene.name,
+            stat.y.spread = stat.y.spread)
     }
     invisible(geno.expr)
 }
@@ -2046,13 +2118,14 @@ kegg.name <- "Protein export"
 kegg.name <- "ECM-receptor interaction"
 kegg.name <- "Glutamatergic synapse"
 kegg.name <- "Alzheimer disease"
-
+kegg.name <- "Glutathione metabolism"
+kegg.name <- "Thermogenesis"
 #plot_individual_genes(gene.list = kegg.list$"Alzheimer disease")
 
 #give each gene a "loading", which is a comparison of expression
 #between the FC and VS groups
 expr.vals <- expr_loadings(term.name = kegg.name, gene.list = kegg.list, 
-    expr.mat = t(adj_expr), group.list = comp_groups, loading.type = "PC")
+    expr.mat = t(adj_expr), group.list = comp_groups, loading.type = "mean.diff")
 #hist(expr.vals)
 scaled.vals <- scale.between.vals(expr.vals, -1, 1)
 #hist(scaled.vals)
@@ -2062,6 +2135,46 @@ pv.out <- pathview(gene.data = scaled.vals,
     pathway.id = path.num, species = "mmu", 
     out.suffix = kegg.name,
     kegg.dir = intersection.dir)
+
+#downloaded mitochondrial gene list from MitoCarta2.0
+#https://www.broadinstitute.org/files/shared/metabolism/mitocarta/mouse.mitocarta.2.0.html
+#this is a list of genes whose proteins localize in the mitochondria
+#with high confidence
+library(readxl)
+mito <- read_excel(here("Data", "Mouse", "Mouse.MitoCarta2.0.xls"), sheet = 2)
+compare.mito <- list("mitocarta" = mito$"EnsemblGeneID", bd.list$"Mitochondrial Metabolism")
+
+#it's a bit different than the Mitochondrial Metabolism Biodomain
+plotVenn(compare.mito)
+
+common.mito <- intersect(mito$"EnsemblGeneID", colnames(adj_expr))
+mito.result <- plot_individual_genes(gene.list = common.mito, return.full.result = TRUE)
+diff.fdr <- p.adjust(mito.result$row.p, "fdr")
+sig.mito <- which(diff.fdr < 0.01)
+sig.id <- mouse.genes[match(gsub("*", "", names(sig.mito), fixed = TRUE), mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+sig.result <- plot_individual_genes(gene.list = sig.id, return.full.result = TRUE)
+up.in.vs <- which(sig.result$row.effect > 0)
+up.in.vs.id <- mouse.genes[match(gsub("*", "", names(up.in.vs), fixed = TRUE), mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+down.in.vs <- which(sig.result$row.effect < 0)
+down.in.vs.id <- mouse.genes[match(gsub("*", "", names(down.in.vs), fixed = TRUE), mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+
+down.in.vs.description <- mito$Description[match(gsub("*", "", down.in.vs.id, fixed = TRUE), mito$EnsemblGeneID)]
+up.in.vs.description <- mito$Description[match(gsub("*", "", up.in.vs.id, fixed = TRUE), mito$EnsemblGeneID)]
+
+#There are many differentially expressed mitochondrial genes,
+#but I'm not sure what to do with that.
+#glutathione metabolism is up in the VS animals...
+pdf("~/Desktop/mito.pdf", width = 10, height = 10)
+geno.nets <- net_by_geno(int_result = corr_result, p.thresh = net.thresh, 
+    plot.result = TRUE, layout.mat = net.layout, title.level = "####",
+    highlight.nodes = gsub("*", "", names(up.in.vs), fixed = FALSE),
+    highlight.width = 0.06, highlight.height = 0.03)
+dev.off()
+
+mt.idx <- which(mouse.genes[,"chromosome_name"] == "MT")
+mt.id <- mouse.genes[mt.idx,"ensembl_gene_id"]
+common.id <- intersect(mt.id, colnames(adj_expr))
+plot_individual_genes(gene.list = common.id, order.by = "PC")
 ```
 
 ```{r kegg_diff, eval = FALSE}
@@ -2542,7 +2655,11 @@ plot_directionality <- function(gene1, gene2, plot.results = TRUE, report = "cor
 
 directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.test", 
     cex.lab = 1, stat.x = 0.1, stat.y = 0.9, plot.predictions = FALSE, 
-    plot.geno.effect = FALSE){
+    plot.geno.effect = FALSE, autoflip.stat.y = TRUE, stat.y.spread = 0.15,
+    autoplace.text = FALSE, x.samples = 5, y.samples = 20, text.window.x = 2, 
+    text.window.y = 4){
+
+    par(mar = c(4,4,4,2))
 
     ind.col <- sapply(test.factor, function(x) geno.cols[which(names(geno.cols) == x)])
     g1.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene1), "ensembl_gene_id"]
@@ -2603,16 +2720,20 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
         #forward direction: gene2 is the response variable
         split.idx <- list("low" = which(adj_expr[,g1.id] < mean(adj_expr[,g1.id])),
             "high" = which(adj_expr[,g1.id] > mean(adj_expr[,g1.id])))
-        test_effect(adj_expr[split.idx$low,g2.id], test.factor[split.idx$low],
+        test_effect(values = adj_expr[split.idx$low,g2.id], 
+            plot.factor = test.factor[split.idx$low],
             plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
             stat.y.spread = stat.y.spread, plot.label = paste("Low expression of", gene1),
-            cex.lab = cex.lab, ylab = gene2)
+            cex.lab = cex.lab, ylab = gene2, autoplace.text = autoplace.text,
+            x.samples = x.samples, y.samples = y.samples, text.window.x = text.window.x,
+            text.window.y = text.window.y, autoflip.stat.y = autoflip.stat.y)
 
         test_effect(adj_expr[split.idx$high,g2.id], test.factor[split.idx$high],
             plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
             stat.y.spread = stat.y.spread, plot.label = paste("High expression of", gene1),
-            cex.lab = cex.lab, ylab = gene2)
-
+            cex.lab = cex.lab, ylab = gene2, autoplace.text = autoplace.text,
+            x.samples = x.samples, y.samples = y.samples, text.window.x = text.window.x,
+            text.window.y = text.window.y, autoflip.stat.y = autoflip.stat.y)
 
         #reverse direction: gene1 is the response variable
         split.idx <- list("low" = which(adj_expr[,g2.id] < mean(adj_expr[,g2.id])),
@@ -2620,12 +2741,17 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
         test_effect(adj_expr[split.idx$low,g1.id], test.factor[split.idx$low],
             plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
             stat.y.spread = stat.y.spread, plot.label = paste("Low expression of", gene2),
-            cex.lab = cex.lab, ylab = gene1)
+            cex.lab = cex.lab, ylab = gene1, autoplace.text = autoplace.text,
+            x.samples = x.samples, y.samples = y.samples, text.window.x = text.window.x,
+            text.window.y = text.window.y, autoflip.stat.y = autoflip.stat.y)
 
-        test_effect(adj_expr[split.idx$high,g1.id], test.factor[split.idx$high],
+        test_effect(values = adj_expr[split.idx$high,g1.id], 
+            plot.factor = test.factor[split.idx$high],
             plot.results = TRUE, stat.x = stat.x, stat.y = stat.y, 
             stat.y.spread = stat.y.spread, plot.label = paste("High expression of", gene2),
-            cex.lab = cex.lab, ylab = gene1)
+            cex.lab = cex.lab, ylab = gene1, autoplace.text = autoplace.text,
+            x.samples = x.samples, y.samples = y.samples, text.window.x = text.window.x,
+            text.window.y = text.window.y, autoflip.stat.y = autoflip.stat.y)
 
         #add labels
         par(mar = c(0,0,0,0))
@@ -2854,11 +2980,11 @@ deubiquitinase activity and is involved in endosome organization
 and protein deubiquitination.
 
 ```{r dir_test, fig.width = 11, fig.height = 6}
-stop()
+
 #gene1  <- "App"; gene2 <- "Apoe" #example of bi-directional interaction
 gene1 <- "Mmp2"; gene2 <- "Usp8" #example of one-way interaction
 #gene1  <- "Apoe"; gene2 <- "App"
-#gene1  <- "Srsf5"; gene2 <- "Adra1a"
+#gene1  <- "Sqstm1"; gene2 <- "Bach1"
 
 #gene_vioplot(gene1)
 #gene_vioplot(gene2, stat.y = 0.2)
@@ -2874,7 +3000,9 @@ directed_residuals(gene1, gene2, plot.results = FALSE, plot.predictions = TRUE, 
 
 #quartz(width = 6, height = 7)
 directed_residuals(gene1, gene2, plot.results = FALSE, plot.geno.effect = TRUE, 
-    stat.y = 0.2, cex.lab = 1.2)
+    stat.x = 0.1, stat.y = 0.9, cex.lab = 1.2, autoplace.text = FALSE, 
+    autoflip.stat.y = TRUE)
+#my auto placement of text is not working now, so I'm shutting it off
 
 test.gene <- "Srsf5"
 srsf5.conn <- direct_connect(dir.net, test.gene)
@@ -2902,15 +3030,79 @@ down.with.kl <- which(low.expr < 0)
 #cat(names(up.with.kl), sep = "\n")
 #cat(names(down.with.kl), sep = "\n")
 
+#up.enrich <- gost(names(up.with.kl), organism = "mmusculus")
+#down.enrich <- gost(names(down.with.kl), organism = "mmusculus")
+
+up.enrich <- gost(names(up.with.kl), organism = "mmusculus", evcodes = TRUE, sources = "GO")
+down.enrich <- gost(names(down.with.kl), organism = "mmusculus", evcodes = TRUE, sources = "GO")
+
+go.parts <- c("GO:CC", "GO:MF", "GO:BP")
+
+pdf(paste0("~/Desktop/", "GO_gene_net.pdf"), width = 30, height = 20)
+    up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000,
+        plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
+        mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
+    
+    down.net <- go_gene_net(down.enrich, plot.results = TRUE, 
+        max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
+        mtext("Down in Klotho", side = 3, outer = TRUE, line = -2.5) 
+dev.off()
+
+for(i in 1:length(go.parts)){
+    pdf(paste0("~/Desktop/", gsub(":", "_", go.parts[i]), "_net.pdf"), width = 15, height = 10)
+    up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000, filter.source = go.parts[i],
+        plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
+        mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
+    
+    down.net <- go_gene_net(enrichment.result = down.enrich, plot.results = TRUE, 
+        filter.source = go.parts[i],
+        max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
+        mtext("Down in Klotho", side = 3, outer = TRUE, line = -2.5) 
+    dev.off()
+}
+
+plot.enrichment(up.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
+par(mfrow = c(1,2))
+plot.enrichment.wordcloud(up.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
+
+plot.enrichment(down.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Downregulated by VS in low Srsf5 Conditions")
+par(mfrow = c(1,2))
+plot.enrichment.wordcloud(down.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
+
+
+conn.homologs <- orthos[match(u_conn, orthos[,"Mouse.Ortholog.Name"]), "Human.Gene.Name"]
+agora.list <- read.csv(here("Data", "Human", "agora-gene-list.csv"), comment.char = "#")
+common.agora <- intersect(conn.homologs, agora.list[,"Gene.Symbol"])
+common.idx <- which(agora.list[,"Gene.Symbol"] %in% common.agora)
+agora.list[common.idx,]
 ```
 
 ```{r lookup_genes, eval = FALSE}
+gene1 <- "Srsf5"
+#pdf("~/Desktop/down_with_kl.pdf", width = 6, height = 7)
+pdf("~/Desktop/up_with_kl.pdf", width = 11, height = 6)
+for(i in 1:length(up.with.kl)){
+    gene2 <- names(up.with.kl)[i]
+    directed_residuals(gene1, gene2, cex.lab = 1.5)
+    #directed_residuals(gene1, gene2, plot.results = FALSE, plot.geno.effect = TRUE, stat.x = 0.1, stat.y = 0.9, cex.lab = 1.2, autoplace.text = FALSE, autoflip.stat.y = TRUE)
+}
+dev.off()
+
+pdf("~/Desktop/down_with_kl_alone.pdf", width = 12, height = 12)
+par(mfrow = c(4,4))
+for(i in 1:length(down.with.kl)){
+    gene2 <- names(down.with.kl)[i]
+    gene_vioplot(gene2)
+}
+dev.off()
+
 #try looking up some of the connector genes in relation to 
 #various topics
 library(easyPubMed)
 
 #search_string <- "App"
-search_string <- c("App", "glutamatergic", "Klotho", "Alzheimer", "proteasome")
+search_string <- c("App", "glutamatergic", "Klotho", "Alzheimer", "proteasome",
+    "spliceosome", "oxidative stress", "mitochondria")
 
 hit_mat <- matrix(0, nrow = (length(u_conn)+1), ncol = length(search_string))
 rownames(hit_mat) <- c("Srsf5", u_conn)
@@ -2941,6 +3133,23 @@ complex.search.term <- paste0(test.gene, " AND (", paste(search_string[1:3], col
 all.pubmed <- get_pubmed_ids(complex.search.term)
 all.pubmed$Count
 
+#I downloaded the network of these genes from STRING.
+string.coord <- as.matrix(read.delim("~/Downloads/string_network_coordinates.tsv"))
+plot(as.numeric(string.coord[,"x_position"]), as.numeric(string.coord[,"y_position"]), type = "n")
+text(as.numeric(string.coord[,"x_position"]), as.numeric(string.coord[,"y_position"]), labels = string.coord[,1])
+
+edges <- as.matrix(read.delim("~/Downloads/string_interactions_short.tsv"))
+string.net <- graph_from_edgelist(edges[,1:2], directed = FALSE)
+
+#color by effect of genotype on the gene
+#some patterns: proteasome genes are up, Ca signaling genes are down
+#respiratory chain up, ribosome up. Nothing new
+conn.result <- plot_individual_genes(gene.list = c(srsf5.id, conn.id), return.full.result = TRUE)
+conn.vals <- conn.result$row.effect
+V(string.net)$weight <- conn.vals[match(V(string.net)$name, gsub("*", "", names(conn.vals), fixed = TRUE))]
+node.col <- colors.from.values(V(string.net)$weight, split.at.vals = TRUE,
+    col.scale = c("blue", "brown"), grad.dir = "ends")
+plot(string.net, vertex.color = node.col)
 
 ```
 

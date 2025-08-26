@@ -17,20 +17,21 @@ clean_words <- function(words, additional.words.to.remove = NULL,
     }
 
     #remove punctuation
-    punct <- c(";", ",", ".")
+    punct <- c(";", ",", ".", "-")
     for(i in 1:length(punct)){
         words <- gsub(punct[i], "", words, fixed = TRUE)
     }
 
     #remove common words
-    remove.words <- c("by", "in", "and", "to", "or", "on", "a", "as", "with", 
-        "into", "via", "other", "the", "between", "process", "of")
+    remove.words <- c("by", "in", "and", "to", "or", "on", "as", "with", 
+        "into", "via", "other", "the", "between", "process", "of", letters)
 
     remove.words <- c(remove.words, additional.words.to.remove)
     to.remove <- which(words %in% remove.words)
     to.keep <- setdiff(1:length(words), to.remove)
 
     words <- words[to.keep]
+    words <- words[which(words != "")]
 
     return(words)
 }

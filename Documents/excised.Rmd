@@ -955,3 +955,607 @@ for(i in 1:length(sig.app.k.list)){
 }
 #dev.off()
 ```
+
+
+## Latent Pathway Identification Analysis (LPIA)
+
+Here we use a method developed in Pham et al. 2011
+called Latent Pathway Identification Analyais (LPIA).
+This is a network-based method that combines expression
+data with GO-KEGG intersections into a network in which
+an edge exists if there are genes in the GO-KEGG intersection.
+The edge is weighted by the product of two terms: (1) the 
+Jaccard index of the two terms (in terms of genes), and 
+(2) the differential expression of the genes in the overlapping
+genes. In Pam et al. they were comparing two groups, so they 
+used the median differential expression. We could compare the
+FC and VS carriers directly to do this, or we can use a different
+term that is based on our linear model with ordered groups.
+
+They then project this bipartite network onto the the KEGG 
+terms. The nodes in this network are linked if they share 
+at least one biological process. The edge weights are larger
+if the two KEGG terms relate more GO terms. We would maybe
+use the Biodomain projection? We can try both. 
+
+They use eigenvector centrality to calculate centrality for 
+each pathway.
+
+Below, we generate lists of KEGG pathways and Biodomain 
+intersections and calculate Jaccard indices for all 
+intersections. 
+
+We take up the rest of the analysis in 1.KEGG_and_Biodomains.Rmd
+for historical reasons.
+
+```{r intersect}
+
+intersect_bd_kegg <- function(bd.list, kegg.list){
+
+  intersect.list <- vector(mode = "list", length = length(bd.list))
+  names(intersect.list) <- names(bd.list)
+
+  for(bd in 1:length(bd.list)){
+    k.intersections <- vector(mode = "list", length = length(kegg.list))
+    names(k.intersections) <- names(kegg.list)  
+    
+    for(k in 1:length(kegg.list)){
+      k.intersections[[k]] <- intersect(bd.list[[bd]], kegg.list[[k]])
+    }
+
+    has.genes <- which(sapply(k.intersections, length) >= min.term.size)
+    intersect.list[[bd]] <- k.intersections[has.genes]
+  }
+  return(intersect.list)
+}
+
+bd_kegg_jaccard <- function(bd.list, kegg.list){
+
+  jacc.mat <- matrix(NA, nrow = length(bd.list), ncol = length(kegg.list))
+  rownames(jacc.mat) <- names(bd.list)
+  colnames(jacc.mat) <- names(kegg.list)
+
+  for(bd in 1:length(bd.list)){
+    k.intersections <- vector(mode = "list", length = length(kegg.list))
+    names(k.intersections) <- names(kegg.list)  
+    
+    for(k in 1:length(kegg.list)){
+      jacc.mat[bd,k] <- jaccard.ind(bd.list[[bd]], kegg.list[[k]])
+    }
+
+  }
+  return(jacc.mat)
+}
+
+
+#save grouped form, so we can do the boxplot thingy that Greg Cary does.
+mouse.bd.k.intersections <- intersect_bd_kegg(bd.list = bd.for.gsea, kegg.list = mouse.path.gene.ensembl)
+mouse.bd.k.jacc <- bd_kegg_jaccard(bd.list = bd.for.gsea, kegg.list = mouse.path.gene.ensembl)
+saveRDS(mouse.bd.k.intersections, file.path(general.processed.data.dir, 
+  paste0("Mouse_KEGG_Intersections_for_GSEA_", expression.type, ".RDS")))
+saveRDS(mouse.bd.k.jacc, file.path(general.processed.data.dir, 
+  paste0("Mouse_KEGG_Intersection_Jaccard_", expression.type, ".RDS")))
+
+human.bd.k.intersections <- intersect_bd_kegg(bd_genes, hum.path.gene.ensembl)
+human.bd.k.jacc <- bd_kegg_jaccard(bd_genes, hum.path.gene.ensembl)
+saveRDS(human.bd.k.intersections, file.path(general.processed.data.dir, 
+  paste0("Human_KEGG_Intersections_for_GSEA_", expression.type, ".RDS")))
+saveRDS(human.bd.k.jacc, file.path(general.processed.data.dir, 
+  paste0("Human_KEGG_Intersections_Jaccard_", expression.type, ".RDS")))
+```
+
+
+```{r intersect_vals}
+
+mean.bd.k.file <- file.path(results.dir, paste0("KEGG_BD_mean_expression_", group.representation, ".RDS"))
+
+if(!file.exists(mean.bd.k.file)){
+  mean.bd.k.vals <- vector(mode = "list", length = length(mouse.path.gene.ensembl))
+  names(mean.bd.k.vals) <- names(mouse.path.gene.ensembl)
+
+  #for each kegg pathway
+  for(k in 1:length(mouse.path.gene.ensembl)){
+    kegg.path <- names(mouse.path.gene.ensembl)[k]
+    has.intersection <- which(sapply(lapply(mouse.bd.k.intersections, function(x) which(names(x) == kegg.path)), length) > 0)
+    if(length(has.intersection) == 0){next()}
+
+    intersect.mean.vals <- vector(mode = "list", length = length(has.intersection))
+    names(intersect.mean.vals) <- names(has.intersection)
+
+    all.val.mat <- matrix(NA, nrow = length(mouse.bd.genes), ncol = 5)
+    rownames(all.val.mat) <- names(mouse.bd.genes)
+    colnames(all.val.mat) <- genotypes[1:5]
+
+    #pull out all gene values for intersections with biodomains
+    for(bd in 1:length(has.intersection)){
+      kegg.idx <- sapply(mouse.bd.k.intersections[has.intersection], function(x) which(names(x) == kegg.path))
+      
+      intersect.ids <- mouse.bd.k.intersections[[has.intersection[bd]]][[kegg.idx[bd]]]
+      bd.k.vals <- lapply(intersect.ids, 
+        function(x) plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+        tx_name = x, tx_label = NA, ylab = "Expression (A.U.)", plot.results = FALSE)[[1]])
+
+      has.vals <- which(sapply(bd.k.vals, length) > 0)
+      k.mean <- t(sapply(bd.k.vals[has.vals], function(x) sapply(x[[1]], mean)))
+      #pheatmap(k.mean)
+      rownames(k.mean) <- intersect.ids[has.vals]
+      intersect.mean.vals[[bd]] <- k.mean
+    }
+    has.vals <- which(sapply(intersect.mean.vals, length) > 0)
+    if(group.representation == "means"){
+      mean.mat <- t(sapply(intersect.mean.vals[has.vals], colMeans))
+    }
+    if(group.representation == "eigenegene"){
+      mean.mat <- t(sapply(intersect.mean.vals[has.vals], function(x) plot.decomp(x, plot.results = FALSE)$v[,1]))
+    }
+    all.val.mat[rownames(mean.mat), colnames(mean.mat)] <- mean.mat[rownames(mean.mat), colnames(mean.mat)]
+    mean.bd.k.vals[[k]] <- all.val.mat
+    #pheatmap(mean.bd.k.vals[[k]], main = names(path.gene.ensembl)[k], cluster_cols = FALSE, cluster_rows = FALSE)
+  }
+  saveRDS(mean.bd.k.vals, mean.bd.k.file)
+}else{
+  mean.bd.k.vals <- readRDS(mean.bd.k.file)
+}
+
+has.vals <- which(sapply(mean.bd.k.vals, length) > 0)
+min.val <- min(unlist(mean.bd.k.vals[has.vals]), na.rm = TRUE)
+max.val <- max(unlist(mean.bd.k.vals[has.vals]), na.rm = TRUE)
+#custom.dist <- unlist(mean.bd.k.vals[has.vals])
+custom.dist <- rnorm(1000, 0, 0.2)
+#hist(custom.dist)
+
+kegg.plot.dir <- file.path(results.dir, "KEGG_plots")
+if(!file.exists(kegg.plot.dir)){dir.create(kegg.plot.dir)}
+
+
+pdf(file.path(kegg.plot.dir, "kegg_bd_intersections.pdf"), width = 7, height = 7)
+hist(unlist(mean.bd.k.vals), xlab = "Mean Value", main = "Mean Biodomain-Kegg Intersection Expression")
+
+for(i in 1:length(mean.bd.k.vals)){
+  if(length(mean.bd.k.vals[[i]]) > 0){
+    par(mar = c(4,12,2,2))
+    neg.vals <- length(which(mean.bd.k.vals[[i]] < 0))
+    pos.vals <- length(which(mean.bd.k.vals[[i]] > 0))
+    if(neg.vals > 0 && pos.vals > 0){
+      col.scale = c("blue", "brown")
+      grad.dir = "ends"
+      split.at.vals = TRUE
+    }
+    if(neg.vals > 0 && pos.vals == 0){
+      col.scale = "blue"
+      grad.dir = "low"
+      split.at.vals = TRUE
+    }
+    if(neg.vals == 0 && pos.vals > 0){
+      col.scale = "brown"
+      grad.dir = "high"
+      split.at.vals = TRUE
+    }
+
+  imageWithText(mat = mean.bd.k.vals[[i]], main = names(mean.bd.k.vals)[i], 
+      col.scale = col.scale, grad.dir = grad.dir, col.text.rotation = 0, 
+      col.text.adj = 0.5, col.text.shift = 0.06, row.text.shift = 0.15, 
+      main.shift = 0.05, color.fun = "linear", split.at.vals = split.at.vals,
+      light.dark = "f", global.color.scale = TRUE, global.min = min.val, 
+      global.max = max.val)
+
+  }
+}
+dev.off()
+
+global.min <- min(unlist(mean.bd.k.vals), na.rm = TRUE)
+global.max <- max(unlist(mean.bd.k.vals), na.rm = TRUE)
+#plot all results for each biodomain on one page
+for(bd in 1:length(bd_genes)){
+  bd.mat <- t(sapply(mean.bd.k.vals, function(x) if(length(x) > 0){x[bd,]}else{rep(NA, 5)}))
+  has.vals <- which(!is.na(rowMeans(bd.mat)))
+
+  #plot.decomp(t(bd.mat[has.vals,]), label.points = TRUE, main = names(bd_genes)[bd])
+  #bd.decomp <- plot.decomp(bd.mat[has.vals,], main = names(bd_genes)[bd])
+  #plot.decomp(bd.mat[has.vals,], main = names(bd_genes)[bd], label.points = TRUE)
+
+  if(length(has.vals) > 0){
+    png(file.path(kegg.plot.dir, paste0("bd_kegg_intersections_", names(bd_genes)[bd], ".png")), 
+      width = 7, height = max(c(length(has.vals)/7, 7)), units = "in", res = 200)
+    row.order <- hclust(dist(bd.mat[has.vals,]))$order
+    par(mar = c(4,16, 2, 2))
+    test <- imageWithText(mat = bd.mat[has.vals[row.order],], main = names(bd_genes)[bd], 
+        col.scale = c("blue", "brown"), grad.dir = "ends", col.text.rotation = 0, 
+        col.text.adj = 0.5, col.text.shift = 0.01, row.text.shift = 0.15, 
+        main.shift = 0.01, color.fun = "linear", split.at.vals = TRUE,
+        color.dist = NULL, light.dark = "f", global.color.scale = TRUE,
+        global.min = global.min, global.max = global.max)
+    dev.off()
+  }
+}
+```
+
+
+We put all the results together to see if there were any combinations
+that stood out overall. The plot below shows that the expression across
+all KEGG pathway and biodomain intersections separates the genotypes
+nicely. Along the first principal component, the VS genotypes are negative,
+the WT mice are at 0, and the FC genotypes are positive.
+
+```{r all_kegg, fig.width = 5, fig.height = 5}
+
+big.mat <- Reduce("rbind", mean.bd.k.vals)
+group.names <- unlist(lapply(1:length(mean.bd.k.vals), function(x) if(length(mean.bd.k.vals[[x]] > 0)){paste(names(mean.bd.k.vals)[x], rownames(mean.bd.k.vals[[x]]), sep = "--")}))
+rownames(big.mat) <- group.names
+#pdf("~/Desktop/big.mat.pdf", height = 20, width = 10)
+#pheatmap(big.mat, cluster_rows = FALSE, cluster_cols = FALSE)
+#dev.off()
+not.na <- which(!is.na(rowSums(big.mat)))
+
+sub.mat <- big.mat[not.na,]
+process.decomp <- plot.decomp(t(sub.mat), label.points = TRUE, xlim = c(-1, 1), 
+  cols = geno.cols[match(names(geno.cols), colnames(sub.mat))], cex = 1.5)
+process.vals <- process.decomp$v
+
+pc.order <- order(process.decomp$u[,1])
+barplot(process.decomp$u[pc.order,1], 
+  col = geno.cols[match(names(geno.cols), colnames(sub.mat))][pc.order], 
+  names = colnames(sub.mat)[pc.order], ylab = "PC1")
+abline(h = 0)
+#process.decomp <- plot.decomp(big.mat[has.vals,], label.points = TRUE)
+#plot(process.decomp$v, type = "n")
+#text(process.decomp$v[,1], process.decomp$v[,2], labels = colnames(big.mat))
+#process.vals <- process.decomp$u
+
+```
+
+The processes don't have any particular clustering as
+shown below. But there are some pathways that have 
+large negative and positive values in the first PC.
+
+```{r process_pc, fig.width = 8, fig.height = 7}
+plot(process.decomp$v, xlab = "PC1", ylab = "PC2", pch = 16)
+large.neg <- which(process.decomp$v[,1] < -0.04)
+large.pos <- which(process.decomp$v[,1] > 0.05)
+text(process.decomp$v[large.pos,1], process.decomp$v[large.pos,2], labels = rownames(sub.mat)[large.pos], cex = 0.5)
+text(process.decomp$v[large.neg,1], process.decomp$v[large.neg,2], labels = rownames(sub.mat)[large.neg], cex = 0.5)
+```
+
+The plots below show the mean expression for each of these
+processes with large PC values. 
+
+```{r processes, fig.width = 10, fig.height = 5}
+pc.order <- order(process.vals[,1], decreasing = TRUE)
+most.neg <- tail(pc.order, 20)
+most.pos <- head(pc.order, 20)
+#most.pos <- pc.order[1620:1630] #check middle
+
+#test.mat <- process.decomp$v[most.neg,1,drop=FALSE]
+#rownames(test.mat) <-  rownames(sub.mat)[most.neg]
+#test.mat[order(test.mat[,1]),]
+
+par(mar = c(4, 24, 2, 2))
+layout(matrix(c(1,2), ncol = 2), widths = c(1, 0.5))
+imageWithText(sub.mat[rev(most.neg),], col.scale = c("blue", "brown"), split.at.vals = TRUE,
+  grad.dir = "ends", col.text.rotation = 0, col.text.adj = 0.5, col.text.shift = 0.05, row.text.cex = 0.7,
+  row.text.shift = 0.15, main = "Large Negative PC pathways")
+par(mar = c(3.8, 0, 1.8, 2))
+barplot(process.vals[most.neg,1], horiz = TRUE)
+mtext("PC1", side = 1, line = 2.2)
+
+
+#test.mat <- process.decomp$v[most.pos,1,drop=FALSE]
+#rownames(test.mat) <-  rownames(sub.mat)[most.pos]
+#test.mat[order(test.mat[,1]),]
+
+par(mar = c(4, 18, 2, 0))
+#row.order <- hclust(dist(sub.mat[most.pos,]))$order
+layout(matrix(c(1,2), ncol = 2), widths = c(1, 0.5))
+imageWithText(sub.mat[most.pos,], col.scale = c("blue", "brown"), split.at.vals = TRUE,
+  grad.dir = "ends", col.text.rotation = 0, col.text.adj = 0.5, col.text.shift = 0.05, row.text.cex = 0.7,
+  row.text.shift = 0.15, main = "Large Positive PC pathways")
+par(mar = c(3.8, 0, 1.8, 2))
+barplot(process.vals[rev(most.pos),1], horiz = TRUE)
+mtext("PC1", side = 1, line = 2.2)
+```
+
+Can we build a biodomain network that shows us where the 
+biggest differences are? The biodomains were designed such
+
+```{r bipartite}
+#This is quite derived, but let's see what happens when we collect
+#the loadings on PC1 for each kegg-biodomain pair.
+
+umat <- matrix(0, nrow = length(mouse.path.gene.ensembl), ncol = length(bd_genes))
+rownames(umat) <- names(mouse.path.gene.ensembl)
+colnames(umat) <- names(bd_genes)
+split.names <- strsplit(rownames(sub.mat), "--")
+split.kegg <- sapply(split.names, function(x) x[1])
+split.bd <- sapply(split.names, function(x) x[2])
+for(i in 1:nrow(process.vals)){
+  umat[split.kegg[i], split.bd[i]] <- process.vals[i,1]
+}
+
+#pheatmap(umat)
+no.vals <- which(rowSums(umat) == 0)
+has.vals <- which(rowSums(umat) != 0)
+row.order <- order(rowSums(umat[has.vals,]))
+col.order <- order(colSums(umat[has.vals,]))
+
+pdf(file.path(kegg.plot.dir, "KEGG_Umat.pdf"), width = 9, height = 40)
+pheatmap(umat[has.vals[row.order],col.order], cluster_cols = TRUE, cluster_rows = TRUE)
+dev.off()
+```
+
+The following image shows just the rows with strong loadings
+for a given biodomain-KEGG intersection.
+
+```{r strong_vals, fig.width = 8, fig.height = 9}
+
+#filter to rows with the largest values
+#hist(umat)
+lower.thresh <- -0.04
+upper.thresh <- 0.04
+high.val <- which(apply(umat, 1, function(x) any(x > upper.thresh)))
+low.val <- which(apply(umat, 1, function(x) any(x < lower.thresh)))
+strong.vals <- union(high.val, low.val)
+
+pheatmap(umat[strong.vals,])
+
+#pdf("~/Desktop/sub_mat.pdf", width = 8, height = 9)
+#pheatmap(umat[strong.vals,])
+#dev.off()
+
+#net <- graph_from_incidence_matrix(abs(umat[strong.vals,]))
+#plot(net)
+
+#pdf("~/Desktop/bip_plot.pdf", width = 10, height = 10)
+#plot_bipartite(abs(umat[strong.vals,]))
+#dev.off()
+```
+
+
+# excised from 2.Splicing_Variation.Rmd
+
+
+## Literature search
+
+We searched for the top differentially spliced genes in the literature
+along with the terms "splicing", and "brain". The number of abstracts
+retrieved for each gene is shown below. 
+
+Synj1 (Synaptojanin1) has the largest number of associated abstracts among 
+the top 10 genes. Synj1 is the major synaptic polyphosphoinositide phosphatase, 
+and regulates uncoating and remobilization of synaptic vesicles during 
+clathrin-mediated endocytosis (pmid: 10535736). It interacts with BIN1 
+(pmid: 9195986), and APOE4-induced upregulation of SYNJ1
+leads to phospholipid homeostatic dysregulation in the brain, which is associated
+with cognitive decline in AD (pmid: 24052255). Downregulation of Synj1 restores 
+phospholipid homeostasis and reduces levels of phosphorylated tau in vitro 
+(pmid: 28231468). SYNJ1 is also associated with Parkinson's Disease 
+(pmid: 23804563)
+
+A recent paper looks at effects of SNPs, including splicing effects,
+in this gene and two other endocysis-related genes (pmid: 31592138).
+They predicted a number of deleterious SNPs that affected splicing
+of SYNJ1. 
+
+```{r pubmed}
+library(easyPubMed)
+pubmed.dir <- file.path(results.dir, "PubMed")
+if(!file.exists(pubmed.dir)){dir.create(pubmed.dir, recursive = TRUE)}
+
+search.term <- lapply(sig.gene.names, function(x) paste(x, "AND splicing AND brain"))
+all.pubmed <- lapply(search.term, get_pubmed_ids)
+num.papers <- unlist(lapply(all.pubmed, function(x) x$Count))
+with.papers <- which(num.papers != 0)
+paper.counts <- cbind(sig.gene.names[with.papers], num.papers[with.papers])
+number.order <- order(as.numeric(paper.counts[,2]))
+
+barplot_with_num(as.numeric(paper.counts[number.order,2]), 
+    names = paper.counts[number.order,1], las = 2, ylab = "Number of Abstracts")
+
+#has.data <- all.pubmed[with.papers]
+#all.abstracts <- lapply(has.data, function(x) fetch_pubmed_data(x, format = "abstract"))
+#for(i in 1:length(all.abstracts)){
+#    write.table(all.abstracts[[i]], file.path(pubmed.dir, 
+#        paste0("PubMed_Query_", tissue.names[tx], "_Up_", 
+#        rownames(up.table)[with.papers[i]], ".txt")), 
+#        sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+#}
+
+```
+
+## Exon Stats
+
+Here we investigate some basic questions about transcript
+length and relative expression in `r ref.geno` and `r alt.geno` 
+animals.
+
+```{r sandbox, eval = FALSE}
+gene.name = "Synj1"
+gene.id <- tx.info[match(gene.name, tx.info[,"external_gene_name"]), "ensembl_gene_id"]
+plotProportions(d, gene_id = gene.id, group_variable = "genotype", 
+  plot_type = "boxplot1", group_colors = geno.cols[c(1,3)])
+
+gene.idx <- which(padj[,"geneID"] == gene.id)
+tx.id <- padj[gene.idx,"txID"]
+tx.idx <- match(tx.id, tx.info[,"ensembl_transcript_id"])
+tx.len <- tx.info[tx.idx,"transcript_length"]
+names(tx.len) <- tx.info[tx.idx,"ensembl_transcript_id"]
+canonical.idx <- which(tx.info[tx.idx,"transcript_is_canonical"] == 1)
+len.order <- order(tx.len)
+bar.col <- rep("gray", length = length(tx.len))
+bar.col[canonical.idx] <- "red"
+
+par(mar = c(4, 12, 4, 2))
+barplot(tx.len[len.order], col = bar.col[len.order], las = 2, horiz = TRUE,
+  main = paste(gene.name, "transcript lengths"), xlab = "bp")
+
+#is the canonical transcript differentially abundant?
+sig.tx.idx <- which(padj[,"transcript"] <= alpha)
+sig.tx.id <- padj[sig.tx.idx,"txID"]
+common.tx <- intersect(sig.tx.id, tx.info[,"ensembl_transcript_id"])
+is.canonical <- sapply(common.tx, function(x) 
+  tx.info[match(x, tx.info[,"ensembl_transcript_id"]), "transcript_is_canonical"])
+barplot_with_num(c("canonical" = length(which(is.canonical == 1)), "non-canonical" = length(which(is.na(is.canonical)))))
+
+#what are the lengths of the differentially expressed transcripts?
+tx.len <- sapply(common.tx, function(x) 
+  tx.info[match(x, tx.info[,"ensembl_transcript_id"]), "transcript_length"])
+#hist(tx.len)
+
+
+common.idx <- match(common.tx, props[,"feature_id"])
+allele.prop <- lapply(allele.names, function(x) rowMeans(as.matrix(props[common.idx,x])))
+plot(allele.prop$FC, tx.len)
+plot(allele.prop$VS, tx.len)
+pt.col <- rep("black", length(tx.len))
+pt.col[which(is.canonical == 1)] <- "red"
+plot(allele.prop$FC, allele.prop$VS, col = pt.col, pch = 16)
+abline(0,1)
+
+allele.diff <- allele.prop$VS - allele.prop$FC
+vs.higher <- which(allele.diff > 0)
+vs.lower <- which(allele.diff < 0)
+
+#VS has reduced expression of longer transcripts? May indicate
+#intron retention in FC?
+boxplot(list("up in VS" = tx.len[vs.higher], "down in VS" = tx.len[vs.lower]))
+
+canonical.idx <- which(is.canonical == 1)
+non.canonical.idx <- which(is.na(is.canonical))
+
+plot(allele.diff, tx.len, col = pt.col, pch = 16, xlab = "Proportion difference",
+  ylab = "Transcript length")
+abline(v = 0)
+text(x = -0.3, y = 25000, labels = "Lower in VS")
+text(x = 0.2, y = 25000, labels = "Higher in VS")
+
+#vs has slightly lower expression of canonical transcripts?
+#and slightly higher of non-canonical? I don't think they
+#are really different.
+canon.list <- list("FC" = list("canonical" = allele.prop$FC[canonical.idx], 
+  "non-canonical" = allele.prop$FC[non.canonical.idx]),
+  "VS" = list("canonical" = allele.prop$VS[canonical.idx], 
+  "non-canonical" = allele.prop$VS[non.canonical.idx]))
+plot.grouped.boxes(canon.list, group.cols = geno.cols[c(1,3)],
+  ylab = "proportion")
+
+len.list <- list("FC" = list("canonical" = allele.prop$FC[canonical.idx], 
+  "non-canonical" = allele.prop$FC[non.canonical.idx]),
+  "VS" = list("canonical" = allele.prop$VS[canonical.idx], 
+  "non-canonical" = allele.prop$VS[non.canonical.idx]))
+
+```
+
+
+```{r transcript_comparison}
+#make a big comparison table that we can use to ask different quesitons 
+#of the significant transcripts
+
+sig.tx.idx <- which(padj[,"transcript"] <= alpha)
+sig.tx.id <- padj[sig.tx.idx,"txID"]
+tx.idx <- match(sig.tx.id, tx.info[,"ensembl_transcript_id"])
+tx.len <- tx.info[tx.idx,"transcript_length"]
+tx.canon <- tx.info[tx.idx,"transcript_is_canonical"]
+
+alleles <- c(ref.geno, alt.geno)
+props <- proportions(d)
+allele.names <- lapply(alleles, 
+  function(x) rownames(plotting.df)[which(plotting.df[,"ordered_geno"] == x)])
+names(allele.names) <- alleles
+tx.prop.idx <- match(sig.tx.id, props[,"feature_id"])
+allele.prop <- sapply(allele.names, function(x) rowMeans(as.matrix(props[tx.prop.idx,x])))
+
+#if the difference is greater than 0, the alternative allele is higher
+allele.diff <- allele.prop[,alt.geno] - allele.prop[,ref.geno]
+alt.higher <- which(allele.diff > 0)
+alt.lower <- which(allele.diff < 0)
+
+comp.table <- cbind("txLen" = tx.len, 
+  "canonical" = tx.canon, allele.prop, "difference" = allele.diff)
+rownames(comp.table) <- sig.tx.id
+```
+
+Are the transcripts that are upregulated in `r alt.geno`
+longer or shorter than transcripts upregulated in `r alt.geno`?
+
+The transcripts that are up in VS may be slightly shorter 
+than those that are down in VS. Maybe this indicates more
+intron retention in the FC animals?
+
+```{r tx_len, fig.width = 5, fig.height = 5}
+len.list <- list(log10(comp.table[alt.higher,"txLen"]),
+  log10(comp.table[alt.lower, "txLen"]))
+test <- aov.by.list(len.list)
+boxplot(len.list, names = paste(c("Higher in", "Lower in"), alt.geno),
+  ylab = "log10 Transcript length", main = paste("p =", signif(test$"Pr(>F)"[1], 2)))
+```
+
+Are the transcripts that are up in VS more likely to be
+the canonical transcripts?
+
+
+
+```{r canonical, fig.width = 4, fig.height = 3}
+canonical.table <- matrix(NA, nrow = 2, ncol = 2)
+colnames(canonical.table) <- c(c("canonical", "non-canonical"))
+rownames(canonical.table) <- paste(c("Higher in", "Lower in"), alt.geno)
+canonical.table[1, "canonical"] <- 
+  length(intersect(alt.higher, which(comp.table[,"canonical"] == 1)))
+canonical.table[1, "non-canonical"] <- 
+  length(intersect(alt.higher, which(is.na(comp.table[,"canonical"]))))
+
+canonical.table[2, "canonical"] <- 
+  length(intersect(alt.lower, which(comp.table[,"canonical"] == 1)))
+canonical.table[2, "non-canonical"] <- 
+  length(intersect(alt.lower, which(is.na(comp.table[,"canonical"]))))
+
+test <- fisher.test(canonical.table)
+pheatmap(canonical.table, display_numbers = TRUE, cluster_rows = FALSE, 
+  cluster_cols = FALSE, main = paste("p =", signif(test$p.value, 2)))
+```
+
+The plot below shows the expected counts for these categories.
+
+```{r null, fig.width = 4, fig.height = 3}
+#permute to see what the expected numbers are
+nperm = 100
+null.counts <- vector(mode = "list", length = nperm)
+for(p in 1:nperm){
+  sample.table <- comp.table
+  sample.diff <- sample(comp.table[,"difference"])
+  sample.higher <- which(sample.diff > 0)
+  sample.lower <- which(sample.diff < 0)
+
+  sample.counts <- matrix(NA, nrow = 2, ncol = 2)
+  colnames(sample.counts) <- c(c("canonical", "non-canonical"))
+  rownames(sample.counts) <- paste(c("Higher in", "Lower in"), alt.geno)
+  sample.counts[1, "canonical"] <- 
+    length(intersect(sample.higher, which(comp.table[,"canonical"] == 1)))
+  sample.counts[1, "non-canonical"] <- 
+    length(intersect(sample.higher, which(is.na(comp.table[,"canonical"]))))
+
+  sample.counts[2, "canonical"] <- 
+    length(intersect(sample.lower, which(comp.table[,"canonical"] == 1)))
+  sample.counts[2, "non-canonical"] <- 
+    length(intersect(sample.lower, which(is.na(comp.table[,"canonical"]))))
+  null.counts[[p]] <- sample.counts
+}
+
+null.avg <- Reduce("+", null.counts)/nperm
+pheatmap(null.avg, display_numbers = TRUE, cluster_rows = FALSE, cluster_cols = FALSE)
+```
+
+The plot below shows the direct comparison. I think 
+there isn't a real difference in the expression of 
+canonical transcripts. There are just so many transcripts
+that the p value is significant.
+
+If anything, the expression of non-canonical transcripts
+is slightly higher in the VS group. 
+
+```{r count_comp, fig.height = 5, fig.width = 5}
+mat.idx <- which(canonical.table > 0, arr.ind = TRUE)
+pt.names <- apply(mat.idx, 1, 
+  function(x) paste(rownames(canonical.table)[x[1]], colnames(canonical.table)[x[2]]))
+plot(log(canonical.table), log(null.avg), xlim = c(5.5, 7.5), ylim = c(6, 7), pch = 16)
+abline(0, 1)
+text(log(canonical.table), log(null.avg), labels = pt.names)
+```

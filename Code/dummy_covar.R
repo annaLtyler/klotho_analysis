@@ -6,9 +6,14 @@
 
 dummy_covar <- function(covar.mat){
 
-    u_factors <- lapply(1:ncol(covar.mat), function(x) sort(unique(covar.mat[,x])))
+    if(class(covar.mat)[1] == "matrix"){
+        u_factors <- lapply(1:ncol(covar.mat), function(x) sort(unique(covar.mat[,x])))
+    }
+    if(class(covar.mat)[1] == "data.frame"){
+        u_factors <- lapply(1:ncol(covar.mat), function(x) levels(covar.mat[,x]))
+    }
     num.factors <- sapply(u_factors, length)
-    use.these <- which(num.factors > 1) #we can't use anything that doesn't vary
+    use.these <- which(num.factors > 1) #don't use anything that doesn't vary or is numeric
     total.columns <- sum(num.factors[use.these]) - length(num.factors[use.these])
     new.names <- lapply(1:length(u_factors[use.these]), function(x) paste(colnames(covar.mat)[x], u_factors[[x]][2:length(u_factors[[x]])], sep = "_"))
     
@@ -23,7 +28,7 @@ dummy_covar <- function(covar.mat){
         new.covar[[i]] <- new.mat
     }
 
-    new.covar.mat <- Reduce("cbind", new.covar)
+    new.covar.mat <- as.matrix(Reduce("cbind", new.covar))
     rownames(new.covar.mat) <- rownames(covar.mat)
     return(new.covar.mat)
 }

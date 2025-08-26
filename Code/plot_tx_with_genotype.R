@@ -1,24 +1,34 @@
 #like above, but specifically for genotype
 plot_tx_with_genotype <- function(expr.mat, covar.table, tx_name, 
   ylab = "Count", tx_label = "Transcript", pt_col = "#c51b8a",
-  plot.results = TRUE, geno.cols = c("WT/WT" = "darkgray", 
-  "WT/VS" = "#a6bddb", "VS/VS" = "#2b8cbe", 
-  "WT/FC" = "#a1d99b", "FC/FC" = "#31a354"), cex.labels = 1,
+  plot.results = TRUE, cex.labels = 1,
   order.by.mean = TRUE){
 
-
   not.genotype <- setdiff(1:ncol(covar.table), grep("geno", colnames(covar.table)))
+  is_numeric <- which(sapply(1:ncol(covar.table), function(x) length(levels(covar.table[,x]))) == 0)
+  #dummy_covar will convert anything that is a factor to a dummy
   dummy.mat <- dummy_covar(covar.table[,not.genotype])
+  #tack on any numeric covariates
+  if(length(is_numeric) > 0){
+    dummy.mat <- as.matrix(cbind(dummy.mat, covar.mat[,is_numeric,drop=FALSE]))
+  }
 
-  tx_idx <- which(rownames(expr.mat) == tx_name)
+  tx_idx <- which(rownames(expr.mat) %in% tx_name)
   if(length(tx_idx) == 0){return(NULL)}
 
-  u_genotype <- levels(as.factor(covar.table[,"climb_geno"]))
-  geno.idx <- lapply(u_genotype, function(x) which(covar.table[,"climb_geno"] == x))
+  u_genotype <- levels(covar.table[,"ordered_geno"])
+  geno.idx <- lapply(u_genotype, function(x) which(covar.table[,"ordered_geno"] == x))
   names(geno.idx) <- u_genotype
 
-  just.fc <- c("WT/WT", "WT/FC", "FC/FC")
-  just.vs <- c("WT/WT", "WT/VS", "VS/VS")
+  if(length(u_genotype) == 5){
+    just.fc <- c("WT/WT", "WT/FC", "FC/FC")
+    just.vs <- c("WT/WT", "WT/VS", "VS/VS")
+    geno.cols = c("WT/WT" = "darkgray", "WT/VS" = "#a6bddb", "VS/VS" = "#2b8cbe", "WT/FC" = "#a1d99b", "FC/FC" = "#31a354")
+  }else{
+    just.fc <- c("FC", "WT")
+    just.vs <- c("WT", "VS")
+    geno.cols = c("FC" = "#31a354", "WT" = "darkgray", "VS" = "#2b8cbe")
+  }
   
   grouped.vals <- vector(mode = "list", length = length(tx_name))
   names(grouped.vals) <- tx_name
@@ -39,22 +49,33 @@ plot_tx_with_genotype <- function(expr.mat, covar.table, tx_name,
       }else{
         #otherwise, order by genotype
         #c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
-        mean.order <- match(c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS"), names(val.mean))
+        mean.order <- match(u_genotype, names(val.mean))
       }
 
-      all.test <- aov.by.list(tx.vals, return.aov = TRUE)
-      all.p <- anova(all.test)$"Pr(>F)"[1]
-      #pairwise.p <- TukeyHSD(all.test)
-      vs.test <- aov.by.list(tx.vals[just.vs])
-      vs.p <- vs.test$"Pr(>F)"[1]
-      fc.test <- aov.by.list(tx.vals[just.fc])
-      fc.p <- fc.test$"Pr(>F)"[1]
+      all.test <- lm(expr.mat[tx_name[i],]~dummy.mat+covar.table[,"ordered_geno"])
+      int.idx <- which(rownames(coef(summary(all.test))) == "covar.table[, \"ordered_geno\"].L")
+      all.r2 <- signif(summary(all.test)$adj.r.squared, 2)
+      all.coef <- signif(coef(summary(all.test))[int.idx,"Estimate"], 2)
+      all.p <- threshold_p(coef(summary(all.test))[int.idx,"Pr(>|t|)"])
+
+      vs.idx <- which(covar.table[,"ordered_geno"] %in% just.vs)
+      vs.test <- lm(expr.mat[tx_name[i],vs.idx]~dummy.mat[vs.idx,]+covar.table[vs.idx,"ordered_geno"])
+      vs.r2 <- signif(summary(vs.test)$adj.r.squared, 2)
+      vs.coef <- signif(coef(summary(vs.test))[int.idx,"Estimate"], 2)
+      vs.p <- threshold_p(coef(summary(vs.test))[int.idx,"Pr(>|t|)"])
+
+      fc.idx <- which(covar.table[,"ordered_geno"] %in% just.fc)
+      fc.test <- lm(expr.mat[tx_name[i],fc.idx]~dummy.mat[fc.idx,]+covar.table[fc.idx,"ordered_geno"])
+      fc.r2 <- signif(summary(fc.test)$adj.r.squared, 2)
+      fc.coef <- signif(coef(summary(fc.test))[int.idx,"Estimate"], 2)
+      fc.p <- threshold_p(coef(summary(fc.test))[int.idx,"Pr(>|t|)"])
 
 
       if(plot.results){
         #all genotypes in order
         vioplot(tx.vals[mean.order], col = geno.cols[names(tx.vals)[mean.order]], 
-          main = paste("\np =", signif(all.p,2)), ylim = ylim, cex.axis = cex.labels)
+          main = paste0("\nR2 = ", all.r2, "; beta = ", all.coef, "; p = ", all.p), 
+          ylim = ylim, cex.axis = cex.labels)
         mtext(ylab, side = 2, line = 2.5)
         stripchart(tx.vals[mean.order], vertical = TRUE, add = TRUE,
           col = "#c51b8a", pch = 16, method = "jitter")
@@ -62,20 +83,22 @@ plot_tx_with_genotype <- function(expr.mat, covar.table, tx_name,
 
         #Just VS
         vioplot(tx.vals[just.vs], col = geno.cols[just.vs], cex.axis = cex.labels,
-          main = paste("VS genotypes\np =", signif(vs.p, 2)), ylim = ylim)
+          main = paste0("VS genotypes\nR2 = ", vs.r2, "; beta = ", vs.coef, "; p = ", vs.p), 
+          ylim = ylim)
         mtext(ylab, side = 2, line = 2.5)
         stripchart(tx.vals[just.vs], vertical = TRUE, add = TRUE,
           col = "#c51b8a", pch = 16, method = "jitter")
         abline(h = 0)
 
         vioplot(tx.vals[just.fc], col = geno.cols[just.fc], cex.axis = cex.labels,
-          main = paste("FC genotypes\np =", signif(fc.p, 2)), ylim = ylim)
+          main = paste0("FC genotypes\nR2 = ", fc.r2, "; beta = ", fc.coef, "; p = ", fc.p), 
+          ylim = ylim)
         mtext(ylab, side = 2, line = 2.5)
         stripchart(tx.vals[just.fc], vertical = TRUE, add = TRUE,
           col = "#c51b8a", pch = 16, method = "jitter")
         abline(h = 0)
 
-        mtext(tx_label[i], side = 3, outer = TRUE, line = -1.5)
+        mtext(tx_label[i], side = 3, outer = TRUE, line = -1.5, font = 2)
     }
   }
   result <- list("grouped_vals" = grouped.vals, "p" = c("all" = all.p, "FC" = fc.p, "VS" = vs.p))

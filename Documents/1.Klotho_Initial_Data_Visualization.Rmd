@@ -41,13 +41,11 @@ rm(list = ls())
 
 library(here)
 
-#expression.type = "transcript"
-expression.type = "gene"
+#expression.type = "transcript"; id_col <- "ensembl_transcript_id"
+expression.type = "gene"; id_col = "ensembl_gene_id"
 
 min.term.size = 10 #minimum number of genes allowed in a term
-
 fdr.thresh = 0.1 #fdr for differentially expressed genes
-p.thresh = 0.05 #nominal p value to look for effects
 
 args <- commandArgs(trailingOnly=T)
 subgroup <- args[2]
@@ -60,12 +58,12 @@ if(is.na(subgroup)){
 }
 
 if(subgroup == "all ages"){
-  results.dir <- here("Results", "all")
+  results.dir <- here("Results", paste("all", expression.type, sep = "_"))
 }else{
   subgroup.results <- paste(sapply(1:length(subgroup), 
     function(x) paste(names(subgroup)[x], subgroup[[x]], sep = "_")), 
     collapse = "_")
-  results.dir <- here("Results", subgroup.results)
+  results.dir <- here("Results", paste(subgroup.results, expression.type, sep = "_"))
 }
 
 if(!file.exists(results.dir)){
@@ -81,7 +79,12 @@ ordered.geno <- c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
 
 use.carrier.status = TRUE #if true, fits models with the ordered factor FC > WT > VS
                           #if false, fits modesl with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
-
+if(use.carrier.status){
+  geno.used = c("FC, WT, VS"); carrier.text = "carriers"
+  }else{
+    geno.used = paste(ordered.geno, collapse = ", ")
+    carrier.text = "all_geno"
+  }
 
 #group.representation = "eigengene" #decide whether a group of genes will be represented by 
                             #their mean expression or the first PC of their expression
@@ -90,8 +93,20 @@ use.carrier.status = TRUE #if true, fits models with the ordered factor FC > WT 
 group.representation = "means"
 ```
 
-The subgroup analyzed in this workflow is:
-`r paste(names(subgroup), subgroup, sep = " = ")`
+## Paramters set
+
+This workflow used the following parameters:
+
+Subgroup: `r paste(names(subgroup), subgroup, sep = " = ")`
+
+Genotypes analyzed: `r geno.used`
+
+Units of expression: `r expression.type`
+
+Minimum number of genes in a group: `r min.term.size`
+
+FDR threshold for significance: `r fdr.thresh`
+
 
 ```{r load_code}
 all.fun <- list.files(here("Code"), full.names = TRUE)
@@ -155,55 +170,6 @@ if(expression.type == "transcript"){
 }else{
   count.data <- read.delim(file.path(mouse.data.dir, "rsem.merged.gene_counts.tsv"))
 }
-```
-
-```{r pathview}
-#get kegg data now for use later
-
-mouse.kegg.file <- file.path(general.data.dir, "KEGG.Mouse.RDS")
-if(!file.exists(mouse.kegg.file)){
-    all.mouse.kegg <- download_KEGG("mmu", "KEGG", "kegg")
-    saveRDS(all.mouse.kegg, mouse.kegg.file)
-}else{
-    all.mouse.kegg <- readRDS(mouse.kegg.file)
-}
-
-human.kegg.file <- file.path(general.data.dir, "KEGG.Human.RDS")
-if(!file.exists(human.kegg.file)){
-    all.human.kegg <- download_KEGG("hsa", "KEGG", "kegg")
-    saveRDS(all.human.kegg, human.kegg.file)
-}else{
-    all.human.kegg <- readRDS(human.kegg.file)
-}
-
-
-#convert mouse entrez IDs to ensembl IDs
-u_path <- gsub(" - Mus musculus (house mouse)", "", all.mouse.kegg[[2]][,"to"], fixed = TRUE)
-
-path.id <- all.mouse.kegg[[2]][,1]
-path.idx <- lapply(path.id, function(x) which(all.mouse.kegg[[1]][,1] == unlist(x)[1]))
-path.gene.id <- lapply(path.idx, function(x) all.mouse.kegg[[1]][x,2])
-names(path.gene.id) <- u_path
-
-mouse.path.gene.ensembl <- lapply(path.gene.id, 
-    function(x) mouse.gene.table[match(x, mouse.gene.table[,"entrezgene_id"]), "ensembl_gene_id"])
-
-saveRDS(mouse.path.gene.ensembl, file.path(general.processed.data.dir, "Mouse_KEGG_for_GSEA.RDS"))
-
-
-#convert human entrez IDs to ensembl IDs
-u_path <- all.human.kegg[[2]][,"to"]
-path.id <- all.human.kegg[[2]][,1]
-path.idx <- lapply(path.id, function(x) which(all.human.kegg[[1]][,1] == unlist(x)[1]))
-path.gene.id <- lapply(path.idx, function(x) all.human.kegg[[1]][x,2])
-names(path.gene.id) <- u_path
-
-#use the ortholog table to convert. We only care about genes
-#that have mouse orthologs anyway (I think).
-hum.path.gene.ensembl <- lapply(path.gene.id, 
-    function(x) orthos[match(x, orthos[,"Human.Entrez"]), "Human.Ensembl"])
-
-saveRDS(hum.path.gene.ensembl, file.path(general.processed.data.dir, "Human_KEGG_for_GSEA.RDS"))
 ```
 
 ```{r split_ind}
@@ -487,22 +453,44 @@ Use DESeq2 to filter out low-expressing genes and to normalize.
 We use the vst normalization. 
 
 ```{r normalize_filter}
-
 #make a data frame with relevant covariate and group data.
+#we are adding Ide expression because of a newly discovered
+#variant in B6 animals that affects Ide expression.
+gene.id <- mouse.gene.table[which(mouse.gene.table[,"external_gene_name"] == "Ide"), "ensembl_gene_id"]
+gene.idx <- which(rownames(sub.count) == gene.id)
+gene.counts <- sub.count[gene.idx,]
+scaled.counts <- scale(gene.counts)
+ordered.scaled <- scaled.counts[match(rownames(scaled.counts), condensed.table[,"animalName"])]
+#hist(ordered.scaled, breaks = 25)
+
+#add genotype based on whether we are looking at all genotypes or carrier status
+if(use.carrier.status){
+  carrier.factor <- rep("WT", nrow(condensed.table))
+  carrier.factor[grep("VS", condensed.table[,"climb_geno"])] <- "VS"
+  carrier.factor[grep("FC", condensed.table[,"climb_geno"])] <- "FC"
+  geno_factor <- ordered(carrier.factor, levels = c("FC", "WT", "VS"))
+  sub.cols <- c(geno.cols["FC/FC"], geno.cols["WT/WT"], geno.cols["VS/VS"])
+  names(sub.cols) <- c("FC", "WT", "VS")
+  geno.cols <- sub.cols
+}else{
+  geno_factor <- ordered(condensed.table[,"climb_geno"], levels = ordered.geno)
+}
+
+
+#treat everything except gene expression as a factor
 info <- data.frame("sequencingBatch" = as.factor(condensed.table[,"sequencingBatch"]),
   "sex_ge" = as.factor(condensed.table[,"sex_ge"]),
-  "age_batch" = as.numeric(condensed.table[,"age_batch"]),
-  "climb_geno" = factor(condensed.table[,"climb_geno"], 
-  levels = c("WT/WT", "WT/FC", "FC/FC", "WT/VS", "VS/VS"))) #put WT as the reference level
+  "age_batch" = ordered(condensed.table[,"age_batch"], levels = c("4", "12")),
+  "ordered_geno" = geno_factor,
+  "scaled_Ide_expression" = ordered.scaled) 
 rownames(info) <- condensed.table[,"animalName"]
-
 write.table(info, file.path(processed.data.dir, "mouse_info.csv"), sep = ",", row.names = TRUE)
 
 # Create design matrices: Include both the condition of interest and the batch variable.
 # Assuming 'genotype' is your condition and 'sequencingBatch' is the batch factor
 # age_m and sex_ge are potential covariates
 
-possible.covar <- c("sequencingBatch", "sex_ge", "age_batch", "climb_geno")
+possible.covar <- c("sequencingBatch", "sex_ge", "age_batch", "ordered_geno", "scaled_Ide_expression")
 #possible.covar <- c("sequencingBatch")
 use.covar <- setdiff(possible.covar, names(subgroup))
 fmla <- as.formula(paste0("~", paste(use.covar, collapse = " + ")))
@@ -526,33 +514,118 @@ vsd <- vst(dds, blind = FALSE)
 #post.norm.decomp <- plot.decomp(t(assay(vsd)), plot.results = FALSE)
 
 #take invariant covariates out of info
-num.var <- apply(info, 2, function(x) length(unique(x)))
-keep.var <- which(num.var > 1)
-covar.mat <- info[,keep.var]
+#num.var <- apply(info, 2, function(x) length(unique(x)))
+#keep.var <- which(num.var > 1)
+#covar.mat <- info[,keep.var]
+covar.mat <- info
 write.table(covar.mat, file.path(results.dir, "covariates.csv"), sep = ",", quote = FALSE)
 ```
 
 
 ```{r transcript_info}
-
 #gather information about transcripts in filtered data set
+if(expression.type == "transcript"){
+  gene.info.file <- file.path(general.data.dir, "mouse_transcript_info.txt")
 
-gene.info.file <- file.path(general.data.dir, "mouse_gene_info.txt")
-if(!file.exists(gene.info.file)){
-  library(biomaRt)
-  all.var <- ls()
+  if(!file.exists(gene.info.file)){
+    library(biomaRt)
+    all.var <- ls()
 
-  lib.loaded <- as.logical(length(which(all.var == "mus")))
-  if(!lib.loaded){
-      mus <- useEnsembl(biomart="ensembl", dataset="mmusculus_gene_ensembl") 
-      }
+    lib.loaded <- as.logical(length(which(all.var == "mus")))
+    if(!lib.loaded){
+        mus <- useEnsembl(biomart="ensembl", dataset="mmusculus_gene_ensembl") 
+        #att <- listAttributes(mus)
+        #fil <- listFilters(mus)
+        #head(att[grep("transcript", att[,1], ignore.case = TRUE),])
+        }
+    
+    gene.info <- getBM(c("ensembl_transcript_id", "ensembl_gene_id", 
+      "external_gene_name", "entrezgene_id", "chromosome_name", 
+      "transcript_start", "transcript_end", "transcript_length",
+      "transcript_is_canonical"), "ensembl_transcript_id", sub.id[,1], mus)
+    write.table(gene.info, gene.info.file, quote = FALSE, row.names = FALSE, sep = "\t")
+    }else{
+    gene.info <- read.delim(gene.info.file)
+    }
+}
+
+
+if(expression.type == "gene"){
+  gene.info.file <- file.path(general.data.dir, "mouse_gene_info.txt")
   
-  gene.info <- getBM(c("ensembl_gene_id", "external_gene_name", "entrezgene_id", "chromosome_name", 
-    "start_position", "end_position"), "ensembl_gene_id", sub.id[,1], mus)
-  write.table(gene.info, gene.info.file, quote = FALSE, row.names = FALSE, sep = "\t")
-  }else{
-  gene.info <- read.delim(gene.info.file)
-  }
+  if(!file.exists(gene.info.file)){
+    library(biomaRt)
+    all.var <- ls()
+
+    lib.loaded <- as.logical(length(which(all.var == "mus")))
+    if(!lib.loaded){
+        mus <- useEnsembl(biomart="ensembl", dataset="mmusculus_gene_ensembl") 
+        #att <- listAttributes(mus)
+        #fil <- listFilters(mus)
+        #head(att[grep("transcript", att[,1], ignore.case = TRUE),])
+        }
+    
+    gene.info <- getBM(c("ensembl_gene_id", "external_gene_name", "entrezgene_id", "chromosome_name", 
+      "start_position", "end_position"), "ensembl_gene_id", sub.id[,1], mus)
+    write.table(gene.info, gene.info.file, quote = FALSE, row.names = FALSE, sep = "\t")
+    }else{
+    gene.info <- read.delim(gene.info.file)
+    }
+}
+```
+
+
+```{r pathview}
+#get kegg data now for use later
+
+mouse.kegg.file <- file.path(general.data.dir, "KEGG.Mouse.RDS")
+if(!file.exists(mouse.kegg.file)){
+    all.mouse.kegg <- download_KEGG("mmu", "KEGG", "kegg")
+    saveRDS(all.mouse.kegg, mouse.kegg.file)
+}else{
+    all.mouse.kegg <- readRDS(mouse.kegg.file)
+}
+
+human.kegg.file <- file.path(general.data.dir, "KEGG.Human.RDS")
+if(!file.exists(human.kegg.file)){
+    all.human.kegg <- download_KEGG("hsa", "KEGG", "kegg")
+    saveRDS(all.human.kegg, human.kegg.file)
+}else{
+    all.human.kegg <- readRDS(human.kegg.file)
+}
+
+
+#convert mouse entrez IDs to ensembl IDs
+u_path <- gsub(" - Mus musculus (house mouse)", "", all.mouse.kegg[[2]][,"to"], fixed = TRUE)
+
+path.id <- all.mouse.kegg[[2]][,1]
+path.idx <- lapply(path.id, function(x) which(all.mouse.kegg[[1]][,1] == unlist(x)[1]))
+path.gene.id <- lapply(path.idx, function(x) all.mouse.kegg[[1]][x,2])
+names(path.gene.id) <- u_path
+
+mouse.path.ensembl.file <- file.path(general.processed.data.dir, paste0("Mouse_KEGG_", expression.type, "_for_GSEA.RDS"))
+mouse.path.gene.ensembl <- lapply(path.gene.id, 
+    function(x) mouse.gene.table[match(as.numeric(x), mouse.gene.table[,"entrezgene_id"]), "ensembl_gene_id"])
+if(expression.type == "transcript"){
+  gene.idx <- lapply(mouse.path.gene.ensembl, function(x) match(x[which(!is.na(x))], gene.info[,"ensembl_gene_id"]))
+  mouse.path.gene.ensembl <- lapply(gene.idx, function(x) gene.info[x,id_col])
+}
+saveRDS(mouse.path.gene.ensembl, mouse.path.ensembl.file)
+
+
+#convert human entrez IDs to ensembl IDs
+u_path <- all.human.kegg[[2]][,"to"]
+path.id <- all.human.kegg[[2]][,1]
+path.idx <- lapply(path.id, function(x) which(all.human.kegg[[1]][,1] == unlist(x)[1]))
+path.gene.id <- lapply(path.idx, function(x) all.human.kegg[[1]][x,2])
+names(path.gene.id) <- u_path
+
+#use the ortholog table to convert. We only care about genes
+#that have mouse orthologs anyway (I think).
+hum.path.gene.ensembl <- lapply(path.gene.id, 
+    function(x) orthos[match(x, orthos[,"Human.Entrez"]), "Human.Ensembl"])
+
+saveRDS(hum.path.gene.ensembl, file.path(general.processed.data.dir, "Human_KEGG_for_GSEA.RDS"))
 ```
 
 
@@ -603,27 +676,40 @@ plot_pc_factors <- function(expr.mat, factors, n.pc = 4, top.genes = NULL,
 
   #for each factor, plot out the pairs of PCs and individual PCs
   for(i in 1:ncol(factors)){
+    
+    if(length(unique(factors[,i])) < 2){next()} #don't run any invariant factors
+
     cat("###", colnames(factors)[i], "\n")
 
-    #treat everything, even age as a factor
-    if(colnames(factors)[i] == "climb_geno"){
-      factor.cols <- geno.cols
-      factor.names <- names(factor.cols)
-    }else{
-        factor.names <- levels(as.factor(factors[,i]))
-        factor.cols <- c("black", "#CE5C6D", "#7ECC61")
-        names(factor.cols) <- factor.names
+    n.levels <- length(levels(factors[,i]))
+    if(n.levels > 0){ #we have a factor
+      #set default color scheme
+      factor.names <- levels(as.factor(factors[,i]))
+      factor.cols <- categorical_pal(8)[1:length(factor.names)]
+      names(factor.cols) <- factor.names
+
+      #if we are looking at genotype, use the specified genotype colors
+      if(colnames(factors)[i] == "ordered_geno"){
+        factor.cols <- geno.cols
+        factor.names <- names(factor.cols)
+      }
+
+      #assign colors to individual animals based on the factor they belong to
+      gcol <- rep(NA, nrow(factors))
+      for(g in 1:length(factor.cols)){
+        gcol[which(factors[,i] == names(factor.cols)[g])]  <- factor.cols[g]
+      }
+    }else{ #otherwise we have a number. Assign numerical colors
+      factor.cols = colors.from.values(factors[,i], split.at.vals = TRUE, 
+        col.scale = c("blue", "brown"), grad.dir = "ends")
+      gcol <- factor.cols
     }
-    gcol <- rep(NA, nrow(factors))
-    for(g in 1:length(factor.cols)){
-      gcol[which(factors[,i] == names(factor.cols)[g])]  <- factor.cols[g]
-    }
-  
 
     #if we are highlighting individuals, change their color here    
     if(!is.null(highlight.ind)){
       ind.idx <- which(rownames(expr.mat) %in% highlight.ind)
       gcol[ind.idx] <- highlight.col
+      factor.names <- NULL
     }
 
     if(i < ncol(factors)){
@@ -673,11 +759,17 @@ plot_pc_factors <- function(expr.mat, factors, n.pc = 4, top.genes = NULL,
         #rownames(expr.mat)[not.pos]
     }
 
-    #add legend    
-    par(mar = c(0,0,2,2))
-    plot.new()
-    plot.window(xlim = c(0,1), ylim = c(0,1))
-    legend(0, 1, legend = factor.names, pch = 16, col = factor.cols)
+    if(!is.null(factor.names)){
+      #add legend    
+      par(mar = c(0,0,2,2))
+      plot.new()
+      plot.window(xlim = c(0,1), ylim = c(0,1))
+      legend(0, 1, legend = factor.names, pch = 16, col = factor.cols)
+    }else{
+      par(mar = c(4,5,2,5))
+      imageWithTextColorbar(matrix(factors[,i], ncol = 1), split.at.vals = TRUE, 
+        col.scale = c("blue", "brown"), grad.dir = "ends", cex = 1)
+    }
     
 
     #show correlate each PC with each factor
@@ -709,25 +801,6 @@ genes that had a nominally significant p value
 (p < `r top.var.alpha.thresh`) for the entire model. 
 
 ```{r post_norm_pc, fig.width = 8, fig.height = 5, results = "asis"}
-if(use.carrier.status){
-  carrier.factor <- rep("WT", nrow(condensed.table))
-  carrier.factor[grep("VS", condensed.table[,"climb_geno"])] <- "VS"
-  carrier.factor[grep("FC", condensed.table[,"climb_geno"])] <- "FC"
-  geno_factor <- ordered(carrier.factor, levels = c("FC", "WT", "VS"))
-}else{
-  geno_factor <- ordered(condensed.table[,"climb_geno"], levels = ordered.geno)
-}
-
-
-plotting.df <- data.frame("sequencingBatch" = as.factor(condensed.table[,"sequencingBatch"]),
-  "sex_ge" = as.factor(condensed.table[,"sex_ge"]),
-  "age_batch" = as.numeric(condensed.table[,"age_batch"]),
-  "climb_geno" = factor(condensed.table[,"climb_geno"], 
-    levels = c("WT/WT", "FC/FC", "WT/FC", "WT/VS", "VS/VS")),
-  "ordered_geno" = geno_factor) 
-
-rownames(plotting.df) <- condensed.table[,"animalName"]
-
 
 #test genes for variability based on any of the possible causal factors
 #then filter for the genes that vary by these, not just variable genes
@@ -735,23 +808,28 @@ rownames(plotting.df) <- condensed.table[,"animalName"]
 
 expr <- assay(vsd)
 
-models <- apply(expr, 1, function(x) lm(x~sequencingBatch+sex_ge+age_batch+climb_geno, data = plotting.df))
+if(subgroup == "all ages"){
+  models <- apply(expr, 1, function(x) lm(x~sequencingBatch+sex_ge+age_batch+scaled_Ide_expression+ordered_geno, data = covar.mat))
+}else{
+  models <- apply(expr, 1, function(x) lm(x~sequencingBatch+sex_ge+scaled_Ide_expression+ordered_geno, data = covar.mat))
+}
 model.f <- lapply(models, function(x) summary(x)$fstatistic)
 model.p <- sapply(model.f, function(f) pf(f[1],f[2],f[3],lower.tail=F))
 #qqunif.plot(model.p)
 #big.p <- which(-log10(model.p) > 10)
 sig.idx <- which(model.p < top.var.alpha.thresh)
+#length(sig.idx)
 
 #checked to see if VS/FC carrier status was better represented in the PCs
 #It is not
-#carrier.status <- rep("WT", nrow(plotting.df))
-#carrier.status[grep("VS", plotting.df[,"climb_geno"])] <- "VS"
-#carrier.status[grep("FC", plotting.df[,"climb_geno"])] <- "FC"
-#plotting.df <- cbind(plotting.df, "carrier.status" = as.factor(carrier.status))
+#carrier.status <- rep("WT", nrow(covar.mat))
+#carrier.status[grep("VS", covar.mat[,"climb_geno"])] <- "VS"
+#carrier.status[grep("FC", covar.mat[,"climb_geno"])] <- "FC"
+#covar.mat <- cbind(covar.mat, "carrier.status" = as.factor(carrier.status))
 
 pdf(file.path(results.dir, 
   paste0("PCs_and_factors_pval_less_than_", top.var.alpha.thresh, ".pdf")), width = 12, height = 8)
-plot_pc_factors(expr.mat = t(expr[sig.idx,]), factors = plotting.df, n.pc = 4)
+plot_pc_factors(expr.mat = t(expr[sig.idx,]), factors = covar.mat, n.pc = 4)
 dev.off()
 ```
 
@@ -765,14 +843,11 @@ different ages.
 
 if(subgroup == "all ages"){
   expr.decomp <- plot.decomp(t(expr[sig.idx,]), plot.results = FALSE)
-  #model <- lm(expr.decomp$u[,1]~as.factor(condensed.table[,"ordered_geno"])*as.factor(condensed.table[,"age_batch"]))
-  model <- lm(expr.decomp$u[,1]~ordered_geno*age_batch, data = plotting.df)
-
-  #boxplot(expr.decomp$u[,1]~as.factor(condensed.table[,"climb_geno"])*as.factor(condensed.table[,"age_batch"]))
+  model <- lm(expr.decomp$u[,1]~ordered_geno*age_batch, data = covar.mat)
   ylim <- c(min(expr.decomp$u[,1]), max(expr.decomp$u[,1]))
 
-  geno <- condensed.table[,"climb_geno"]
-  age <- condensed.table[,"age_batch"]
+  geno <- covar.mat[,"ordered_geno"]
+  age <- covar.mat[,"age_batch"]
 
   u_age <- unique(age)
 
@@ -808,7 +883,6 @@ fine. The Klotho variants we are dealing with are coding
 variants and probably don't have any effect on gene 
 expression.
 
-
 ```{r klotho, fig.width = 4, fig.height = 4}
 
 norm.expr <- assay(vsd)
@@ -824,25 +898,33 @@ if(expression.type == "transcript"){
 }else{
   tx.id <- sub.id[which(sub.id[,"gene_id"] == kl.ensembl),"gene_id"]  
 }
+tx.name <- paste("Klotho transcript", 1:length(tx.id))
 
 kl.levels <- scaled.expr[tx.id,,drop=FALSE]
 
 if(expression.type == "transcript"){
   plot.with.model(kl.levels[1,], kl.levels[2,], xlab = "Kl transcript 1",
-  ylab = "Kl transcript 2")
+  ylab = "Kl transcript 2", main = "Correlation of Kl transcripts")
 }
 
 plot_tx_with_factor <- function(expr.mat, covar.table, tx_name, factor_name, 
-  factor_type = "categorical", ylab = "Count",
-  tx_label = "Transcript", pt_col = "#c51b8a", cex.labels = 1){
-
+  ylab = "Count", tx_label = "Transcript", pt_col = "#c51b8a", cex.labels = 1){
+    
     #make a dummy matrix to adjust expression 
     factor.idx <- which(colnames(covar.table) == factor_name)
-    dummy.mat <- dummy_covar(as.matrix(covar.table[,-c(factor.idx)]))
+    is_numeric <- which(sapply(1:ncol(covar.table), function(x) length(levels(covar.table[,x]))) == 0)
+
+    #dummy_covar will convert anything that is a factor to a dummy
+    dummy.mat <- dummy_covar(covar.table[,-c(factor.idx)])
+    #tack on any numeric covariates
+    if(length(is_numeric) > 0){
+      dummy.mat <- as.matrix(cbind(dummy.mat, covar.mat[,is_numeric,drop=FALSE]))
+    }
+
 
   for(i in 1:length(tx_name)){
 
-    if(factor_type == "categorical"){
+    if(is.factor(covar.mat[,factor_name])){
       model <- lm(expr.mat[tx_name[i],]~covar.table[,factor_name])
       model.p <- signif(anova(model)$"Pr(>F)"[1], 2)
       vioplot(expr.mat[tx_name[i],]~covar.table[,factor_name], xlab = "", 
@@ -852,7 +934,7 @@ plot_tx_with_factor <- function(expr.mat, covar.table, tx_name, factor_name,
       stripchart(expr.mat[tx_name[i],]~covar.table[,factor_name], 
         col = pt_col, vertical = TRUE, pch = 16, method = "jitter", add = TRUE)
     }
-    if(factor_type == "numeric"){
+    if(is.numeric(covar.mat[,factor_name])){
       model <- lm(expr.mat[tx_name[i],]~as.numeric(covar.table[,factor_name]))
       model.p <- signif(anova(model)$"Pr(>F)"[1], 2)
       vioplot(expr.mat[tx_name[i],]~as.numeric(covar.table[,factor_name]), xlab = "", 
@@ -869,9 +951,8 @@ plot_tx_with_factor <- function(expr.mat, covar.table, tx_name, factor_name,
 ### Genotype
 
 ```{r klotho_genotype, fig.width = 8, fig.height = 8}
-plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = plotting.df, 
-  tx_name = tx.id, "climb_geno", 
-  tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
+plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+  tx_name = tx.id, tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
   ylab = "Expression (A.U.)", order.by.mean = FALSE)
 
 if(subgroup[[1]] == 12){
@@ -879,8 +960,8 @@ if(subgroup[[1]] == 12){
     paste0("Klotho_expression_by_genotype_", basename(results.dir), "_months.pdf")), 
     width = 5, height = 6)
     par(bg = NA)
-  plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = plotting.df, 
-    tx_name = tx.id, "climb_geno", 
+  plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+    tx_name = tx.id, "ordered_geno", 
     tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
     ylab = "Expression (A.U.)", order.by.mean = FALSE)
   dev.off()
@@ -913,18 +994,17 @@ if(subgroup[[1]] == 12){
 ### Age
 
 ```{r klotho_age, fig.width = 8, fig.height = 4}
-age.varies <- which(colnames(covar.mat) == "age_batch")
-if(length(age.varies) > 0){
+age.varies <- length(unique(covar.mat[,"age_batch"])) > 1
+if(age.varies > 0){
   par(mfrow = c(1,2))
   plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
-    tx.id, "age_batch", "numeric", 
-    paste0("Kl Transcript", 1:length(tx.id)), 
+    tx.id, "age_batch", paste0("Kl Transcript", 1:length(tx.id)), 
     ylab = "Expression (A.U.)", cex.labels = 1.5)
 }else{
   plot.text("Age does not vary in this population")
 }
 
-if(length(age.varies) > 0){
+if(age.varies > 0){
   pdf(here("Results", "for_paper", 
     paste0("Klotho_expression_by_sex_", basename(results.dir), "_months.pdf")), 
     width = 5, height = 5)
@@ -958,7 +1038,13 @@ test.genes <- c("Fgf23" = "ENSMUSG00000000182", "Apoe" = "ENSMUSG00000002985")
 
 for(tx in 1:length(test.genes)){
   cat("###", names(test.genes)[tx], "\n")
-  tx.present <- intersect(test.genes[tx], rownames(scaled.expr))
+  
+  if(expression.type == "transcript"){
+    tx.id <- gene.info[which(test.genes[tx] %in% gene.info[,"ensembl_gene_id"]), "ensembl_transcript_id"]
+    tx.present <- intersect(tx.id, rownames(scaled.expr))
+  }else{
+    tx.present <- intersect(test.genes[tx], rownames(scaled.expr))
+  }
 
   if(length(tx.present) > 0){
     transcript.levels <- scaled.expr[tx.present,]
@@ -1005,7 +1091,12 @@ test_full_model <- function(expr.mat, covar.mat){
 
     #test one to get factor names
     df <- cbind("expr" = adj.expr[,1], covar.mat)
-    diff.test <- lm(expr~(sex_ge+age_batch+ordered_geno)^2, data = df)
+    age.varies <- length(unique(covar.mat$age_batch)) > 1
+    if(age.varies){
+      diff.test <- lm(expr~(sex_ge+age_batch+scaled_Ide_expression+ordered_geno)^2, data = df)
+    }else{
+      diff.test <- lm(expr~(sex_ge+scaled_Ide_expression+ordered_geno)^2, data = df)
+    }
     factor.names <- rownames(anova(diff.test))
     num.factors <- length(factor.names)-1
 
@@ -1015,7 +1106,11 @@ test_full_model <- function(expr.mat, covar.mat){
     model.r2 <- rep(NA, ncol(adj.expr))
     for(i in 1:ncol(adj.expr)){
       df <- cbind("expr" = adj.expr[,i], covar.mat)
-      diff.test <- lm(expr~(sex_ge+age_batch+ordered_geno)^2, data = df)
+      if(age.varies){
+        diff.test <- lm(expr~(sex_ge+age_batch+scaled_Ide_expression+ordered_geno)^2, data = df)
+      }else{
+        diff.test <- lm(expr~(sex_ge+scaled_Ide_expression+ordered_geno)^2, data = df)
+      }
       model.r2[i] <- summary(diff.test)$adj.r.squared
       effect.p[i,] <- anova(diff.test)$"Pr(>F)"[1:num.factors]
       #coef(diff.test)
@@ -1036,21 +1131,25 @@ We first used a linear model to test for main effects of each
 covariate along with interactions between the covariates.
 
 ```{r test_full}
-full.model.result <- test_full_model(expr.mat = scaled.expr, covar.mat = plotting.df)
+full.model.result <- test_full_model(expr.mat = scaled.expr, covar.mat = covar.mat)
 effect.p <- full.model.result$p_values
 model.r2 <- full.model.result$R2
 
 #take out the genes with the largest sex effect. These are all X and Y genes.
-sex.effect.threshold = 10
+#the transcripts have smaller effects overall
+sex.effect.threshold = get.percentile(-log10(effect.p[,"sex_ge"]), 99.95)
 big.sex.effect <- which(-log10(effect.p[,"sex_ge"]) > sex.effect.threshold)
-big.sex.genes <- gene.info[match(names(big.sex.effect), gene.info[,"ensembl_gene_id"]),]
+big.sex.genes <- gene.info[match(names(big.sex.effect), gene.info[,id_col]),]
 
-effect.p <- effect.p[-big.sex.effect,]
+#also take out Ide itself
+ide.effect <- which(-log10(effect.p[,"scaled_Ide_expression"]) > 10)
+
+effect.p <- effect.p[-c(big.sex.effect, ide.effect),]
 ```
 
 we removed the genes with the sex effects greater than `r sex.effect.threshold`.
-There were `r nrow(big.sex.genes)` with effects this large. They are shown below
-and reside mostly on the sex chromosomes.
+There were `r nrow(big.sex.genes)` with effects this large. They are shown below.
+The genes reside mostly on the sex chromosomes.
 
 ```{r sex_genes}
 colnames(big.sex.genes) <- c("geneID", "geneName","entrezID", "Chr", "start", "end")
@@ -1112,7 +1211,8 @@ The following heat map shows enrichments for genes that were
 nominally significant for each main effect or interaction. 
 
 ```{r enrich, fig.width = 7, fig.height = 7}
-enrich <- lapply(sig.factor, function(x) gost(names(x), organism = "mmusculus", sources = c("GO", "KEGG", "CORUM", "HP", "REACTOME")))
+enrich <- lapply(sig.factor, function(x) gost(names(x), organism = "mmusculus", 
+  sources = c("GO", "KEGG", "CORUM", "HP", "REACTOME")))
 plot.enrichment.group(enrich, max.term.size = 3000, transformation = sqrt, max.char = 100)
 ```
 
@@ -1132,12 +1232,12 @@ if(length(age.geno.col) > 0){
     pdf(file.path(results.dir, "age_geno_int.pdf"), width = 7, height = 5)
       for(i in 1:length(sig.idx)){
         gene.id <- rownames(factor.fdr)[sig.idx[i]]
-        model <- lm(adj.expr[,gene.id]~plotting.df[,"age_batch"]*plotting.df[,"ordered_geno"])
+        model <- lm(adj.expr[,gene.id]~covar.mat[,"age_batch"]*covar.mat[,"ordered_geno"])
         #summary(model)
         #anova(model)
         #gene.id <- sample(rownames(factor.fdr), 1)
-        gene.name <- gene.info[which(gene.info[,"ensembl_gene_id"] == gene.id),"external_gene_name"]
-        interaction.plot(plotting.df[,"age_batch"], plotting.df[,"ordered_geno"], adj.expr[,gene.id], col = geno.cols, lwd = 3,
+        gene.name <- gene.info[which(gene.info[,id_col] == gene.id),"external_gene_name"]
+        interaction.plot(covar.mat[,"age_batch"], covar.mat[,"ordered_geno"], adj.expr[,gene.id], col = geno.cols, lwd = 3,
           xlab = "Age", ylab = "Expression", main = gene.name, trace.label = "genotype")
       }
     dev.off()
@@ -1160,12 +1260,12 @@ if(length(sex.geno.col) > 0){
     pdf(file.path(results.dir, "sex_geno_int.pdf"), width = 7, height = 5)
     for(i in 1:length(sig.idx)){
       gene.id <- rownames(factor.fdr)[sig.idx[i]]
-      model <- lm(adj.expr[,gene.id]~plotting.df[,"sex_ge"]*plotting.df[,"ordered_geno"])
+      model <- lm(adj.expr[,gene.id]~covar.mat[,"sex_ge"]*covar.mat[,"ordered_geno"])
       #summary(model)
       #anova(model)
       #gene.id <- sample(rownames(factor.fdr), 1)
-      gene.name <- gene.info[which(gene.info[,"ensembl_gene_id"] == gene.id),"external_gene_name"]
-      interaction.plot(plotting.df[,"sex_ge"], plotting.df[,"ordered_geno"], adj.expr[,gene.id], col = geno.cols, lwd = 3,
+      gene.name <- gene.info[which(gene.info[,id_col] == gene.id),"external_gene_name"]
+      interaction.plot(covar.mat[,"sex_ge"], covar.mat[,"ordered_geno"], adj.expr[,gene.id], col = geno.cols, lwd = 3,
         xlab = "Sex", ylab = "Expression", main = gene.name, trace.label = "genotype")
     }
     dev.off()
@@ -1177,7 +1277,7 @@ if(length(sex.geno.col) > 0){
 de.files <- get.files(here("Results", "for_paper"), want = c("num_de", "RDS"), full.names = TRUE)
 factor.labels <- c("sex_ge" = "sex", "ordered_geno" = "Klotho genotype", "age_batch" = "age")
 
-if(length(de.files) == 3){
+if(length(de.files) > 1){
   num.de <- lapply(de.files, readRDS)
   names(num.de) <- gsub(".RDS", "", gsub("num_de_", "", basename(de.files)))
   all.factors <- Reduce("union", lapply(num.de, names))
@@ -1218,8 +1318,8 @@ sig.geno.idx <- which(effect.fdr[,"ordered_geno"] <= fdr.thresh)
 sig.expr <- scaled.expr[names(sig.geno.idx),]
 
 #divide into groups based on carrier status
-alleles <- genotypes[1:5]
-allele.idx <- lapply(alleles, function(x) which(info[,"climb_geno"] == x))
+alleles <- levels(geno_factor)
+allele.idx <- lapply(alleles, function(x) which(geno_factor == x))
 names(allele.idx) <- alleles
 
 diff.expr <- lapply(allele.idx, function(x) sig.expr[,x])
@@ -1230,20 +1330,21 @@ expr.clust <- pam(mean.sig.expr, k = 2)
 col.order <- order(expr.clust$clustering)
 annot.col <- data.frame(as.factor(expr.clust$clustering))
 colnames(annot.col) <- "cluster"
-pheatmap(t(mean.sig.expr[col.order,ordered.geno]), show_colnames = FALSE, cluster_cols = FALSE, 
+pheatmap(t(mean.sig.expr[col.order,alleles]), show_colnames = FALSE, cluster_cols = FALSE, 
   cluster_rows = FALSE, annotation_col = annot.col)
 
-gene.names <- mouse.gene.table[match(rownames(annot.col), mouse.gene.table[,"ensembl_gene_id"]), "external_gene_name"]
-write.table(cbind(gene.names, annot.col)[order(annot.col[,1]),], file.path(results.dir, "DEG_clusters.txt"), 
-  sep = "\t", quote = FALSE)
+gene.names <- gene.info[match(rownames(annot.col), 
+  gene.info[,id_col]), "external_gene_name"]
+write.table(cbind(gene.names, mean.sig.expr, annot.col)[order(annot.col[,1]),], 
+  file.path(results.dir, "DEG_clusters.txt"), sep = "\t", quote = FALSE)
 ```
 
 ```{r deg_fig}
+cluster.id <- expr.clust$clustering
 if(subgroup[[1]] == 12){
-  cluster.id <- expr.clust$clustering
   png(here("Results", "for_paper", "deg_clusters.png"), width = 7, height = 3,  units = "in", res = 300)
-  scaled.mat <- t(apply(mean.sig.expr[col.order,ordered.geno], 1, scale))
-  dimnames(scaled.mat) <- dimnames(mean.sig.expr[,ordered.geno])
+  scaled.mat <- t(apply(mean.sig.expr[col.order,alleles], 1, scale))
+  dimnames(scaled.mat) <- dimnames(mean.sig.expr[,alleles])
 
   layout.mat <- matrix(c(1,2), nrow = 1)
   layout(layout.mat, widths = c(1, 0.2))
@@ -1345,10 +1446,10 @@ genes.
 
 ```{r enrich_by_group, fig.width = 5, fig.height = 5}
 vs.idx <- grep("VS", colnames(mean.sig.expr))
-vs.mean <- rowMeans(mean.sig.expr[,vs.idx])
+vs.mean <- rowMeans(mean.sig.expr[,vs.idx,drop=FALSE])
 
 fc.idx <- grep("FC", colnames(mean.sig.expr))
-fc.mean <- rowMeans(mean.sig.expr[,fc.idx])
+fc.mean <- rowMeans(mean.sig.expr[,fc.idx,drop=FALSE])
 
 plot(vs.mean, fc.mean, xlab = "VS mean expression", 
   ylab = "FC mean expression")
@@ -1437,7 +1538,7 @@ list.which <- "KEGG"
 
 if(list.which == "Agora"){
   #ad.gene.list <- read.delim(here("Data", "Human", "AD_genes.txt"), header = FALSE) #from book
-  ad.gene.list <- read.csv(here("Data", "Human", "gene-list.csv"), comment.char = "#")
+  ad.gene.list <- read.csv(here("Data", "Human", "agora-gene-list.csv"), comment.char = "#")
 
   #we can filter by a number of features:
   #filter to those with RNA evidence
@@ -1486,7 +1587,7 @@ if(list.which == "KEGG"){
 common.ad <- intersect(ad.genes, orthos[,"Human.Gene.Name"])
 ad.orthos <- orthos[match(common.ad, orthos[,"Human.Gene.Name"]),"Mouse.Ortholog.Name"]
 ad.ensembl <- intersect(gene.info[match(intersect(ad.orthos, gene.info[,"external_gene_name"]), 
-  gene.info[,"external_gene_name"]), "ensembl_gene_id"], rownames(effect.fdr))
+  gene.info[,"external_gene_name"]), id_col], rownames(effect.fdr))
 ad.sig <- intersect(rownames(mean.sig.expr), ad.ensembl)
 ```
 
@@ -1496,7 +1597,7 @@ ad.sig <- intersect(rownames(mean.sig.expr), ad.ensembl)
 plot.ad <- ad.ensembl
 #plot.ad <- ad.sig
 
-ad.names <- gene.info[match(plot.ad, gene.info[,"ensembl_gene_id"]),"external_gene_name"]
+ad.names <- gene.info[match(plot.ad, gene.info[,id_col]),"external_gene_name"]
 #write out the names we are using for comparison later
 gene.mat <- matrix(ad.names, ncol = 1)
 colnames(gene.mat) <- paste(list.which, "genes", sep = "_")
@@ -1504,7 +1605,7 @@ write_table_with_header(gene.mat, file.path(results.dir, "AD_genes.txt"),
   header = paste("Genes selected as AD genes from the", list.which, "list"))
 
 ad.idx <- match(plot.ad, rownames(scaled.expr))
-ordered.ind <- unlist(allele.idx[ordered.geno])
+ordered.ind <- unlist(allele.idx)
 ordered.expr <- scaled.expr[ad.idx,ordered.ind]
 rownames(ordered.expr) <- ad.names
 #row.order <- order(pam(ordered.expr, k = 2)$cluster)
@@ -1517,19 +1618,19 @@ imageWithText(ordered.expr[row.order,], use.pheatmap.colors = TRUE, show.text = 
   col.names = NULL, row.text.shift = 0.01)
 plot.dim <- par("usr")
 start.idx <- 0.5
-for(i in 1:length(ordered.geno)){
-  end.idx <- start.idx + length(allele.idx[ordered.geno][[i]]) - edge.nudge
-  draw.rectangle(start.idx, end.idx, 0+0.5, plot.dim[4]-0.5, border = "darkgray", lwd = 3)
-  draw.rectangle(start.idx, end.idx, plot.dim[4]-0.5, plot.dim[4]+0.5, fill = geno.cols[ordered.geno[i]])  
+for(i in 1:length(alleles)){
+  end.idx <- start.idx + length(allele.idx[alleles][[i]]) - edge.nudge
+  draw.rectangle(start.idx, end.idx, 0+0.5, plot.dim[4]-10, border = "darkgray", lwd = 3)
+  draw.rectangle(start.idx, end.idx, plot.dim[4]-10, plot.dim[4]+10, fill = geno.cols[i])
   mid.point <- mean(c(start.idx, end.idx))
-  text(x = mid.point, y = plot.dim[4], labels = ordered.geno[i])
+  text(x = mid.point, y = plot.dim[4], labels = alleles[i])
   start.idx <- end.idx + edge.nudge
 }
 #dev.off()
 ```
 
 ```{r ad_mean_expr}
-mean.ad <- sapply(allele.idx[ordered.geno], function(x) rowMeans(scaled.expr[ad.idx,x]))
+mean.ad <- sapply(allele.idx, function(x) rowMeans(scaled.expr[ad.idx,x]))
 sig.star <- rep("", length(ad.names))
 sig.star[which(ad.ensembl %in% ad.sig)] <- "*"
 rownames(mean.ad) <- paste0(ad.names, sig.star)
@@ -1546,20 +1647,20 @@ for(i in 1:length(ordered.geno)){
 }
 dev.off()
 
-mean.sig <- sapply(allele.idx[ordered.geno], function(x) rowMeans(scaled.expr[ad.sig,x]))
-rownames(mean.sig) <- gene.info[match(rownames(mean.sig), gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+mean.sig <- sapply(allele.idx, function(x) rowMeans(scaled.expr[ad.sig,x]))
+rownames(mean.sig) <- gene.info[match(rownames(mean.sig), gene.info[,id_col]), "external_gene_name"]
 row.order <- order(plot.decomp(mean.sig, plot.results = FALSE)$u[,1])
 
-png("~/Desktop/ad_means_sig.png", width = 10, height = 3, units = "in", res = 300)
+png("~/Desktop/ad_means_sig.png", height = 20, width = 3, units = "in", res = 300)
 par(bg = NA)
-imageWithText(t(mean.sig[row.order,]), use.pheatmap.colors = TRUE, show.text = FALSE,
-  row.text.shift = 0.02, row.text.adj = 1, col.text.shift = 0.13)
+imageWithText(mean.sig[row.order,], use.pheatmap.colors = TRUE, show.text = FALSE,
+  col.text.shift = 0.02, col.text.adj = 1, row.text.shift = 0.2, col.text.rotation = 0)
 plot.dim <- par("usr")
 for(i in 1:length(ordered.geno)){
   draw.rectangle(-35.5, 0, 6-i-0.4, 6-i+0.4, border = geno.cols[ordered.geno[i]], lwd = 3, fill = NA)
 }
 dev.off()
-
+ 
 #enrichments of these groups don't tell us much, because they
 #are just enriched for AD genes, which is why we selected them.
 #sig.decomp <- plot.decomp(mean.sig)
@@ -1579,14 +1680,13 @@ dev.off()
 
 
 ```{r fig_ad_marked}
-stop()
 if(subgroup[[1]] == 12){
   
 cluster.id <- expr.clust$clustering
   png(here("Results", "for_paper", "deg_clusters.png"), width = 7, height = 3.5,  units = "in", res = 300)
   par(bg = NA)
-  scaled.mat <- t(apply(mean.sig.expr[col.order,ordered.geno], 1, scale))
-  dimnames(scaled.mat) <- dimnames(mean.sig.expr[,ordered.geno])
+  scaled.mat <- t(apply(mean.sig.expr[col.order,alleles], 1, scale))
+  dimnames(scaled.mat) <- dimnames(mean.sig.expr[,alleles])
 
   layout.mat <- matrix(c(1,2), nrow = 1)
   layout(layout.mat, widths = c(1, 0.2))
@@ -1639,7 +1739,7 @@ cluster.id <- expr.clust$clustering
 
 ```{r deg_supp_table}
 
-sig.info <- gene.info[match(rownames(mean.sig.expr), gene.info[,"ensembl_gene_id"]),]
+sig.info <- gene.info[match(rownames(mean.sig.expr), gene.info[,id_col]),]
 expr.table <- mean.sig.expr
 colnames(expr.table)  <- paste0(colnames(expr.table), "_mean_expression")
 is.agora <- rep("no", nrow(sig.info))
@@ -1687,14 +1787,31 @@ Thus far, the VS mice do not look as if their brains have
 less AD-like expression.
 
 ```{r ad_interest, results = "asis", fig.width = 7, fig.height = 7}
-ad.interest <- c("App", "Apoe", "Celf1", "Trem2", "Sorl1", "Bin1", "Adam10", "Cr1l", "C2dap")
+ad.interest <- c("App", "Apoe", "Celf1", "Trem2", "Sorl1", "Bin1", "Adam10", "Cr1l")
 #pdf("~/Desktop/AD-genes.pdf")
 for(i in 1:length(ad.interest)){
-  cat("###", ad.interest[i], "\n")
-  gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== ad.interest[i]), "ensembl_gene_id"]
-  test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-    tx_name = gene.id, tx_label = ad.interest[i], ylab = "Expression (A.U.)",
-    order.by.mean = FALSE, plot.results = TRUE)
+  cat("###", ad.interest[i], "{.tabset .tabset-fade .tabset-pills}\n")
+  gene.id <- gene.info[which(gene.info[,"external_gene_name" ]%in% ad.interest[i]), id_col]
+  for(j in 1:length(gene.id)){
+    cat("####", gene.id[j], "\n")
+    test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+      tx_name = gene.id[j], tx_label = paste(ad.interest[i], gene.id), 
+      ylab = "Expression (A.U.)",
+      order.by.mean = FALSE, plot.results = TRUE)
+    cat("\n\n")
+  }
+
+  if(expression.type == "transcript"){
+    cat("#### Overall\n")
+    par(mfrow = c(1,1))
+    tx.expr <- lapply(allele.idx, function(x) t(scaled.expr[gene.id,x]))
+    plot.grouped.boxes(tx.expr, type = "matrix", print.vals = NA, 
+    cex.names = 0.5, main = ad.interest[i], ylab = "Transcript Expression (A.U.)", 
+    group.cols = geno.cols)
+    plot.dim <- par("usr")
+    segments(x0 = plot.dim[1], x1 = plot.dim[2], y0 = 0)
+    cat("\n\n")
+  }
   cat("\n\n")
 }
 #dev.off()
@@ -1702,12 +1819,22 @@ for(i in 1:length(ad.interest)){
 
 ```{r test_genes, eval = FALSE}
 test.interest <- c("Snrnp200", "Depdc5")
+#test.interest <- sample(gene.info[,"external_gene_name"], 1)
 pdf("~/Desktop/test_genes.pdf")
 for(i in 1:length(test.interest)){
-  gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== test.interest[i]), "ensembl_gene_id"]
+  gene.id <- gene.info[which(gene.info[,"external_gene_name" ]%in% test.interest[i]), id_col]
   test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-    tx_name = gene.id, tx_label = test.interest[i], ylab = "Expression (A.U.)",
+    tx_name = gene.id, tx_label = paste(test.interest[i], gene.id), ylab = "Expression (A.U.)",
     order.by.mean = FALSE, plot.results = TRUE)
+
+  if(expression.type == "transcript"){
+    par(mfrow = c(1,1))
+    tx.expr <- lapply(allele.idx, function(x) t(scaled.expr[gene.id,x]))
+    plot.grouped.boxes(tx.expr, type = "matrix", print.vals = NA, las = 2, 
+    main = test.interest[i], ylab = "Transcript Expression (A.U.)")
+    plot.dim <- par("usr")
+    segments(x0 = plot.dim[1], x1 = plot.dim[2], y0 = 0)
+  }
 }
 dev.off()
 ```
@@ -1716,10 +1843,20 @@ dev.off()
 if(subgroup[[1]] == 12){
   pdf(here("Results", "for_paper", "AD-related_expression.pdf"), width = 7, height = 7)
   for(i in 1:length(ad.interest)){
-    gene.id <- gene.info[which(gene.info[,"external_gene_name" ]== ad.interest[i]), "ensembl_gene_id"]
+    gene.id <- gene.info[which(gene.info[,"external_gene_name" ]%in% ad.interest[i]), id_col]
     test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-      tx_name = gene.id, tx_label = ad.interest[i], ylab = "Expression (A.U.)",
+      tx_name = gene.id, tx_label = paste(ad.interest[i], gene.id), ylab = "Expression (A.U.)",
       order.by.mean = FALSE, plot.results = TRUE, cex.labels = 1.5)
+  
+    if(expression.type == "transcript"){
+      par(mfrow = c(1,1))
+      tx.expr <- lapply(allele.idx, function(x) t(scaled.expr[gene.id,x]))
+      plot.grouped.boxes(tx.expr, type = "matrix", print.vals = NA, las = 2, 
+      main = ad.interest[i], ylab = "Transcript Expression (A.U.)")
+      plot.dim <- par("usr")
+      segments(x0 = plot.dim[1], x1 = plot.dim[2], y0 = 0)
+    }
+
   }
 dev.off()
 }
@@ -1798,11 +1935,21 @@ names(mouse.bd.genes) <- names(bd_genes)
 for(i in 1:length(bd_genes)){
   bd.with.ortho <- intersect(bd_genes[[i]], orthos[,"Human.Ensembl"])
   bd.idx <- match(bd.with.ortho, orthos[,"Human.Ensembl"])
-  mouse.bd.genes[[i]] <- orthos[bd.idx,c("Mouse.Ortholog.Ensembl", "Mouse.Ortholog.Name")]
+  bd.gene.id <- orthos[bd.idx,c("Mouse.Ortholog.Ensembl", "Mouse.Ortholog.Name")]
+  colnames(bd.gene.id) <- c("ensembl_gene_id", "external_gene_name")
+  if(expression.type == "gene"){
+    mouse.bd.genes[[i]] <- bd.gene.id
+  }
+  if(expression.type == "transcript"){
+    bd.gene.idx <- which(gene.info[,"ensembl_gene_id"] %in% bd.gene.id[,"ensembl_gene_id"])
+    bd.trans.id <- gene.info[bd.gene.idx,c("ensembl_transcript_id", "ensembl_gene_id", "external_gene_name")]
+    mouse.bd.genes[[i]] <- bd.trans.id
+  }
 }
 
-bd.for.gsea <- lapply(mouse.bd.genes, function(x) x[,1])
-saveRDS(bd.for.gsea, file.path(general.processed.data.dir, "Mouse_Biodomains_for_GSEA.RDS"))
+bd.for.gsea <- lapply(mouse.bd.genes, function(x) x[,id_col])
+saveRDS(bd.for.gsea, file.path(general.processed.data.dir, 
+  paste0("Mouse_Biodomains_", expression.type, "_for_GSEA.RDS")))
 
 #do the same for subdomains
 mouse.sbd.genes <- vector(mode = "list", length = length(sbd_genes))
@@ -1815,23 +1962,33 @@ for(i in 1:length(sbd_genes)){
     for(s in 1:length(sbd.list)){
       sbd.with.ortho <- intersect(sbd_genes[[i]][[s]], orthos[,"Human.Ensembl"])
       sbd.idx <- match(sbd.with.ortho, orthos[,"Human.Ensembl"])
-      sbd.list[[s]] <- orthos[sbd.idx,c("Mouse.Ortholog.Ensembl", "Mouse.Ortholog.Name")]
+      sbd.genes <- orthos[sbd.idx,c("Mouse.Ortholog.Ensembl", "Mouse.Ortholog.Name")]
+      colnames(sbd.genes) <- c("ensembl_gene_id", "external_gene_name")
+      if(expression.type == "gene"){
+        sbd.list[[s]] <- sbd.genes
+      }
+      if(expression.type == "transcript"){
+        sbd.gene.idx <- which(gene.info[,"ensembl_gene_id"] %in% sbd.genes[,"ensembl_gene_id"])
+        sbd.trans.id <- gene.info[sbd.gene.idx,c("ensembl_transcript_id", "ensembl_gene_id", "external_gene_name")]
+        sbd.list[[s]] <- sbd.trans.id
+      }
     }
     mouse.sbd.genes[[i]] <- sbd.list
   }
 }
 
 sbd.for.gsea <- lapply(mouse.sbd.genes, function(x) lapply(x, function(y) y[,1]))
-saveRDS(sbd.for.gsea, file.path(general.processed.data.dir, "Mouse_Subdomains_for_GSEA.RDS"))
+saveRDS(sbd.for.gsea, file.path(general.processed.data.dir, 
+  paste0("Mouse_Subdomains_", expression.type, "_for_GSEA.RDS")))
 
 ```
 
 ```{r go_terms}
-#also save gene lists for all GO terms in each biodomain
+#also save gene/transcript lists for all GO terms in each biodomain
 #This is how Greg Cary makes his enrichment boxplots. He
 #gets a normalized enrichment score for each GO term and plots
 #all those together for each biodomain
-#take any GO term with at least 3 genes
+#take any GO term with at least nim.term.size genes
 mouse_go_list <- human_go_list <- vector(mode = "list", length = length(bd_genes))
 names(mouse_go_list) <- names(human_go_list) <- names(bd_genes)
 for(bd in 1:length(bd_genes)){
@@ -1851,11 +2008,20 @@ for(bd in 1:length(bd_genes)){
   common_go_genes <- lapply(human_go_genes[no.dups], function(x) intersect(x, orthos[,"Human.Ensembl"]))
   mouse_go_genes <- lapply(common_go_genes, function(x) orthos[match(x, orthos[,"Human.Ensembl"]),"Mouse.Ortholog.Ensembl"])
   num.mouse <- sapply(mouse_go_genes, length)
-  mouse_go_list[[bd]] <- mouse_go_genes[which(num.mouse >= min.term.size)]
+  mouse_gene_list <- mouse_go_genes[which(num.mouse >= min.term.size)]
+  if(expression.type == "transcript"){
+    mouse.gene.idx <- lapply(mouse_gene_list, function(x) match(x, gene.info[,"ensembl_gene_id"]))
+    transcript.list <- lapply(mouse.gene.idx, function(x) gene.info[x[which(!is.na(x))],id_col])
+    mouse_go_list[[bd]] <- transcript.list
+  }else{
+    mouse_go_list[[bd]] <- mouse_gene_list
+  }
 }
-saveRDS(mouse_go_list, file.path(general.processed.data.dir, "Mouse_Biodomains_sub_GO_for_GSEA.RDS"))
-saveRDS(human_go_list, file.path(general.processed.data.dir, "Human_Biodomains_sub_GO_for_GSEA.RDS"))
 
+saveRDS(mouse_go_list, file.path(general.processed.data.dir, 
+  paste0("Mouse_Biodomains_sub_GO_for_GSEA_", expression.type, ".RDS")))
+saveRDS(human_go_list, file.path(general.processed.data.dir, 
+  paste0("Human_Biodomains_sub_GO_for_GSEA_", expression.type, ".RDS")))
 ```
 
 ## Biodomain Expression {.tabset .tabset-fade .tabset-pills}
@@ -1863,27 +2029,42 @@ saveRDS(human_go_list, file.path(general.processed.data.dir, "Human_Biodomains_s
 The following heat maps show the mean expression of genes
 across each biodomain. Each has been clustered by medoid
 clustering into the best number of clusters (always 2).
-The two variants seem to have opposing expression relative
-to the WT. This seems like an artefactual pattern. I'm not
-sure why it is so consistent.
+
+
+If we are looking at gene expression, the two variants seem 
+to have opposing expression relative to the WT. If we are 
+looking at transcripts, the genotypes don't look different
+at all, but the means are slightly different. There are many
+transcripts, so the means can be significantly different even
+if they don't look that different.
 
 ```{r biodomain_expression}
+mean.bd.val.file <- file.path(processed.data.dir, "mean_biodomain_expression.RDS")
 
-mean.bd.vals <- vector(mode = "list", length = length(mouse.bd.genes))
-names(mean.bd.vals) <- names(mouse.bd.genes)
+if(!file.exists(mean.bd.val.file)){
+  mean.bd.vals <- vector(mode = "list", length = length(mouse.bd.genes))
+  names(mean.bd.vals) <- names(mouse.bd.genes)
 
-for(bd in 1:length(mouse.bd.genes)){
-  bd.vals <- lapply(1:nrow(mouse.bd.genes[[bd]]), 
-    function(x) plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-      tx_name = mouse.bd.genes[[bd]][x,1], 
-      tx_label = mouse.bd.genes[[bd]][x,2], 
-      ylab = "Exression (A.U.)", plot.results = FALSE)[[1]])
+  for(bd in 1:length(mouse.bd.genes)){
+    #print(names(mouse.bd.genes)[bd])
+    bd.vals <- lapply(1:nrow(mouse.bd.genes[[bd]]), 
+      function(x) plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+        tx_name = mouse.bd.genes[[bd]][x,id_col], 
+        tx_label = mouse.bd.genes[[bd]][x,"external_gene_name"], 
+        plot.results = FALSE)[[1]])
 
-  has.vals <- which(sapply(bd.vals, length) > 0)
-  bd.mean <- t(sapply(bd.vals[has.vals], function(x) sapply(x[[1]], mean)))
-  rownames(bd.mean) <- sapply(bd.vals[has.vals], names)
-  mean.bd.vals[[bd]] <- bd.mean
+    has.vals <- which(sapply(bd.vals, length) > 0)
+    bd.mean <- t(sapply(bd.vals[has.vals], function(x) sapply(x[[1]], mean)))
+    rownames(bd.mean) <- sapply(bd.vals[has.vals], names)
+    mean.bd.vals[[bd]] <- bd.mean
+  }
+  saveRDS(mean.bd.vals, mean.bd.val.file)
+}else{
+  mean.bd.vals <- readRDS(mean.bd.val.file)
 }
+
+#boxplot(mean.bd.vals$"Mitochondrial Metabolism")
+#barplot(colMeans(mean.bd.vals$"Mitochondrial Metabolism"))
 ```
 
 ```{r cluster_bd, results = "asis", fig.width = 8, fig.height = 4}
@@ -1900,6 +2081,7 @@ if(!file.exists(clustered.gene.file)){
   names(clustered.genes) <- names(gene.enrich) <- names(mean.bd.vals)
 
   for(i in 1:length(mean.bd.vals)){
+    #print(names(mean.bd.vals)[bd])
     #test.k <- test.pam.k(mean.bd.vals[[i]], plot.results = FALSE, kseq = k.seq)
     #mean.cl.width <- sapply(test.k$cl.width, mean)
     #barplot(mean.cl.width)
@@ -1912,7 +2094,7 @@ if(!file.exists(clustered.gene.file)){
       organism = "mmusculus", source = c("GO", "KEGG", "REACTOME", "HP", "CORUM")))
     names(cluster.enrich) <- paste0("cluster", 1:k)
     gene.enrich[[i]] <- cluster.enrich
-      #plot.enrichment.group(cluster.enrich, max.term.size = 3000, n.terms = 30, cluster_cols = FALSE, plot.label = names(mean.bd.vals)[i])
+    #plot.enrichment.group(cluster.enrich, max.term.size = 3000, n.terms = 30, cluster_cols = FALSE, plot.label = names(mean.bd.vals)[i])
   }
   saveRDS(clustered.genes, clustered.gene.file)
   saveRDS(gene.enrich, clustered.enrich.file)
@@ -1921,9 +2103,9 @@ if(!file.exists(clustered.gene.file)){
   gene.enrich <- readRDS(clustered.enrich.file)
 }
 
-bd.means <- matrix(nrow = length(mean.bd.vals), ncol = 5)
+bd.means <- matrix(nrow = length(mean.bd.vals), ncol = length(alleles))
 rownames(bd.means) <- names(mean.bd.vals)
-colnames(bd.means) <- genotypes[1:5]
+colnames(bd.means) <- alleles
 
 #pdf("~/Desktop/test.pdf", width = 8, height = 4)
 for(i in 1:length(mean.bd.vals)){
@@ -1944,19 +2126,29 @@ for(i in 1:length(mean.bd.vals)){
     #barplot(cluster.means, col = geno.cols[names(cluster.means)])
   }
 
-  mean.order <- order(cluster.means)
   bd.means[i,] <- cluster.means
-  imageWithText(clustered.mat[mean.order,], 
+  imageWithText(clustered.mat, 
     show.text = FALSE, use.pheatmap.colors = TRUE, col.names = NULL)
   par(mar = c(4,4,4,2))
   #p values seem to depend only on how many genes are in the group
   diff.test <- aov.by.matrix(t(clustered.mat))
   diff.p <- summary(diff.test)[[1]]$"Pr(>F)"[1]
-  vioplot(t(clustered.mat[rev(mean.order),]),
-    main = "", horizontal = TRUE, 
-    las = 2, col = geno.cols[rownames(clustered.mat)[rev(mean.order)]])
-  segments(x0 = 0, y0 = 0, y1 = 5.7)
+  vioplot(t(clustered.mat), main = "", horizontal = TRUE, las = 2, col = geno.cols,
+    names = rep("", nrow(clustered.mat)), axes = FALSE)
+  axis(1)
+  plot.dim <- par("usr")
+  segments(x0 = 0, y0 = plot.dim[3], y1 = plot.dim[4])
+  mtext("Expression (A.U.)", side = 1, line = 2.5)
   mtext(names(mean.bd.vals)[i], side = 3, outer = TRUE, font = 2, line = -2.5)
+  plot.height <- plot.dim[4] - plot.dim[3]
+  plot.width <- plot.dim[2] - plot.dim[1]
+  nudge.y <- 0.03
+  nudge.x <- 0.02
+  label.y <- segment_region((plot.dim[3]+(plot.height*nudge.y)), 
+    (plot.dim[4]-(plot.height*nudge.y)), 
+    nrow(clustered.mat))
+  label.x <- plot.dim[1] + ((plot.dim[2]-plot.dim[1])*nudge.x)
+  text(x = label.x, y = label.y, labels = alleles)
   cat("\n\n")  
 }
 #dev.off()
@@ -1976,10 +2168,12 @@ layout.mat <- matrix(c(1,2), nrow = 1)
 layout(layout.mat, widths = c(1, 0.5))
 par(mar = c(4,18, 2,1))
 imageWithText(signif(bd.means[row.order,], 2), split.at.vals = TRUE, 
-  col.scale = c("blue", "brown"), grad.dir = "ends", row.text.shift = 0.15,
+  col.scale = c("blue", "brown"), grad.dir = "ends", row.text.shift = 0.25,
   col.text.shift = 0.03)
 par(mar = c(4,1,2,2))
 barplot(bd.mean.decomp$v[row.order,1], horiz = TRUE, xlab = "PC1")
+plot.dim <- par("usr")
+segments(x0 = 0, y0 = plot.dim[3], y1 = plot.dim[4])
 ```
 
 
@@ -1998,14 +2192,16 @@ if(!file.exists(sbd.mean.file)){
   names(mean.sbd.vals) <- names(mouse.sbd.genes)
 
   for(bd in 1:length(mouse.sbd.genes)){
+    #cat(names(mouse.sbd.genes)[bd], "\n")
     if(length(mouse.sbd.genes[[bd]]) > 0){
       sub.means <- vector(mode = "list", length = length(mouse.sbd.genes[[bd]]))
       names(sub.means) <- names(mouse.sbd.genes[[bd]])
       for(s in 1:length(mouse.sbd.genes[[bd]])){
+        #cat("\t", names(mouse.sbd.genes[[bd]])[s], "\n")
         sbd <- mouse.sbd.genes[[bd]][[s]]
         sbd.vals <- lapply(1:nrow(sbd), 
           function(x) plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-            tx_name = sbd[x,1], tx_label = sbd[x,2], 
+            tx_name = sbd[x,id_col], tx_label = sbd[x,"external_gene_name"], 
             ylab = "Expression (A.U.)", plot.results = FALSE)[[1]])
 
         has.vals <- which(sapply(sbd.vals, length) > 0)
@@ -2059,15 +2255,14 @@ if(!file.exists(clustered.sd.file)){
 ```
 
 ```{r plot_clustered_sbd, results = "asis", fig.width = 8, fig.height = 4}
-
 num.sbd <- sum(sapply(mean.sbd.vals, length))
-sbd.means <- matrix(nrow = num.sbd, ncol = 5)
+sbd.means <- matrix(nrow = num.sbd, ncol = length(alleles))
 sbd.names <- vector(mode = "list", length = length(mean.sbd.vals))
 for(i in 1:length(mean.sbd.vals)){
   sbd.names[[i]] <- paste(names(mean.sbd.vals)[i], names(mean.sbd.vals[[i]]), sep = " : ")
 }
 rownames(sbd.means) <- unlist(sbd.names)
-colnames(sbd.means) <- genotypes[1:5]
+colnames(sbd.means) <- alleles
 
 #pdf("~/Desktop/test_sd.pdf", width = 8, height = 4)
 idx <- 1
@@ -2096,9 +2291,10 @@ for(bd in 1:length(mean.sbd.vals)){
       #p values seem to depend only on how many genes are in the group
       diff.test <- aov.by.matrix(t(clustered.mat))
       diff.p <- summary(diff.test)[[1]]$"Pr(>F)"[1]
-      vioplot(t(clustered.mat[ordered.geno,]), main = "", horizontal = TRUE, 
-        las = 2, col = geno.cols[ordered.geno])
-      segments(x0 = 0, y0 = 0, y1 = 5.7)
+      vioplot(t(clustered.mat), main = "", horizontal = TRUE, 
+        las = 2, col = geno.cols, names = rep("", length(alleles)))
+      plot.dim <- par("usr")
+      segments(x0 = 0, y0 = 0, y1 = plot.dim[4])
       mtext(rownames(sbd.means)[idx], side = 3, outer = TRUE, font = 2, line = -2.5)
       cat("\n\n")  
       idx <- idx + 1
@@ -2148,26 +2344,50 @@ For each mouse KEGG pathway, is there differential expression across genotypes?
 The results are printed to pdfs in the results folder. There are too many
 KEGG pathways to display here.
 
+
 ```{r diff_kegg, fig.width = 7, fig.height = 12}
-mean.kegg.vals <- vector(mode = "list", length = length(mouse.path.gene.ensembl))
-names(mean.kegg.vals) <- names(mouse.path.gene.ensembl)
+mean.kegg.val.file <- file.path(results.dir, "mean_kegg_expression.RDS")
 
-for(k in 1:length(mouse.path.gene.ensembl)){
-  k.vals <- lapply(1:length(mouse.path.gene.ensembl[[k]]), 
-    function(x) plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-      tx_name = mouse.path.gene.ensembl[[k]][x], 
-      tx_label = NA, ylab = "Expression (A.U.)", plot.results = FALSE)[[1]])
+if(!file.exists(mean.kegg.val.file)){
+  mean.kegg.vals <- vector(mode = "list", length = length(mouse.path.gene.ensembl))
+  names(mean.kegg.vals) <- names(mouse.path.gene.ensembl)
 
-  has.vals <- which(sapply(k.vals, length) > 0)
-  k.mean <- t(sapply(k.vals[has.vals], function(x) sapply(x[[1]], mean)))
-  #pheatmap(k.mean)
-  mean.kegg.vals[[k]] <- k.mean
+  for(k in 1:length(mouse.path.gene.ensembl)){
+    #cat(names(mouse.path.gene.ensembl)[k], "\n")
+    k.vals <- lapply(1:length(mouse.path.gene.ensembl[[k]]), 
+      function(x) plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+        tx_name = mouse.path.gene.ensembl[[k]][x], 
+        tx_label = NA, ylab = "Expression (A.U.)", plot.results = FALSE)[[1]])
+
+    has.vals <- which(sapply(k.vals, length) > 0)
+    k.mean <- t(sapply(k.vals[has.vals], function(x) sapply(x[[1]], mean)))
+    #pheatmap(k.mean)
+    mean.kegg.vals[[k]] <- k.mean
+  }
+  saveRDS(mean.kegg.vals, mean.kegg.val.file)
+}else{
+  mean.kegg.vals <- readRDS(mean.kegg.val.file)
 }
+```
 
+Below is the qq plot for p values just for an ANOVA
+looking for mean differences across the genotypes.
+We picked an arbitraty threshold (marked below) for 
+looking at examples.
+
+```{r test_diff, fig.width = 5, fig.height = 5}
+logp.thresh = 10
 test.diff <- lapply(mean.kegg.vals, aov.by.matrix)
 test.p <- sapply(test.diff, function(x) summary(x)[[1]]$"Pr(>F)"[1])
-#qqunif.plot(test.p)
+qqunif.plot(test.p, plot.label = "KEGG pathway differences by genotype")
+abline(h = logp.thresh)
+```
 
+The heat map below shows the average expression in the top 
+KEGG pathways for each genotype. The pathways are the same 
+as we've seen before: metabolism and neurodegeneration.
+
+```{r plot_example_kegg, fig.height = 7, fig.width = 5}
 if(group.representation == "means"){
   mean.mean <- t(sapply(mean.kegg.vals, colMeans))
 }
@@ -2176,366 +2396,26 @@ if(group.representation == "eigengene"){
   #mean.mean <- sapply(mean.kegg.vals, function(x) plot.decomp(t(x), plot.results = FALSE)$u[,1])
 }
 
-#pdf(file.path(results.dir, "kegg.pdf"), width = 7, height = 42)
-#pheatmap(mean.mean, cluster_cols = FALSE)
-#dev.off()
-
-term.name = "Virion - Rotavirus"
-term.name = "Ribosome"
-term.name = "Biotin metabolism"
+sig.path <- which(-log10(test.p) > 10)
+term.name = names(sig.path)[2]
 term.idx <- which(names(mean.kegg.vals) == term.name)
 #boxplot(mean.kegg.vals[[term.idx]], main = term.name, ylab = "Scaled Expression")
 #pheatmap(mean.kegg.vals[[term.idx]], main = term.name, show_rownames = FALSE, cluster_cols = FALSE)
 #mean.kegg.vals[[term.idx]]
-```
 
 
-## Latent Pathway Identification Analysis (LPIA)
+top.decomp <- plot.decomp(mean.mean[sig.path,], plot.results = FALSE)
+row.order <- order(top.decomp$u[,1])
+layout(matrix(c(1,2), nrow = 1), widths = c(1, 0.2))
+par(mar = c(4,16,4,2))
+imageWithText(mean.mean[sig.path[rev(row.order)],], show.text = FALSE, split.at.vals = TRUE,
+  col.scale = c("blue", "brown"), grad.dir = "ends", col.text.rotation = 0,
+  col.text.adj = 0.5, col.text.shift = 0.1, row.text.shift = 0.3, 
+  main = "Top KEGG pathways")
+par(mar = c(20,2,4,2))
+imageWithTextColorbar(mean.mean[sig.path[row.order],], split.at.vals = TRUE,
+  col.scale = c("blue", "brown"), grad.dir = "ends", cex = 1)
 
-Here we use a method developed in Pham et al. 2011
-called Latent Pathway Identification Analyais (LPIA).
-This is a network-based method that combines expression
-data with GO-KEGG intersections into a network in which
-an edge exists if there are genes in the GO-KEGG intersection.
-The edge is weighted by the product of two terms: (1) the 
-Jaccard index of the two terms (in terms of genes), and 
-(2) the differential expression of the genes in the overlapping
-genes. In Pam et al. they were comparing two groups, so they 
-used the median differential expression. We could compare the
-FC and VS carriers directly to do this, or we can use a different
-term that is based on our linear model with ordered groups.
-
-They then project this bipartite network onto the the KEGG 
-terms. The nodes in this network are linked if they share 
-at least one biological process. The edge weights are larger
-if the two KEGG terms relate more GO terms. We would maybe
-use the Biodomain projection? We can try both. 
-
-They use eigenvector centrality to calculate centrality for 
-each pathway.
-
-Below, we generate lists of KEGG pathways and Biodomain 
-intersections and calculate Jaccard indices for all 
-intersections. 
-
-We take up the rest of the analysis in 1.KEGG_and_Biodomains.Rmd
-for historical reasons.
-
-```{r intersect}
-
-intersect_bd_kegg <- function(bd.list, kegg.list){
-
-  intersect.list <- vector(mode = "list", length = length(bd.list))
-  names(intersect.list) <- names(bd.list)
-
-  for(bd in 1:length(bd.list)){
-    k.intersections <- vector(mode = "list", length = length(kegg.list))
-    names(k.intersections) <- names(kegg.list)  
-    
-    for(k in 1:length(kegg.list)){
-      k.intersections[[k]] <- intersect(bd.list[[bd]], kegg.list[[k]])
-    }
-
-    has.genes <- which(sapply(k.intersections, length) >= min.term.size)
-    intersect.list[[bd]] <- k.intersections[has.genes]
-  }
-  return(intersect.list)
-}
-
-bd_kegg_jaccard <- function(bd.list, kegg.list){
-
-  jacc.mat <- matrix(NA, nrow = length(bd.list), ncol = length(kegg.list))
-  rownames(jacc.mat) <- names(bd.list)
-  colnames(jacc.mat) <- names(kegg.list)
-
-  for(bd in 1:length(bd.list)){
-    k.intersections <- vector(mode = "list", length = length(kegg.list))
-    names(k.intersections) <- names(kegg.list)  
-    
-    for(k in 1:length(kegg.list)){
-      jacc.mat[bd,k] <- jaccard.ind(bd.list[[bd]], kegg.list[[k]])
-    }
-
-  }
-  return(jacc.mat)
-}
-
-
-#save grouped form, so we can do the boxplot thingy that Greg Cary does.
-mouse.bd.k.intersections <- intersect_bd_kegg(bd.list = bd.for.gsea, kegg.list = mouse.path.gene.ensembl)
-mouse.bd.k.jacc <- bd_kegg_jaccard(bd.list = bd.for.gsea, kegg.list = mouse.path.gene.ensembl)
-saveRDS(mouse.bd.k.intersections, file.path(general.processed.data.dir, "Mouse_KEGG_Intersections_for_GSEA.RDS"))
-saveRDS(mouse.bd.k.jacc, file.path(general.processed.data.dir, "Mouse_KEGG_Intersection_Jaccard.RDS"))
-
-human.bd.k.intersections <- intersect_bd_kegg(bd_genes, hum.path.gene.ensembl)
-human.bd.k.jacc <- bd_kegg_jaccard(bd_genes, hum.path.gene.ensembl)
-saveRDS(human.bd.k.intersections, file.path(general.processed.data.dir, "Human_KEGG_Intersections_for_GSEA.RDS"))
-saveRDS(human.bd.k.jacc, file.path(general.processed.data.dir, "Human_KEGG_Intersections_Jaccard.RDS"))
-```
-
-
-```{r intersect_vals}
-
-mean.bd.k.file <- file.path(results.dir, paste0("KEGG_BD_mean_expression_", group.representation, ".RDS"))
-
-if(!file.exists(mean.bd.k.file)){
-  mean.bd.k.vals <- vector(mode = "list", length = length(mouse.path.gene.ensembl))
-  names(mean.bd.k.vals) <- names(mouse.path.gene.ensembl)
-
-  #for each kegg pathway
-  for(k in 1:length(mouse.path.gene.ensembl)){
-    kegg.path <- names(mouse.path.gene.ensembl)[k]
-    has.intersection <- which(sapply(lapply(mouse.bd.k.intersections, function(x) which(names(x) == kegg.path)), length) > 0)
-    if(length(has.intersection) == 0){next()}
-
-    intersect.mean.vals <- vector(mode = "list", length = length(has.intersection))
-    names(intersect.mean.vals) <- names(has.intersection)
-
-    all.val.mat <- matrix(NA, nrow = length(mouse.bd.genes), ncol = 5)
-    rownames(all.val.mat) <- names(mouse.bd.genes)
-    colnames(all.val.mat) <- genotypes[1:5]
-
-    #pull out all gene values for intersections with biodomains
-    for(bd in 1:length(has.intersection)){
-      kegg.idx <- sapply(mouse.bd.k.intersections[has.intersection], function(x) which(names(x) == kegg.path))
-      
-      intersect.ids <- mouse.bd.k.intersections[[has.intersection[bd]]][[kegg.idx[bd]]]
-      bd.k.vals <- lapply(intersect.ids, 
-        function(x) plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-        tx_name = x, tx_label = NA, ylab = "Expression (A.U.)", plot.results = FALSE)[[1]])
-
-      has.vals <- which(sapply(bd.k.vals, length) > 0)
-      k.mean <- t(sapply(bd.k.vals[has.vals], function(x) sapply(x[[1]], mean)))
-      #pheatmap(k.mean)
-      rownames(k.mean) <- intersect.ids[has.vals]
-      intersect.mean.vals[[bd]] <- k.mean
-    }
-    has.vals <- which(sapply(intersect.mean.vals, length) > 0)
-    if(group.representation == "means"){
-      mean.mat <- t(sapply(intersect.mean.vals[has.vals], colMeans))
-    }
-    if(group.representation == "eigenegene"){
-      mean.mat <- t(sapply(intersect.mean.vals[has.vals], function(x) plot.decomp(x, plot.results = FALSE)$v[,1]))
-    }
-    all.val.mat[rownames(mean.mat), colnames(mean.mat)] <- mean.mat[rownames(mean.mat), colnames(mean.mat)]
-    mean.bd.k.vals[[k]] <- all.val.mat
-    #pheatmap(mean.bd.k.vals[[k]], main = names(path.gene.ensembl)[k], cluster_cols = FALSE, cluster_rows = FALSE)
-  }
-  saveRDS(mean.bd.k.vals, mean.bd.k.file)
-}else{
-  mean.bd.k.vals <- readRDS(mean.bd.k.file)
-}
-
-has.vals <- which(sapply(mean.bd.k.vals, length) > 0)
-min.val <- min(unlist(mean.bd.k.vals[has.vals]), na.rm = TRUE)
-max.val <- max(unlist(mean.bd.k.vals[has.vals]), na.rm = TRUE)
-#custom.dist <- unlist(mean.bd.k.vals[has.vals])
-custom.dist <- rnorm(1000, 0, 0.2)
-#hist(custom.dist)
-
-kegg.plot.dir <- file.path(results.dir, "KEGG_plots")
-if(!file.exists(kegg.plot.dir)){dir.create(kegg.plot.dir)}
-
-
-pdf(file.path(kegg.plot.dir, "kegg_bd_intersections.pdf"), width = 7, height = 7)
-hist(unlist(mean.bd.k.vals), xlab = "Mean Value", main = "Mean Biodomain-Kegg Intersection Expression")
-
-for(i in 1:length(mean.bd.k.vals)){
-  if(length(mean.bd.k.vals[[i]]) > 0){
-    par(mar = c(4,12,2,2))
-    neg.vals <- length(which(mean.bd.k.vals[[i]] < 0))
-    pos.vals <- length(which(mean.bd.k.vals[[i]] > 0))
-    if(neg.vals > 0 && pos.vals > 0){
-      col.scale = c("blue", "brown")
-      grad.dir = "ends"
-      split.at.vals = TRUE
-    }
-    if(neg.vals > 0 && pos.vals == 0){
-      col.scale = "blue"
-      grad.dir = "low"
-      split.at.vals = TRUE
-    }
-    if(neg.vals == 0 && pos.vals > 0){
-      col.scale = "brown"
-      grad.dir = "high"
-      split.at.vals = TRUE
-    }
-
-  imageWithText(mat = mean.bd.k.vals[[i]], main = names(mean.bd.k.vals)[i], 
-      col.scale = col.scale, grad.dir = grad.dir, col.text.rotation = 0, 
-      col.text.adj = 0.5, col.text.shift = 0.06, row.text.shift = 0.15, 
-      main.shift = 0.05, color.fun = "linear", split.at.vals = split.at.vals,
-      light.dark = "f", global.color.scale = TRUE, global.min = min.val, 
-      global.max = max.val)
-
-  }
-}
-dev.off()
-
-global.min <- min(unlist(mean.bd.k.vals), na.rm = TRUE)
-global.max <- max(unlist(mean.bd.k.vals), na.rm = TRUE)
-#plot all results for each biodomain on one page
-for(bd in 1:length(bd_genes)){
-  bd.mat <- t(sapply(mean.bd.k.vals, function(x) if(length(x) > 0){x[bd,]}else{rep(NA, 5)}))
-  has.vals <- which(!is.na(rowMeans(bd.mat)))
-
-  #plot.decomp(t(bd.mat[has.vals,]), label.points = TRUE, main = names(bd_genes)[bd])
-  #bd.decomp <- plot.decomp(bd.mat[has.vals,], main = names(bd_genes)[bd])
-  #plot.decomp(bd.mat[has.vals,], main = names(bd_genes)[bd], label.points = TRUE)
-
-  if(length(has.vals) > 0){
-    png(file.path(kegg.plot.dir, paste0("bd_kegg_intersections_", names(bd_genes)[bd], ".png")), 
-      width = 7, height = max(c(length(has.vals)/7, 7)), units = "in", res = 200)
-    row.order <- hclust(dist(bd.mat[has.vals,]))$order
-    par(mar = c(4,16, 2, 2))
-    test <- imageWithText(mat = bd.mat[has.vals[row.order],], main = names(bd_genes)[bd], 
-        col.scale = c("blue", "brown"), grad.dir = "ends", col.text.rotation = 0, 
-        col.text.adj = 0.5, col.text.shift = 0.01, row.text.shift = 0.15, 
-        main.shift = 0.01, color.fun = "linear", split.at.vals = TRUE,
-        color.dist = NULL, light.dark = "f", global.color.scale = TRUE,
-        global.min = global.min, global.max = global.max)
-    dev.off()
-  }
-}
-```
-
-
-We put all the results together to see if there were any combinations
-that stood out overall. The plot below shows that the expression across
-all KEGG pathway and biodomain intersections separates the genotypes
-nicely. Along the first principal component, the VS genotypes are negative,
-the WT mice are at 0, and the FC genotypes are positive.
-
-```{r all_kegg, fig.width = 5, fig.height = 5}
-
-big.mat <- Reduce("rbind", mean.bd.k.vals)
-group.names <- unlist(lapply(1:length(mean.bd.k.vals), function(x) if(length(mean.bd.k.vals[[x]] > 0)){paste(names(mean.bd.k.vals)[x], rownames(mean.bd.k.vals[[x]]), sep = "--")}))
-rownames(big.mat) <- group.names
-#pdf("~/Desktop/big.mat.pdf", height = 20, width = 10)
-#pheatmap(big.mat, cluster_rows = FALSE, cluster_cols = FALSE)
-#dev.off()
-not.na <- which(!is.na(rowSums(big.mat)))
-
-sub.mat <- big.mat[not.na,]
-process.decomp <- plot.decomp(t(sub.mat), label.points = TRUE, xlim = c(-1, 1), 
-  cols = geno.cols[match(names(geno.cols), colnames(sub.mat))], cex = 1.5)
-process.vals <- process.decomp$v
-
-pc.order <- order(process.decomp$u[,1])
-barplot(process.decomp$u[pc.order,1], 
-  col = geno.cols[match(names(geno.cols), colnames(sub.mat))][pc.order], 
-  names = colnames(sub.mat)[pc.order], ylab = "PC1")
-abline(h = 0)
-#process.decomp <- plot.decomp(big.mat[has.vals,], label.points = TRUE)
-#plot(process.decomp$v, type = "n")
-#text(process.decomp$v[,1], process.decomp$v[,2], labels = colnames(big.mat))
-#process.vals <- process.decomp$u
-
-```
-
-The processes don't have any particular clustering as
-shown below. But there are some pathways that have 
-large negative and positive values in the first PC.
-
-```{r process_pc, fig.width = 8, fig.height = 7}
-plot(process.decomp$v, xlab = "PC1", ylab = "PC2", pch = 16)
-large.neg <- which(process.decomp$v[,1] < -0.04)
-large.pos <- which(process.decomp$v[,1] > 0.05)
-text(process.decomp$v[large.pos,1], process.decomp$v[large.pos,2], labels = rownames(sub.mat)[large.pos], cex = 0.5)
-text(process.decomp$v[large.neg,1], process.decomp$v[large.neg,2], labels = rownames(sub.mat)[large.neg], cex = 0.5)
-```
-
-The plots below show the mean expression for each of these
-processes with large PC values. 
-
-```{r processes, fig.width = 10, fig.height = 5}
-pc.order <- order(process.vals[,1], decreasing = TRUE)
-most.neg <- tail(pc.order, 20)
-most.pos <- head(pc.order, 20)
-#most.pos <- pc.order[1620:1630] #check middle
-
-#test.mat <- process.decomp$v[most.neg,1,drop=FALSE]
-#rownames(test.mat) <-  rownames(sub.mat)[most.neg]
-#test.mat[order(test.mat[,1]),]
-
-par(mar = c(4, 24, 2, 2))
-layout(matrix(c(1,2), ncol = 2), widths = c(1, 0.5))
-imageWithText(sub.mat[rev(most.neg),], col.scale = c("blue", "brown"), split.at.vals = TRUE,
-  grad.dir = "ends", col.text.rotation = 0, col.text.adj = 0.5, col.text.shift = 0.05, row.text.cex = 0.7,
-  row.text.shift = 0.15, main = "Large Negative PC pathways")
-par(mar = c(3.8, 0, 1.8, 2))
-barplot(process.vals[most.neg,1], horiz = TRUE)
-mtext("PC1", side = 1, line = 2.2)
-
-
-#test.mat <- process.decomp$v[most.pos,1,drop=FALSE]
-#rownames(test.mat) <-  rownames(sub.mat)[most.pos]
-#test.mat[order(test.mat[,1]),]
-
-par(mar = c(4, 18, 2, 0))
-#row.order <- hclust(dist(sub.mat[most.pos,]))$order
-layout(matrix(c(1,2), ncol = 2), widths = c(1, 0.5))
-imageWithText(sub.mat[most.pos,], col.scale = c("blue", "brown"), split.at.vals = TRUE,
-  grad.dir = "ends", col.text.rotation = 0, col.text.adj = 0.5, col.text.shift = 0.05, row.text.cex = 0.7,
-  row.text.shift = 0.15, main = "Large Positive PC pathways")
-par(mar = c(3.8, 0, 1.8, 2))
-barplot(process.vals[rev(most.pos),1], horiz = TRUE)
-mtext("PC1", side = 1, line = 2.2)
-```
-
-Can we build a biodomain network that shows us where the 
-biggest differences are? The biodomains were designed such
-
-```{r bipartite}
-#This is quite derived, but let's see what happens when we collect
-#the loadings on PC1 for each kegg-biodomain pair.
-
-umat <- matrix(0, nrow = length(mouse.path.gene.ensembl), ncol = length(bd_genes))
-rownames(umat) <- names(mouse.path.gene.ensembl)
-colnames(umat) <- names(bd_genes)
-split.names <- strsplit(rownames(sub.mat), "--")
-split.kegg <- sapply(split.names, function(x) x[1])
-split.bd <- sapply(split.names, function(x) x[2])
-for(i in 1:nrow(process.vals)){
-  umat[split.kegg[i], split.bd[i]] <- process.vals[i,1]
-}
-
-#pheatmap(umat)
-no.vals <- which(rowSums(umat) == 0)
-has.vals <- which(rowSums(umat) != 0)
-row.order <- order(rowSums(umat[has.vals,]))
-col.order <- order(colSums(umat[has.vals,]))
-
-pdf(file.path(kegg.plot.dir, "KEGG_Umat.pdf"), width = 9, height = 40)
-pheatmap(umat[has.vals[row.order],col.order], cluster_cols = TRUE, cluster_rows = TRUE)
-dev.off()
-```
-
-The following image shows just the rows with strong loadings
-for a given biodomain-KEGG intersection.
-
-```{r strong_vals, fig.width = 8, fig.height = 9}
-
-#filter to rows with the largest values
-#hist(umat)
-lower.thresh <- -0.04
-upper.thresh <- 0.04
-high.val <- which(apply(umat, 1, function(x) any(x > upper.thresh)))
-low.val <- which(apply(umat, 1, function(x) any(x < lower.thresh)))
-strong.vals <- union(high.val, low.val)
-
-pheatmap(umat[strong.vals,])
-
-#pdf("~/Desktop/sub_mat.pdf", width = 8, height = 9)
-#pheatmap(umat[strong.vals,])
-#dev.off()
-
-#net <- graph_from_incidence_matrix(abs(umat[strong.vals,]))
-#plot(net)
-
-#pdf("~/Desktop/bip_plot.pdf", width = 10, height = 10)
-#plot_bipartite(abs(umat[strong.vals,]))
-#dev.off()
 ```
 
 ```{r logout}
