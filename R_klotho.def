@@ -29,9 +29,12 @@ R --slave -e 'install.packages("baffle",repos="https://cran.rstudio.com/")'
 R --slave -e 'install.packages("parallel",repos="https://cran.rstudio.com/")'
 R --slave -e 'install.packages("foreach",repos="https://cran.rstudio.com/")'
 R --slave -e 'install.packages("doParallel",repos="https://cran.rstudio.com/")'
+R --slave -e 'install.packages("DT",repos="https://cran.rstudio.com/")'
+
 
 R --slave -e 'BiocManager::install("pathview")'
 R --slave -e 'BiocManager::install("clusterProfiler")'
+R --slave -e 'BiocManager::install("DESeq2")'
 
 mkdir -p /payload/
 exec /bin/bash R --no-restore --no-save --quiet "$@"
