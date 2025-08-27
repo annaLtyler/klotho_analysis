@@ -3043,7 +3043,7 @@ down.enrich <- gost(names(down.with.kl), organism = "mmusculus", evcodes = TRUE,
 
 go.parts <- c("GO:CC", "GO:MF", "GO:BP")
 
-pdf(paste0("~/Desktop/", "GO_gene_net.pdf"), width = 30, height = 20)
+pdf(file.path(results.dir, paste0("GO_gene_net_", carrier.text, ".pdf")), width = 30, height = 20)
     up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000,
         plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
         mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
@@ -3054,7 +3054,7 @@ pdf(paste0("~/Desktop/", "GO_gene_net.pdf"), width = 30, height = 20)
 dev.off()
 
 for(i in 1:length(go.parts)){
-    pdf(paste0("~/Desktop/", gsub(":", "_", go.parts[i]), "_net.pdf"), width = 15, height = 10)
+    pdf(file.path(results.dir, paste0(gsub(":", "_", go.parts[i]), "_net.pdf")), width = 15, height = 10)
     up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000, filter.source = go.parts[i],
         plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
         mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
