@@ -149,7 +149,7 @@ geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
 ```
 
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
-needed.libraries <- c("pheatmap", "DESeq2", "DT", "vioplot", "RColorBrewer",
+needed.libraries <- c("synapser", "pheatmap", "DESeq2", "DT", "vioplot", "RColorBrewer",
   "gprofiler2", "cluster", "pathview", "clusterProfiler", "stringr", "igraph", "wordcloud",
   "wordcloud2")
 load_libraries(needed.libraries)

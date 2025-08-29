@@ -1559,3 +1559,131 @@ plot(log(canonical.table), log(null.avg), xlim = c(5.5, 7.5), ylim = c(6, 7), pc
 abline(0, 1)
 text(log(canonical.table), log(null.avg), labels = pt.names)
 ```
+
+## from 1a.KEGG_and_Biodomains
+
+work about network localzation and more visualizations of enrichments
+They weren't particularly enlightening
+
+What about localization in the network? How spread out 
+are these nodes? Does that matter?
+
+I selected 5000 random samples of genes using the number of 
+genes in the biodomains. I got a distribution of node sizes 
+and average node distances for each group. There are a couple 
+domains in Proteostasis and Structural Stabilization that have
+lower distances relative to their size than the random distribution.
+They are in Ribosome and COVID (read virus response?) KEGG pathways.
+
+So Ribosome genes and COVID (virus response genes?) are closer
+to each other in this network than we expect by chance. Not 
+particularly interesting...
+
+```{r node_clustering, eval = FALSE}
+
+get_list_dist <- function(net, gene.list, plot.results = TRUE){
+    edges <- as_edgelist(net) #we need to remove the weights from the network
+    flat.net <- graph_from_edgelist(edges, directed = FALSE)
+    node.dist <- distances(flat.net)
+
+    gene.name <- lapply(gene.list, function(x) mouse.genes[match(x, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"])
+    common.name <- lapply(gene.name, function(x) intersect(V(flat.net)$name, x))
+    common.dist <- lapply(common.name, function(x) node.dist[x,x])
+    avg.dist <- sapply(common.dist, mean)
+    
+    if(plot.results){
+        par(mfrow = c(1,2), mar = c(4,12,4,2))
+        barplot(sort(avg.dist, decreasing = TRUE), las = 2, horiz = TRUE)
+
+        par(mar = c(4,4,4,2))
+        n.nodes <- sapply(common.name, length)
+        plot(n.nodes, avg.dist)
+        #boxplot(lapply(bd.dist, function(x) x[upper.tri(x, diag = FALSE)]), las = 2)
+    }
+    invisible(common.dist)
+}
+
+bd.list.len <- sapply(bd.list, length)
+rnd_sample <- lapply(1:5000, function(x) sample(unique(unlist(bd.list)), sample(bd.list.len, 1))) #pull some random samples from the biodomainlist
+rnd_cl <- get_list_dist(large.comp, rnd_sample, plot.results = FALSE)
+rnd.dist <- sapply(rnd_cl, mean)
+rnd.nodes <- sapply(rnd_cl, function(x) if(class(x)[1] == "matrix"){nrow(x)}else{0})
+#plot(rnd.nodes, rnd.dist) #the randomly sampled cluster sizes and distances in the large component
+#plot.hexbin.as.plot(rnd.nodes, rnd.dist)
+
+pdf("~/Desktop/cl_test.pdf", width = 5, height = 5)
+for(bd in 1:length(kegg.bd.list)){
+    if(length(kegg.bd.list[[bd]]) > 0){
+        test <- get_list_dist(large.comp, kegg.bd.list[[bd]], plot.results = FALSE)
+        test.dist <- sapply(test, mean)
+        test.nodes <- sapply(test, function(x) if(class(x)[1] == "matrix"){nrow(x)}else{0})
+        plot.hexbin.as.plot(rnd.nodes, rnd.dist, main = names(kegg.bd.list)[bd], xlim = c(0, 200))
+        points(test.nodes, test.dist, pch = 16)
+
+        #check <- intersect(which(test.nodes > 25), which(test.dist < 4))
+        #names(kegg.bd.list[[bd]])[check]
+    }
+}
+dev.off()
+```
+
+ 
+The biodomain-KEGG intersections that were significantly
+enriched in the large connected component are the following.
+Purple vertices show biodomains, green show Kegg pathways.
+Edge color and width reflect the -log10(p) of the enrichment.
+
+```{r enrich_int, fig.width = 7, fig.height = 7}
+enrich.p.mat <- matrix(NA, nrow = length(bd.list), ncol = length(kegg.list))
+rownames(enrich.p.mat) <- names(bd.list)
+colnames(enrich.p.mat) <- names(kegg.list)
+for(bd in 1:length(kegg.bd.list)){
+    bd.name <- names(kegg.bd.list)[bd]
+    if(length(kegg.bd.list[[bd]]) == 0){next()}
+    for(k in 1:length(kegg.bd.list[[bd]])){
+        kegg.name <- names(kegg.bd.list[[bd]])[k]
+        test.set <- kegg.bd.list[[bd]][[k]]
+        sub.enrich <- gene_set_enrich(test.set, large.id, test.id)
+        enrich.p.mat[bd.name, kegg.name] <- sub.enrich
+    }
+}
+sig.enrich <- which(enrich.p.mat <= 1e-5, arr.ind = TRUE)
+int.enrich <- cbind(rownames(enrich.p.mat)[sig.enrich[,1]], colnames(enrich.p.mat)[sig.enrich[,2]])
+test <- graph_from_edgelist(int.enrich, directed = FALSE)
+ecol <- colors.from.values(-log10(enrich.p.mat[sig.enrich]), col.scale = "blue", grad.dir = "high")
+vcol <- rep("#7FC97F", vcount(test)) #kegg color
+vcol[which(V(test)$name %in% names(bd.list))] <- "#beaed4" #biodomain color
+
+par(mar = c(0,8,0,6))
+plot(test, vertex.color = vcol, edge.color = ecol, edge.width = -log10(enrich.p.mat[sig.enrich])/2)
+
+#imageWithTextColorbar(matrix(-log10(enrich.p.mat[sig.enrich]), ncol = 1), col.scale = "blue", 
+#    grad.dir = "high", cex = 1, bar.lwd = 2)
+```
+
+
+### Enrichments Localized {.tabset .tabset-fade .tabset-pills}
+
+The following plots show where these intersections lie in the 
+network.
+
+```{r enrich_net, fig.width = 20, fig.height = 20, results = "asis"}
+#pdf("~/Desktop/enriched_intersections.pdf", width = 20, height = 20)
+for(i in 1:nrow(int.enrich)){
+    bd.name <- int.enrich[i,1]
+    bd.idx <- which(names(kegg.bd.list) == bd.name)
+    kegg.name <- int.enrich[i,2]
+    kegg.idx <- which(names(kegg.bd.list[[bd.idx]]) == kegg.name)
+    cat("####", bd.name, "-", kegg.name, "\n")
+
+    int.genes <- kegg.bd.list[[bd.idx]][[kegg.idx]]
+    int.names <- mouse.genes[match(int.genes, mouse.genes[,"ensembl_gene_id"]),"external_gene_name"]
+    common.genes <- intersect(int.names, large.name)
+
+    plot_net(large.comp, layout.mat = comp.layout, vertex.size = 5, edge.width.factor = 5,
+    highlight.nodes = common.genes, highlight.width = 0.05, highlight.height = 0.02, 
+    highlight.cex = 1.5, plot.label = paste(bd.name, kegg.name, sep = " - "))
+    cat("\n\n")
+}
+#dev.off()
+```

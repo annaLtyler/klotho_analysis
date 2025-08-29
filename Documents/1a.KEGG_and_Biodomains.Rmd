@@ -10,6 +10,8 @@ output:
     toc_float: yes
 ---
 
+## Introduction
+
 The purpose of this workflow is to explore the effect of
 two human Klotho variants on gene expression in mice. It 
 follows directly from 1.Klotho_Initial_Data_Visualization.Rmd
@@ -63,10 +65,58 @@ path.fdr.thresh = 0.001 #FDR threshold for selecting by R-squared
                                    #the eigengene version gives very strange results that I'm
                                    #not sure what to make of, so I'm abandoning that for now.
 group.representation <- "means"
+
+adjust.ide <- TRUE
+
+rank.normalize <- TRUE #If TRUE, the expression values are rankZ normalized to reduce the effect of ourliers
 ```
 
-The subgroup analyzed in this workflow is:
-`r paste(names(subgroup), subgroup, sep = " = ")`
+```{r is_final}
+#set flag for writing out results to a for_paper directory
+#only write out results if we are using the final parameters
+#we've decided on for the paper. This check can be reset when
+#we decide on the final settings.
+
+#set to TRUE. If any of the following conditions are met, 
+#we are not using the final prameters.
+final.params <- TRUE 
+
+if(expression.type == "transcript"){final.params = FALSE}
+if(min.term.size != 10){final.params = FALSE}
+if(fdr.thresh != 0.1){final.params = FALSE}
+if(length(subgroup) != 1 && subgroup[[1]] != 12){final.params = FALSE}
+if(!remove.qc){final.params = FALSE}
+if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC > WT > VS
+if(group.representation != "means"){final.params = FALSE}
+if(!adjust.ide){final.params = FALSE}
+if(rank.normalize){final.params = FALSE}
+
+if(final.params){
+  final.text <- "This IS the final set of parameters for the paper."
+}else{
+  final.text <- "This IS NOT not the final set of parameters for the paper."
+}
+```
+
+## Paramters set
+
+This workflow used the following parameters:
+
+Subgroup: `r paste(names(subgroup), subgroup, sep = " = ")`
+
+Genotypes analyzed: `r geno.used`
+
+Units of expression: `r expression.type`
+
+Minimum number of genes in a group: `r min.term.size`
+
+FDR threshold for significance: `r fdr.thresh`
+
+Adjusted for Ide expression: `r as.character(adjust.ide)`
+
+Rank Z normalization of gene expression: `r as.character(rank.normalize)`
+
+`r final.text`
 
 ```{r load_code}
 all.fun <- list.files(here("Code"), full.names = TRUE)
@@ -103,13 +153,17 @@ mouse.genes <- read.delim(here("Data", "general", paste0("mouse_", expression.ty
 #read in the appropriate covariate table
 covar.mat <- read.table(file.path(processed.data.dir, 
     paste0("covariates_", carrier.text, ".csv")), sep = ",", header = TRUE, row.names = 1)
-
+    
 #convert to a data frame with appropriate ordered factors.
 covar.table <- data.frame("sequencingBatch" = as.factor(covar.mat[,"sequencingBatch"]),
     "sex_ge" = as.factor(covar.mat[,"sex_ge"]),
     "age_batch" = ordered(covar.mat[,"age_batch"], levels = c("4", "12")),
-    "ordered_geno" = ordered(covar.mat[,"ordered_geno"], levels = ordered.geno),
-    "scaled_Ide_expression" = as.numeric(covar.mat[,"scaled_Ide_expression"]))
+    "ordered_geno" = ordered(covar.mat[,"ordered_geno"], levels = ordered.geno))
+
+if(adjust.ide){
+    #add Ide expression if requested
+    covar.table$scaled_Ide_expression <- as.numeric(covar.mat[,"scaled_Ide_expression"])
+}
 rownames(covar.table) <- rownames(covar.mat)
 
 test.factor <- covar.table$ordered_geno
@@ -143,7 +197,7 @@ gene insulin degrading enzyme (Ide) encoded on chromosome 19 at
 to make sure that variation we see in this experiment is not related
 to untracked variation in Ide. Here we look at Ide expression in our
 mouse population, identify any correlated genes, and add Ide expression
-as a covariate in case it is having an effect on our results.
+as a covariate, if specified, in case it is having an effect on our results.
 
 The histogram below shows scale Ide expression in out population. 
 There is a clear bimodal distribution. 
@@ -184,12 +238,30 @@ write.table(ide.table, file.path(processed.data.dir,
 #stripchart(as.numeric(ide.table[,"normalized_Ide_expr"])~as.factor(ide.table[,"carrier_status"]), vertical = TRUE, method = "jitter")
 ```
 
-We adjusted the expression by non-age covariates.
+We adjusted the expression by non-age covariates and Ide expression if specified.
 
 ```{r adjust}
-dummy.covar <- dummy_covar(covar.table[,c("sequencingBatch", "sex_ge")])
-dummy.covar <- cbind(dummy.covar, "scaled_Ide_expression" = covar.table[,"scaled_Ide_expression"])
-adj_expr <- adjust(t(scaled.expr), dummy.covar)
+dummy.covar <- as.matrix(dummy_covar(covar.table[,c("sequencingBatch", "sex_ge")]))
+
+if(adjust.ide){
+    #remove Ide from our gene expression matrix
+    ide.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == "Ide"), "ensembl_gene_id"]
+    ide.idx <- which(rownames(scaled.expr) == ide.id)
+    pared.expr <- scaled.expr[-ide.idx,]
+    #test_adj_expr <- adjust(t(pared.expr), dummy.covar)
+    dummy.covar <- cbind(dummy.covar, "scaled_Ide_expression" = covar.table[,"scaled_Ide_expression"])
+}
+
+adj_expr <- adjust(t(pared.expr), dummy.covar, retain.intercept = FALSE)
+if(rank.normalize){
+    adj_expr <- apply(adj_expr, 2, rankZ)
+}
+
+#plot(test_adj_expr, adj_expr);abline(h = 0) #adding Ide expression doesn't change things too much, but it does change some things
+#test.dist <- test_adj_expr - adj_expr
+#hist(test.dist)
+#which(test.dist > 2, arr.ind = TRUE)
+#cat(colnames(adj_expr)[which(test.dist > 1, arr.ind = TRUE)[,2]], sep = "\n")
 ```
 
 We made a set of matrices for which rows were KEGG-Biodomain 
@@ -646,12 +718,13 @@ merge_mean_mats <- function(mat_list){
     return(sub.vals)
 }
 
+
 #individuals is a vector of individual names if you only want to plot
 #a subset of individuals
 gene_vioplot <- function(gene.name, plot.label = "", 
     stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
     autoflip.stat.y = FALSE, plot.results = TRUE,
-    individuals = NULL){
+    individuals = NULL, remove.outliers = FALSE){
 
     if(is.null(individuals)){
         ind.idx <- 1:nrow(adj_expr)
@@ -661,6 +734,7 @@ gene_vioplot <- function(gene.name, plot.label = "",
 
     gene.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene.name),"ensembl_gene_id"]
     geno.expr <- lapply(geno.idx, function(x) adj_expr[x,gene.id])
+    
     if(plot.results){
         test_effect(adj_expr[ind.idx,gene.id], test.factor[ind.idx], 
             plot.result = TRUE, stat.x = stat.x, stat.y = stat.y,
@@ -1925,11 +1999,11 @@ diag(test.jacc) <- 0
 
 
 
-pdf("~/Desktop/jaccard.pdf", width = 9, height = 20)
+#pdf("~/Desktop/jaccard.pdf", width = 9, height = 20)
 par(mar = c(4,30, 4, 2))
 test.idx <- 3
 barplot(sort(test.jacc[test.idx,]), horiz = TRUE, las = 2, main = rownames(test.jacc)[test.idx], xlim = c(0, max(test.jacc)))
-dev.off()
+#dev.off()
 
 scaled.deg <- degree(high.net)
 for(i in 1:vcount(test.net)){
@@ -1952,12 +2026,12 @@ for(i in 1:vcount(test.net)){
 plot(high.deg, scaled.deg)
 
 
-pdf("~/Desktop/scaled_net.pdf", width = 20, height = 20)
+#pdf("~/Desktop/scaled_net.pdf", width = 20, height = 20)
 plot(high.net, vertex.color = V(high.net)$vertex.color, 
     vertex.size = scale.between.vals(scaled.deg*3, 5, 20),
     layout = layout_nicely, main = "Positive Pathways", edge.width = high.r2*20,
     edge.color = ecol, vertex.label.cex = scale.between.vals(scaled.deg/2, 1, 3))
-dev.off()
+#dev.off()
 
 ```
 
@@ -2168,12 +2242,12 @@ up.in.vs.description <- mito$Description[match(gsub("*", "", up.in.vs.id, fixed 
 #There are many differentially expressed mitochondrial genes,
 #but I'm not sure what to do with that.
 #glutathione metabolism is up in the VS animals...
-pdf("~/Desktop/mito.pdf", width = 10, height = 10)
+#pdf("~/Desktop/mito.pdf", width = 10, height = 10)
 geno.nets <- net_by_geno(int_result = corr_result, p.thresh = net.thresh, 
     plot.result = TRUE, layout.mat = net.layout, title.level = "####",
     highlight.nodes = gsub("*", "", names(up.in.vs), fixed = FALSE),
     highlight.width = 0.06, highlight.height = 0.03)
-dev.off()
+#dev.off()
 
 mt.idx <- which(mouse.genes[,"chromosome_name"] == "MT")
 mt.id <- mouse.genes[mt.idx,"ensembl_gene_id"]
@@ -2272,37 +2346,22 @@ dev.off()
 
 ```
 
-## Gene-gene correlations
+## Gene-gene correlations and Klotho genotype
 
-Ultimately, we are interested in the interaction between
-Apoe and Klotho in terms of AD susceptibility. We will 
-test this explicitly later, but here we can get a sense
-of how these genes are related in this system.
+Do gene-gene correlations depend on genotype? In other
+words, does Klotho genotype affect the gene-gene correlation
+network? What interpretation might that have? The space of
+possibilities is too great, so below we build gene-gene-klotho 
+correlation networks and try to interpret them specifically.
 
-We are seeing a lot of lipid metabolism terms in these,
-and it's possible that cholesterol is at the center of
-all of this. 
+To test whether Klotho genotype has an effect on the gene-gene 
+correlation network, we fit a linear model using each gene in 
+turn as the explanatory and response variable and added genotype 
+as an interaction term. These models are directed because the 
+residuals of the independent variable differ depending on which 
+gene is dependent and independent.
 
-APP regulates brain APOE and cholesterol metabolism through
-the lipoprotein receptor LRP1 (Liu et al. 2007, Neuron, 
-pmid: 17920016). Overexpression of LDLR inhibits amyloid
-deposition and increases extracellular A-beta clearance
-(Kim et al. 2009, Neuron, pmid: 20005821). 
 
-Cholesterol is also used to make vitamin D, which is 
-also Klotho related. Klotho forms a complex with FGF23
-to suppress conversion of inactive vitamin D to its 
-active form. Vitamin D increases Klotho expression 
-(more details in pmid: 38213484).
-
-What are the correlations among expression of these genes 
-in these mice?
-
-The heatmap below shows a strong negative correlation between
-Apoe expression and that of Lrp1 and App, and a weaker negative
-correlation between Apoe and Ldlr. Apoe, Lrp1, and Ldlr are
-positively correlated with each other. Klotho and Fgf23 are 
-not really correlated with anything.
 
 ```{r correlation_fun}
 test_corr_int <- function(gene.id){
@@ -2663,19 +2722,19 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
     autoplace.text = FALSE, x.samples = 5, y.samples = 20, text.window.x = 2, 
     text.window.y = 4){
 
-    par(mar = c(4,4,4,2))
-
     ind.col <- sapply(test.factor, function(x) geno.cols[which(names(geno.cols) == x)])
-    g1.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene1), "ensembl_gene_id"]
+    g1.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene1), "ensembl_gene_id"][1]
     if(length(g1.id) == 0){stop(paste("I couldn't find", gene1))}
-    g2.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene2), "ensembl_gene_id"]
+    g2.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene2), "ensembl_gene_id"][1]
     if(length(g2.id) == 0){stop(paste("I couldn't find", gene2))}
 
     #fit additive models explaining each gene's expression with
     #the other gene's expression and genotype
     #get the residuals from the model
-    add.forward <- lm(adj_expr[,g2.id]~adj_expr[,g1.id]+test.factor)
-    add.reverse <- lm(adj_expr[,g1.id]~adj_expr[,g2.id]+test.factor)
+    test.df <- data.frame(adj_expr[,g1.id], adj_expr[,g2.id], test.factor)
+    colnames(test.df) <- c("g1", "g2", "genotype")
+    add.forward <- lm(g2~g1+genotype, data = test.df)
+    add.reverse <- lm(g1~g2+genotype, data = test.df)
     resid.forward <- resid(add.forward)
     resid.reverse <- resid(add.reverse)
 
@@ -2684,8 +2743,9 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
     int.reverse <- lm(adj_expr[,g1.id]~adj_expr[,g2.id]*test.factor)
 
     if(plot.predictions){
-        min.forward <- lm(adj_expr[,g2.id]~adj_expr[,g1.id])
-        min.reverse <- lm(adj_expr[,g1.id]~adj_expr[,g2.id])
+        par(mar = c(4,4,4,2))
+        min.forward <- lm(g2~g1, data = test.df)
+        min.reverse <- lm(g1~g2, data = test.df)
 
         pred.forward.min <- predict(min.forward) #predict gene2 expression using just gene1
         pred.reverse.min <- predict(min.reverse) #predict gene1 expression using just gene2
@@ -2763,14 +2823,12 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
         plot.text(paste(gene2, "->", gene1), cex = 2, font = 2)
     }
 
-
     #get the p values for the interaction terms
     int.idx <- which(rownames(coef(summary(int.forward))) == "adj_expr[, g1.id]:test.factor.L")
     forward.int.p <- threshold_p(coef(summary(int.forward))[int.idx,"Pr(>|t|)"])
     reverse.int.p <- threshold_p(coef(summary(int.reverse))[int.idx,"Pr(>|t|)"])
 
     if(plot.results){
-        
         #layout.mat <- get.layout.mat((length(geno.idx)*2))
         layout.mat <- matrix(1:((length(geno.idx)+1)*2), nrow = 2, byrow = TRUE)
         #add a plot at end of each row for the correlations and the p values
@@ -2783,40 +2841,44 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
         layout.mat <- rbind(layout.mat[1:2,], reverse.label, layout.mat[3,])
         layout(layout.mat, widths = c(rep(0.8, 4), 1), heights = c(0.2, 1, 0.2, 1))
         #layout.show(max(layout.mat))
+    }
 
-        #forward direction
-        forward.stats <- reverse.stats <- matrix(NA, ncol = 2, nrow = length(geno.idx))
-        rownames(forward.stats) <- rownames(reverse.stats) <- names(geno.idx)
-        colnames(forward.stats) <- colnames(reverse.stats) <- c("r", "p")
+    #forward direction
+    forward.stats <- reverse.stats <- matrix(NA, ncol = 2, nrow = length(geno.idx))
+    rownames(forward.stats) <- rownames(reverse.stats) <- names(geno.idx)
+    colnames(forward.stats) <- colnames(reverse.stats) <- c("r", "p")
 
-        #remove the effect of genotype
-        dummy.factor <- dummy_covar(as.matrix(test.factor, ncol = 1))
-        adj1 <- adjust(adj_expr[,g1.id,drop=FALSE], dummy.factor)
-        adj2 <- adjust(adj_expr[,g2.id,drop=FALSE], dummy.factor)
+    #remove the effect of genotype
+    dummy.factor <- dummy_covar(as.matrix(test.factor, ncol = 1))
+    adj1 <- adjust(adj_expr[,g1.id,drop=FALSE], dummy.factor)
+    adj2 <- adjust(adj_expr[,g2.id,drop=FALSE], dummy.factor)
         
-        plot.with.model(adj1, adj2, col = ind.col,
-            xlab = gene1, ylab = gene2, 
-            main = "overall", report = "cor.test", cex.lab = cex.lab)
+    plot.with.model(adj1, adj2, col = ind.col,
+        xlab = gene1, ylab = gene2, 
+        main = "overall", report = "cor.test", cex.lab = cex.lab, plot.results = plot.results)
 
-        for(g in 1:length(geno.idx)){
-            ind.idx <- geno.idx[[g]]
-            forward.stats[g,] <- plot.with.model(adj_expr[ind.idx,g1.id], resid.forward[ind.idx], 
-                col = geno.cols[g], xlab = gene1, ylab = paste(gene2, "residuals"), 
-                main = names(geno.cols)[g], report = "cor.test", cex.lab = cex.lab)
-        }
+    for(g in 1:length(geno.idx)){
+        ind.idx <- geno.idx[[g]]
+        forward.stats[g,] <- plot.with.model(adj_expr[ind.idx,g1.id], resid.forward[ind.idx], 
+            col = geno.cols[g], xlab = gene1, ylab = paste(gene2, "residuals"), 
+            main = names(geno.cols)[g], report = "cor.test", cex.lab = cex.lab, 
+            plot.results = plot.results)
+    }
+    
+    plot.with.model(adj2, adj1, col = ind.col,
+        xlab = gene2, ylab = gene1, 
+        main = "all", report = "cor.test", cex.lab = cex.lab, plot.results = plot.results)
         
-        plot.with.model(adj2, adj1, col = ind.col,
-            xlab = gene2, ylab = gene1, 
-            main = "all", report = "cor.test", cex.lab = cex.lab)
+    #reverse direction
+    for(g in 1:length(geno.idx)){
+        ind.idx <- geno.idx[[g]]
+        reverse.stats[g,] <- plot.with.model(adj_expr[ind.idx,g2.id], resid.reverse[ind.idx], 
+            col = geno.cols[g], xlab = gene2, ylab = paste(gene1, "residuals"), 
+            main = names(geno.cols)[g], report = "cor.test", cex.lab = cex.lab,
+            plot.results = plot.results)
+    }
         
-        #reverse direction
-        for(g in 1:length(geno.idx)){
-            ind.idx <- geno.idx[[g]]
-            reverse.stats[g,] <- plot.with.model(adj_expr[ind.idx,g2.id], resid.reverse[ind.idx], 
-                col = geno.cols[g], xlab = gene2, ylab = paste(gene1, "residuals"), 
-                main = names(geno.cols)[g], report = "cor.test", cex.lab = cex.lab)
-        }
-        
+    if(plot.results){
         #compare the correlation coefficients
         barplot(rbind(forward.stats[,1], reverse.stats[,1]), beside = TRUE, 
             col = rbind(geno.cols, geno.cols), density = c(NA, 50), 
@@ -2843,24 +2905,14 @@ directed_residuals <- function(gene1, gene2, plot.results = TRUE, report = "cor.
         legend(x = 0.2, y = 1, legend = names(geno.cols), fill = geno.cols)
         legend(x = 0.6, y = 1, legend = c("forward", "reverse"), 
             fill = c("white", "darkgray"), density = c(0, 50))
-        
-        result <- list("forward.stats" = forward.stats, "reverse.stats" = reverse.stats)
-        invisible(result)
     }
+        
+    result <- list("forward.stats" = forward.stats, "reverse.stats" = reverse.stats)
+    invisible(result)
 }
 
+
 ```
-
-To test whether Klotho genotype has an effect on these correlations,
-we can check for interactions between Klotho genotype and the 
-gene-gene relationships.
-
-We ran a linear model using each gene in turn as the explanatory
-and response variable and added genotype as an interaction term.
-The volcano plot below shows the relationship between the effect
-size of the interaction term and the -log10(p value). We picked
-interaction terms above -log10(p) = 2, shown by the horizontal 
-line.
 
 ```{r interaction_correlations}
 #term.name <- "APP Metabolism"
@@ -2898,13 +2950,22 @@ if(!file.exists(corr_result_file)){
 
 pair.int.effect <- corr_result[[1]]
 pair.int.p <- corr_result[[2]]
+#too many to plot!
 ```
 
 ### Gene-gene interaction significance
 
-The plot below shows the qq plot for the interaction p values.
-The horizontal line marks where we have drawn our significance
-threshold.
+We tested all directed pairs for genes in the intersection of the
+biodomains and kegg pathways. There were `r length(test.id)` genes
+in this subset. That's plenty! We tested `r length(pair.int.p)`
+directed pairs. 
+
+The qq plot for the p values is shown below. As is typical for 
+these highly correlated biological networks, the p values are 
+pretty inflated. It looks as if there is only one dot above the
+threshold, but there are multiple pairs in that point.
+
+
 
 ```{r qq}
 net.thresh = 10^(-6)
@@ -2912,17 +2973,13 @@ qqunif.plot(as.vector(pair.int.p))
 abline(h = -log10(net.thresh))
 ```
 
-The following volcano plot shows the effect sizes of the 
-interaction term compared with the -log10(p) of the interaction
-term. The horizontal line shows the threshold above which we 
-are considering the interactions significant.
-
-I've turned off plotting, because the data are huge
 
 ```{r kl_int, eval = FALSE}
-plot(pair.int.effect, -log10(pair.int.p), xlab = "Effect Size", ylab = "-log10(p)")
-abline(h = -log10(net.thresh))
-``
+#DO NOT RUN!
+#too much data to plot when we test all pairs
+#plot(pair.int.effect, -log10(pair.int.p), xlab = "Effect Size", ylab = "-log10(p)")
+#abline(h = -log10(net.thresh))
+```
 
 ```{r get_sig}
 sig.effect <- which(pair.int.p <= net.thresh, arr.ind = TRUE); #significant
@@ -2939,93 +2996,763 @@ genes. At p value of `r net.thresh`, there were
 `r nrow(sig.effect)` correlations that depended significantly on 
 genotype (`r signif(frac.sig*100, 2)`%).
 
-### A directed network
+### A directed interaction network
 
-The interaction network is directed because the interaction term
-when one gene is the explanatory variable is differet from when 
-the other gene is the explanatory variable. Below we plot the 
-directed network for the APP Metabolism biodomain. The blue 
+The full interaction network is plotted below. Blue 
 edges denote negative interactions and the brown arrows denote 
-positive interactions. 
+positive interactions. The network is fairly modular and has a
+giant connected component. We are plotting the network as directed
+and will explore the value of this level of detail below.
 
 ```{r dir_net, fig.width = 10, fig.height = 10}
 #get a layout for all networks
 dir.net <- corr_net(int_result = corr_result, p.thresh = net.thresh, plot.result = FALSE)
 net.layout <- get_layout(dir.net)
 
-#pdf("~/Desktop/dir.net.pdf", width = 10, height = 10)
+#pdf("~/Desktop/dir.net.pdf", width = 20, height = 20)
 plot_net(dir.net, layout.mat = net.layout,
     vertex.size = 1, plot.label = term.name)
 #dev.off()
 ```
 
+```{r pick_example}
+net.edges <- as_edgelist(dir.net)
+#which(net.edges == "Srsf5", arr.ind = TRUE)
+#rnd.idx <- sample(ecount(dir.net), 1)
+#gene1 <- net.edges[rnd.idx,1]; gene2 <- net.edges[rnd.idx,2]
+#gene1 <- "Zfp729a"; gene2 <- "Zfp266"
+gene1 <- "Trim37"; gene2 <- "Tnnc2"
+```
+
+```{r plot_int, eval = FALSE}
+#a shortcut to plotting all interaction plots for a given pair
+
+quartz(width = 11, height = 6)
+directed_residuals(gene1, gene2, cex.lab = 1.5)
+
+quartz(width = 5, height = 7.5)
+directed_residuals(gene1, gene2, plot.results = FALSE, plot.predictions = TRUE, cex.lab = 1.5)
+
+quartz(width = 6, height = 7)
+directed_residuals(gene1, gene2, plot.results = FALSE, plot.geno.effect = TRUE, 
+    stat.x = 0.1, stat.y = 0.9, cex.lab = 1.2, autoplace.text = FALSE, 
+    autoflip.stat.y = TRUE)
+```
+
 To better illustrate why the edges are directed, we can look
-at one in more detail. Below we see that Mmp2 and Usp8 have
-a directed interaction. Mmp2 expression explains Usp8 expression
-differentially across the genotypes (top row). However, Usp8 
-expression cannot be used to explain Mmp2 expression in any 
-genotype (bottom row). The top bar plot compares the correlation
-coefficients across the genotypes for the forward and reverse
-interaction. An increase in Mmp2 is associated with a decrease
-in Usp8 in the FC animals, but an increase in Usp8 in the VS
-animals. However an increase in Usp8 is not associated with
-a change in Mmp2 in any of the genotypes.
+at one in more detail. Below we see that `r gene1` and `r gene2` 
+have a directed interaction. `r gene1` expression explains 
+`r gene2` expression differentially across the genotypes (top row). 
+However, `r gene2` expression cannot be used to explain `r gene2` 
+expression in any genotype (bottom row). 
+
+The top bar plot compares the correlation coefficients across the 
+genotypes for the forward and reverse interaction. 
 
 The bottom bar plot compares the significance
 (-log10(p)) for the forward and reverse interaction across 
-genotype. In increase in Mmp2 is significantly associated
-with Usp8 expression in the FC and VS animals. However,
-an increase in Usp8 is not significantly associated with 
-Mmp2 expression in any genotype.
-
-Mmp2 (matrix metallopeptidase 2) enables metalloendopeptidase 
-activity and is involved in the response to amyloid beta. Usp8 
-(ubiquitin specific peptidates 8) enables cysteine-type 
-deubiquitinase activity and is involved in endosome organization 
-and protein deubiquitination.
+genotype. 
 
 ```{r dir_test, fig.width = 11, fig.height = 6}
-
-#gene1  <- "App"; gene2 <- "Apoe" #example of bi-directional interaction
-gene1 <- "Mmp2"; gene2 <- "Usp8" #example of one-way interaction
-#gene1  <- "Apoe"; gene2 <- "App"
-#gene1  <- "Sqstm1"; gene2 <- "Bach1"
-
 #gene_vioplot(gene1)
 #gene_vioplot(gene2, stat.y = 0.2)
 #gene_vioplot(gene2, stat.y = 0.9)
 
-#quartz(width = 8, height = 6); stats <- plot_one_interaction(gene1, gene2, report = "cor.test")
-#quartz(width = 8, height = 6);plot_directionality(gene1, gene2)
 #quartz(width = 11, height = 6)
 directed_residuals(gene1, gene2, cex.lab = 1.5)
+```
 
+The following figure shows the residuals predicted with 
+increasingly complex models. The two columns are the
+forward and reverse direction for a single pair of genes.
+
+The top row shows the predictions for one gene just using
+the expression of the other gene as the dependent variable. 
+
+The middle row shows the prediction with both the expression
+of the other gene and genotype as *non-interacting* additive
+independent variables. 
+
+The bottom row shows the prediction with both expression 
+of the other gene and genotype as *interacting* independent 
+variables.
+
+If there is an interaction, the prediction should be best
+when Klotho genotype is used as an interactive predictor.
+
+```{r predicted_residuals, fig.width = 6, fig.height = 7}
 #quartz(width = 5, height = 7.5)
 directed_residuals(gene1, gene2, plot.results = FALSE, plot.predictions = TRUE, cex.lab = 1.5)
+```
 
+The plots below show the effects of Klotho genotype on expression
+of one gene when the second gene has high or low expression. If
+there is an interaction between the genes, we can see that Klotho
+genotype has an effect on gene expression of one gene when the
+other either has high or low expression. Thus the effect of Klotho
+genotype on one gene depends on the expression of the other gene.
+The effect could be present at one expression level and not at the
+other, or the direction of the effect could be reversed.
+
+The directionality of the interactions does not seem to be
+very useful. There are some interactions that really do 
+seem to be directional, but many have similar interaction 
+profiles going forward and backward, and the directionality
+comes from a thresholding effect of not very different 
+p values. 
+
+For these gene pairs, genotype really does affect the 
+relationship, but that influence isn't really directed. 
+So I think the network itself is interesting, but I think 
+we should treat it as an undirected network.
+
+```{r differential_effects, fig.height = 6, fig.width = 7}
 #quartz(width = 6, height = 7)
 directed_residuals(gene1, gene2, plot.results = FALSE, plot.geno.effect = TRUE, 
     stat.x = 0.1, stat.y = 0.9, cex.lab = 1.2, autoplace.text = FALSE, 
     autoflip.stat.y = TRUE)
 #my auto placement of text is not working now, so I'm shutting it off
+```
 
-test.gene <- "Srsf5"
-srsf5.conn <- direct_connect(dir.net, test.gene)
-u_conn <- unique(names(srsf5.conn))
-conn.id <- mouse.genes[match(u_conn, mouse.genes[,"external_gene_name"]),"ensembl_gene_id"]
-#cat(conn.id, sep = "\n")
 
-srsf5.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == test.gene),"ensembl_gene_id"]
-high.idx <- which(adj_expr[,srsf5.id] > mean(adj_expr[,srsf5.id]))
-low.idx <- which(adj_expr[,srsf5.id] < mean(adj_expr[,srsf5.id]))
+### Network hubs
 
-high.expr <- sapply(conn.id, function(x) coef(lm(adj_expr[high.idx,x]~test.factor[high.idx]))[2])
-low.expr <- sapply(conn.id, function(x) coef(lm(adj_expr[low.idx,x]~test.factor[low.idx]))[2])
-names(high.expr) <- names(low.expr) <- u_conn
-response.mat <- cbind(low.expr, high.expr)
-row.order <- hclust(dist(response.mat))$order
-colnames(response.mat) <- paste(c("low", "high"), test.gene)
-pheatmap(response.mat[row.order,], cluster_cols = FALSE, cluster_rows = FALSE)
+The degree by frequency of each degree is shown below on a log-log
+scale. This network is pretty modular. There are many nodes with 
+degree 1, and there is a heavy tail of high-degree nodes.
+
+```{r deg_freq}
+deg <- degree(dir.net)
+deg.freq <- sapply(1:max(deg), function(x) length(which(deg == x)))
+no.zero <- which(deg.freq > 0)
+plot(c(1:max(deg))[no.zero], deg.freq[no.zero], log = "xy", xlab = "Degree", ylab = "Frequency")
+```
+
+The barplot below shows the genes in the network that have
+at least 7 connected genes. Genes in the AD KEGG pathway are
+marked with asterisks.
+
+```{r degree, fig.width = 7, fig.height = 15}
+#show.n <- min(c(20, length(deg)))
+#top.deg <- rev(sort(deg, decreasing = TRUE)[1:show.n])
+top.deg <- sort(deg[which(deg >= 7)])
+#cat(sort(names(top.deg)), sep = "\n")
+in_ad <- which(!is.na(match(names(top.deg), ad.genes[,1])))
+#top.deg[in_ad]
+ad.label <- rep("", length(top.deg))
+ad.label[in_ad] <- "**"
+hub.labels <- paste0(ad.label, names(top.deg), ad.label)
+barplot(top.deg, las = 2, names = hub.labels)
+```
+
+The following plot shows the distribution of interaction
+strength around each hub. Some hubs have predominantly 
+negative interactions, while others have predominantly 
+positive interactions. Some have a mix. These correspond
+to the line plots below. They indicate whether the effect
+of Klotho on the spoke gene gets more negative or more 
+positive as the hub gene expression goes from low to high.
+
+So for some genes Klotho only increases the expression of the
+hub genes. For others Klotho only decreases expression of the
+spoke genes. And for most, Klotho has mixed effects on the 
+spoke genes. 
+
+Maybe we can extrapolate this when we look at the whole
+network. Klotho genotype is having positive or negative effects
+on gene expression based on the direction of the interaction.
+
+
+```{r edge_weights, fig.width = 9, fig.height = 6}
+hub.names <- names(top.deg)
+hub.connect <- lapply(hub.names, function(x) direct_connect(dir.net, x))
+names(hub.connect) <- hub.names
+sub.hub <- lapply(1:length(hub.connect), 
+    function(x) subgraph(dir.net, vids = c(names(top.deg)[x], names(hub.connect[[x]]))))
+sub.weights <- lapply(sub.hub, function(x) E(x)$weight)
+names(sub.weights) <- names(top.deg)
+mean.weight <- sapply(sub.weights, mean)
+mean.order <- order(mean.weight)
+#quartz(width = 9, height = 6)
+boxplot(sub.weights[mean.order], las = 2, names = hub.labels[mean.order])
+stripchart(sub.weights[mean.order], add = TRUE, vertical = TRUE, metho = "jitter", pch = 16)
+abline(h = 0)
+```
+
+## Activation/Suppression of Klotho effects
+
+One of the types of interaction plots above has an interesting perspective.
+It suggests that the correlation between the hub and spokes changes based
+on Klotho genotype because at high (low) expression levels of the hub gene
+the effects of Klotho genotype on the spoke genes is either enhanced or 
+suppressed. 
+
+We applied this analysis to each spoke of the hub genes. For each
+hub-spoke pair, we looked at the effect of Klotho genotype on 
+gene expression of the spoke gene at high and low expression of the
+hub.
+
+We found the following patterns:
+1. For some hub genes *high* expression suppressed the effects of Klotho genotype on the spokes
+    a. Conversely low expression of these hub genes enhanced the effects of Klotho genotype on the spokes
+2. For other hub genes *low* expression suppressed the effects of Klotho genotyope on the spokes
+    a. Conversely, high expression of these hub genes enhanced the effects of Klotho genotype on the spokes
+
+So there were essentially two types of hubs. The first type enhanced the effect of Klotho genotype
+when highly expressed, and the other type enhanced the effect of Klotho genotype when lowly expressed.
+
+The line plots below attempt to show these two types of hubs.
+
+```{r suppressor_effect_fun}
+#if reverse is FALSE, we look at the effect of klotho
+#genotype on each connector expression at high and low
+#levels of gene name. If it is TRUE, we look at klotho
+#genotype effect on gene.name at high and low levels of 
+#the connector genes
+
+geno_effect_high_low <- function(gene.name, reverse = FALSE){
+
+    gene.conn <- direct_connect(dir.net, gene.name)
+    u_conn <- unique(names(gene.conn))
+    conn.id <- mouse.genes[match(u_conn, mouse.genes[,"external_gene_name"]),"ensembl_gene_id"]
+    #cat(conn.id, sep = "\n")
+
+    gene.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene.name),"ensembl_gene_id"]
+    
+    if(!reverse){
+        high.idx <- which(adj_expr[,gene.id] > mean(adj_expr[,gene.id]))
+        low.idx <- which(adj_expr[,gene.id] < mean(adj_expr[,gene.id]))
+
+        high.expr <- sapply(conn.id, function(x) coef(lm(adj_expr[high.idx,x]~test.factor[high.idx]))[2])
+        low.expr <- sapply(conn.id, function(x) coef(lm(adj_expr[low.idx,x]~test.factor[low.idx]))[2])
+        names(high.expr) <- names(low.expr) <- u_conn
+        response.mat <- cbind(low.expr, high.expr)
+        colnames(response.mat) <- c("low", "high")
+        #pheatmap(response.mat[row.order,], cluster_cols = FALSE, cluster_rows = FALSE)
+    }else{
+        high.expr <- low.expr <- rep(NA, length(conn.id))
+        names(high.expr) <- names(low.expr) <- u_conn
+        for(i in 1:length(conn.id)){
+            high.idx <- which(adj_expr[,conn.id[i]] > mean(adj_expr[,conn.id[i]]))
+            low.idx <- which(adj_expr[,conn.id[i]] < mean(adj_expr[,conn.id[i]]))
+
+            high.expr[i] <- coef(lm(adj_expr[high.idx,gene.id]~test.factor[high.idx]))[2]
+            low.expr[i] <- coef(lm(adj_expr[low.idx,gene.id]~test.factor[low.idx]))[2]
+        }
+        response.mat <- cbind(low.expr, high.expr)
+        colnames(response.mat) <- c("low", "high")
+        }
+
+    return(response.mat)
+}
+```
+
+
+```{r get_suppressor_effect}
+hub.names <- names(top.deg)
+all.response <- lapply(hub.names, function(x) geno_effect_high_low(x, reverse = FALSE))
+names(all.response) <- hub.names
+max.effect <- max(sapply(all.response, max))
+min.effect <- min(sapply(all.response, min))
+```
+
+```{r extra_vis, eval = FALSE}
+#plot.grouped.boxes(group.list = lapply(all.response.forward, abs), type = "matrix", plot.grouping = "outer")
+
+all.diff.forward <- lapply(all.response.forward, function(x) abs(x[,2] - x[,1]))
+mean.forward <- sapply(all.diff.forward, mean)
+all.diff.reverse <- lapply(all.response.reverse, function(x) abs(x[,2] - x[,1]))
+mean.reverse <- sapply(all.diff.reverse, mean)
+
+#Srsf5 still has the largest effect interactions
+plot.with.model(mean.forward, mean.reverse, xlim = c(0.1, 1.3))
+text(mean.forward, mean.reverse, labels = hub.names, pos = 4)
+
+
+boxplot(all.diff.forward[order(sapply(all.diff.forward, mean))], las = 2, main = "Forward");abline(h = 0)
+boxplot(all.diff.reverse[order(sapply(all.diff.reverse, mean))], las = 2, main = "Reverse");abline(h = 0)
+mean.order <- order(sapply(all.diff.forward, mean))
+plot.grouped.boxes(list("forward" = all.diff.forward[mean.order], "reverse" = all.diff.reverse[mean.order]))
+abline(h = 0)
+plot.with.model(unlist(all.diff.forward), unlist(all.diff.reverse))
+abline(h = 0, v = 0)
+
+#heat maps showing effects in columns
+max.effect <- max(sapply(all.response, max))
+min.effect <- min(sapply(all.response, min))
+#pdf("~/Desktop/hub_response_forward.pdf")
+for(i in 1:length(all.response)){
+    row.order <- order(plot.decomp(all.response[[i]], plot.result = FALSE)$u[,1])
+    par(mar = c(4,8,4,8))
+    if(all(sign(all.response[[i]]) == 1)){
+        imageWithText(all.response[[i]][row.order,], main = hub.names[i],
+            col.scale = "brown", row.text.shift = 0.5, cex = 1, col.text.rotation = 0, 
+            col.text.adj = 0.5, col.text.shift = 0.1, grad.dir = "high")
+        }
+    if(all(sign(all.response[[i]]) == -1)){
+        imageWithText(all.response[[i]][row.order,], main = hub.names[i],
+            col.scale = "blue", row.text.shift = 0.5, cex = 1, col.text.rotation = 0, 
+            col.text.adj = 0.5, col.text.shift = 0.1, grad.dir = "low")
+    }
+    if(length(unique(as.vector(sign(all.response[[i]])))) > 1){
+        imageWithText(all.response[[i]][row.order,], main = hub.names[i], split.at.vals = TRUE,
+            col.scale = c("blue", "brown"), global.color.scale = TRUE, global.min = min.effect,
+            global.max = max.effect, row.text.shift = 0.5, cex = 1, col.text.rotation = 0, col.text.adj = 0.5,
+            col.text.shift = 0.1, grad.dir = "ends")
+    }
+}
+#dev.off()
+```
+
+
+```{r suppressors_activators, fig.height = 12, fig.width = 15}
+#for some genes high expression allows Klotho genotype to have an effect.
+#for other genes low expression allows Klotho genotype to have an effect.
+#get mean squared distance from 0 for each column
+which.high.effect <- sapply(all.response, function(x) which.max(apply(x, 2, function(y) mean(y^2))))
+high.kl.effect <- which(which.high.effect == 2)
+low.kl.effect <- which(which.high.effect == 1)
+
+plot_expr_effect <- function(expr.response, xlim = c(1, 2), ylim = NULL, plot.label = ""){ 
+    if(is.null(ylim)){
+        ylim = c(min(expr.response), max(expr.response))
+    }
+    plot.new()
+    plot.window(xlim = c(1, 2), ylim = ylim)
+    apply(expr.response, 1, function(x) points(c(1,2), x, type = "b"))
+    text(x = c(1, 2), y = rep(ylim[1], 2), labels = c("Low", "High"))
+    axis(2)
+    mtext(plot.label, side = 3, cex = 2)
+    mtext("Effect of Klotho Genotype", side = 2, line = 2.5)
+    abline(h = 0, col = "red")
+}
+```
+
+The following plots show the effects of Klotho on gene expression
+of genes connected to "Klotho suppressors," i.e. genes for which 
+high expression suppressed the effect of Klotho genotype on the 
+expression of the connected genes.
+
+
+```{r kl_suppressors, fig.height = 9, fig.width = 10}
+#quartz(width = 10, height = 9)
+layout(get.layout.mat(length(low.kl.effect)))
+for(i in 1:length(low.kl.effect)){
+    plot_expr_effect(all.response[[low.kl.effect[i]]], ylim = c(min.effect, max.effect), 
+        plot.label = hub.names[low.kl.effect[i]])
+}
+```
+
+The following plots show the effects of Klotho genotype at high and
+low expression of the hubs that were Klotho enhancers. For these 
+genes, high expression enhanced the effect of Klotho genotype on the
+connected genes. These genes include ribosomal genes.
+
+```{r kl_enhancers, fig.width = 10, fig.height = 10}
+#quartz(width = 10, height = 10)
+layout(get.layout.mat(length(high.kl.effect)))
+for(i in 1:length(high.kl.effect)){
+    plot_expr_effect(all.response[[high.kl.effect[i]]], ylim = c(min.effect, max.effect), 
+        plot.label = hub.names[high.kl.effect[i]])
+}
+```
+
+The following plots show the enrichments for the hubs that 
+are Klotho activators and those that are suppressors.
+
+```{r hub_enrich, fig.width = 15, fig.height = 7}
+enhancer.enrich <- gost(hub.names[high.kl.effect], organism = "mmusculus")
+suppressor.enrich <- gost(hub.names[low.kl.effect], organism = "mmusculus")
+#quartz(width = 15, height = 7)
+par(mfrow = c(1,2))
+plot.enrichment(enhancer.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Enhancers")
+plot.enrichment(suppressor.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Suppressors")
+
+#the groups of connected genes have many overlapping genes 
+#and are both enriched for ribosomal and synapse genes.
+#suppressor.connected <- lapply(hub.names[low.kl.effect], function(x) names(direct_connect(dir.net, x)))
+#enhancer.connected <- lapply(hub.names[high.kl.effect], function(x) names(direct_connect(dir.net, x)))
+
+#suppressed.enrich <- gost(unique(unlist(suppressor.connected)), organism = 'mmusculus')
+#enhanced.enrich <- gost(unique(unlist(enhancer.connected)), organism = 'mmusculus')
+
+#par(mfrow = c(1,2))
+#plot.enrichment(suppressed.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Suppressor Connected")
+#plot.enrichment(enhanced.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Enhancer Connected")
+```
+
+## Varying correlations
+
+Another thing the positive and negative interactions imply
+is the correlation between the genes in each of the genotypes.
+
+The sign of the interaction tells us how the two genes are 
+correlated in the VS animals. For positive interactions, the
+genes are positively correlated in the VS animals. And for 
+negative interactions, the genes are negatively correlated 
+in VS animals.
+
+The plot below shows the gene pair correlation coefficients
+in each genotype for gene pairs with positive and negative
+interactions with klotho genotype.
+
+
+```{r cor_dir, fig.width = 8, fig.height = 4}
+elist <- as_edgelist(dir.net)
+eweight <- E(dir.net)$weight
+pair.stats <- apply(elist, 1, function(x) directed_residuals(x[1], x[2], plot.results = FALSE))
+
+pos.weight.idx <- which(eweight > 0)
+neg.weight.idx <- which(eweight < 0)
+
+par(mfrow = c(1,2))
+#we only need forward stats because this is a directed network. 
+pos.cor.stats <- t(sapply(pair.stats[pos.weight.idx], function(x) x$forward.stats[,"r"]))
+boxplot(pos.cor.stats, main = "Correlations by genotype for positive interactions")
+abline(h = 0)
+
+neg.cor.stats <- t(sapply(pair.stats[neg.weight.idx], function(x) x$forward.stats[,"r"]))
+boxplot(neg.cor.stats, main = "Correlations by genotype for negative interactions")
+abline(h = 0)
+
+#both positive and negative interaction networks are enriched for
+#ribosome and synapse
+#pos.net.enrich <- gost(unique(as.vector(elist[pos.weight.idx,])), organism = "mmusculus")
+#neg.net.enrich <- gost(unique(as.vector(elist[neg.weight.idx,])), organism = "mmusculus")
+#plot.enrichment(pos.net.enrich, num.terms = 30, max.term.size = 3000)
+#plot.enrichment(neg.net.enrich, num.terms = 30, max.term.size = 3000)
+```
+
+
+```{r pos_neg_net, eval = FALSE}
+adj <- as.matrix(as_adjacency_matrix(dir.net, attr = "weight"))
+pos.deg <- apply(adj, 2, function(x) if(any(x > 0)){x[which(x > 0)]}else{0})
+neg.deg <- apply(adj, 2, function(x) if(any(x > 0)){x[which(x < 0)]}else{0})
+pos.deg.sum <- sapply(pos.deg, sum)
+neg.deg.sum <- sapply(neg.deg, sum)
+all.deg <- rbind(pos.deg.sum, neg.deg.sum)
+#to.label <- union(which(pos.deg.sum > 3), which(neg.deg.sum < -2))
+to.label <- which(apply(all.deg, 2, function(x) sum(abs(x))) > 2)
+#length(to.label)
+plot(pos.deg.sum, neg.deg.sum, xlim = c(0, 11), xlab = "Positive Degree", ylab = "Negative Degree")
+text(pos.deg.sum[to.label], neg.deg.sum[to.label], labels = rownames(adj)[to.label], 
+    pos = 4, cex = 0.7)
+
+
+#max.order <- order(plot.decomp(t(all.deg[,to.label]), plot.results = FALSE)$u[,1])
+#barplot(all.deg[,to.label[max.order]], beside= TRUE)
+max.deg <- apply(all.deg[,to.label], 2, function(x) x[which.max(abs(x))])
+max.order <- order(max.deg)
+
+#pdf("~/Desktop/degree_comp.pdf", width = 5, height = 12)
+par(mar = c(4,6,4,2))
+barplot(all.deg[,to.label[max.order]], beside = TRUE, 
+    names = rownames(adj)[to.label[max.order]], las = 2, horiz = TRUE,
+    xlab = "Weighted Degree")
+abline(v = 0)
+#dev.off()
+
+total.deg <- colSums(all.deg)
+to.plot <- which(abs(total.deg) > 2)
+#length(to.plot) 
+barplot(sort(total.deg[to.plot]), las = 2, main = "Total weighted degree")
+abline(h = 0)
+
+sort(pos.deg.sum, decreasing = TRUE)[1:10]
+sort(neg.deg.sum, decreasing = FALSE)[1:10]
+```
+
+### Hub Neighborhoods {.tabset .tabset-fade .tabset-pills}
+
+The following plots show the expression results for the genes
+in the neighborhood of each of the selected hubs. This might 
+give some insight as to what functions each hub is related to.
+
+```{r connect_enrich, results = "asis", fig.width = 11, fig.height = 7}
+
+connected <- lapply(hub.names, function(x) names(direct_connect(dir.net, x)))
+#cat(connected, sep = "\n")
+connected.id <- lapply(connected, function(x) mouse.genes[match(x, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"])
+names(connected.id) <- hub.names
+#connect.enrich <- gost(connected[[1]], organism = "mmusculus")
+#plot.enrichment(connect.enrich, max.term.size = 3000, num.terms = 20, plot.label = hub.names)
+
+for(i in 1:length(hub.names)){
+    cat("####", hub.names[i], "\n")
+    hub.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == hub.names[i]),"ensembl_gene_id"]
+    #png(paste0("~/Desktop/hub_neighborhoods/", hub.names[i], ".png"), width = 11, height = 7, units = "in", res = 300)
+    gene.stats <- plot_individual_genes(gene.list = c(hub.id, connected.id[[i]]), 
+        plot.label = paste("genes connected to", hub.names[i]), plot.enrich = TRUE,
+        return.full.result = TRUE)
+    #test <- gost(c(hub.id, connected.id[[i]]), organism = "mmusculus")
+    #plot.enrichment(test)
+    #dev.off()
+    cat("\n\n")
+}
+cat("#### All connected genes")
+all.connected <- unique(unlist(connected.id))
+#png(paste0("~/Desktop/all_connected.png"), width = 11, height = 7, units = "in", res = 300)
+plot_individual_genes(gene.list = all.connected, 
+    plot.label = "genes connected to all genes", plot.enrich = TRUE)
+cat("\n\n")
+#dev.off()
+```
+
+### Correlations by carrier status {.tabset .tabset-fade .tabset-pills}
+
+The following plots show the correlation networks for significant
+edges in the two genotypes (FC carriers and VS carriers.) 
+
+Overall, the correlations in the VS network are just much stronger
+than those in the FC network. 
+
+There is a little arm in the FC network, around Actn3, Atp2a1
+Fgf16, and Tnnc2, that has stronger correlations than in the VS.
+
+How could differential correlation strength be interpreted? 
+Activation/deactivation of particular pathways?
+
+```{r diff_net, fig.width = 10, fig.height = 10, results = "asis"}
+
+#pdf("~/Desktop/geno_nets.pdf", width = 20, height = 20)
+geno.nets <- net_by_geno(int_result = corr_result, p.thresh = net.thresh, 
+    plot.result = TRUE, layout.mat = net.layout, title.level = "####")
+#dev.off()
+```
+
+### Edge weight comparison
+
+The plot below shows that the correlations between genes tend to
+oppose each other in the two genotypes. Is this just an artifact
+of the way we are doing the test? It might be. Let's not put too
+much into this.
+
+```{r edge_comparison, fig.width = 5, fig.height = 5}
+plot(E(geno.nets$FC_net)$weight, E(geno.nets$VS_net)$weight, xlab = "FC edge weights",
+    ylab = "VS edge weights")
+abline(v = 0, h = 0)
+```
+
+### The large connected component
+
+The following plot shows the functional enrichment for the genes
+in the large connected component. It is mostly the same as the 
+differential expression: synapse and ribosome.
+
+```{r large_enrich, fig.width = 7, fig.height = 7}
+large.comp <- largest_component(dir.net)
+large.enrich <- gost(V(large.comp)$name, organism = "mmusculus")
+plot.enrichment(large.enrich, num.terms = 30, max.term.size = 3000,
+    plot.label = "Connected Component Enrichment")
+```
+
+Below we explore this large connected component more.
+The connected component is highly modular. It also 
+seems to have a hub-and-spoke type structure, i.e.
+the hubs are connected to many genes, but these 
+genes are not connected to each other. What could
+that indicate?
+
+The plot below shows just the large connected component
+with the top 20 hubs highlighted.
+
+```{r large_comp, fig.width = 20, fig.height = 20}
+
+large.name <- V(large.comp)$name
+comp.layout <- net.layout[match(large.name, rownames(net.layout)),]
+
+#plot the large component alone and with the top 20 hubs labeled
+#pdf("~/Desktop/large_comp.pdf", width = 20, height = 20)
+#plot_net(large.comp, layout.mat = comp.layout)
+plot_net(large.comp, layout.mat = comp.layout, highlight.nodes = names(top.deg),
+    highlight.width = 0.07, highlight.height = 0.02, highlight.cex = 1.5,
+    highlight.lwd = 3)
+#dev.off()
+```
+
+
+### Differential expression in the large connected component
+
+The plot below shows the expression results for the genes
+in the large connected component.
+
+```{r, fig.width = 11, fig.height = 7}
+#diff expp
+
+#png("~/Desktop/large_expression.png", width = 11, height = 7, units = "in", res = 300)
+large.id <- mouse.genes[match(large.name, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+large.stats <- plot_individual_genes(gene.list = large.id, order.by = "PC", 
+    plot.label = "Large Connected Component", return.full.result = TRUE, plot.enrich = TRUE)
+#dev.off()
+```
+
+The plot below shows the relative VS expression for each gene
+in this connected component. Brown means that the gene is 
+upregulated in VS animals. Blue means it is downregulated in
+VS animals. There is no obvious pattern.
+
+```{r relative_expr, fig.width = 20, fig.height = 20}
+
+#weight the nodes based on relative VS expression
+large.expr <- lapply(large.name, function(x) gene_vioplot(x, plot.results = FALSE))
+large.mean <- t(sapply(large.expr, function(x) sapply(x, mean)))
+rel.vs <- large.mean[,3] - large.mean[,1]
+V(large.comp)$weight <- rel.vs
+
+#pdf("~/Desktop/large_comp_vertex.pdf", width = 20, height = 20)
+plot_net(large.comp, layout.mat = comp.layout, vertex.size = 5, edge.width.factor = 1,
+    highlight.nodes = names(top.deg), highlight.width = 0.05, highlight.height = 0.02, 
+    highlight.cex = 1.5)
+#dev.off()
+```
+
+### Biodomains and KEGG pathways in the large connected component
+
+How are the biodomains and KEGG pathways distributed in this component?
+The bar plots below show the -log10(p) for the enrichments of each 
+biodomain, and the top 20 KEGG pathways, in the large connected
+component.
+
+Ribosome (kegg pathway) and proteostasis (biodomain) are the dominant
+terms in this network. Mitochondrial metabolism (biodmain) is also 
+there, but less dominant.
+
+```{r biodomain_enrich, fig.width = 10, fig.height = 7}
+bd.enrich.p <- sapply(bd.list, function(x) gene_set_enrich(x, large.id, test.id))
+par(mar = c(4,16,4,2))
+barplot(sort(-log10(bd.enrich.p)), las = 2, horiz = TRUE, xlab = "-log10(p)",
+    main = "Biodomains enriched in large connected component")
+
+kegg.enrich.p <- sapply(kegg.list, function(x) gene_set_enrich(x, large.id, test.id))
+par(mar = c(4,24,4,2))
+barplot(rev(sort(-log10(kegg.enrich.p), decreasing = TRUE)[1:20]), las = 2, horiz = TRUE, xlab = "-log10(p)",
+    main = "KEGG pathways enriched in\nlarge connected component")
+```
+
+
+### Networks by genotype {.tabset .tabset-fade .tabset-pills}
+
+The following plots how the genes in the network are differentially
+correlated in the VS and FC genotypes. Each genotype's network is
+plotted twice, one with the hubs labeled, and once without the labels.
+
+```{r, results = "asis", fig.width = 20, fig.height = 20}
+#geno nets just for connected component
+large.idx <- match(large.name, colnames(corr_result[[1]]))
+large.result <- lapply(corr_result, function(x) x[large.idx, large.idx])
+
+#pdf("~/Desktop/geno_nets_large.pdf", width = 20, height = 20)
+geno.nets <- net_by_geno(int_result = large.result, p.thresh = net.thresh, 
+    plot.result = TRUE, layout.mat = net.layout, title.level = "####",
+    highlight.nodes = names(top.deg),
+    highlight.width = 0.05, highlight.height = 0.02, highlight.cex = 1.5,
+    highlight.lwd = 3)
+
+#without labels
+geno.nets <- net_by_geno(int_result = large.result, p.thresh = net.thresh, 
+    plot.result = TRUE, layout.mat = net.layout, title.level = "####")
+
+#dev.off()
+
+```
+
+
+### Remaining analysis
+
+One of the types of interaction plots above has an interesting perspective.
+It suggests that the correlation between the hub and spokes changes based
+on Klotho genotype because at high (low) expression levels of the hub gene
+the effects of Klotho genotype on the spoke genes is either enhanced or 
+suppressed. 
+
+
+We looked at the effect of klotho genotype on gene expression
+of the spokes genes at low and high expression levels of each 
+hub gene.
+
+
+We found the following patterns:
+
+```{r high_low_effects, eval = FALSE}
+
+hub.names <- names(top.deg)
+all.response <- lapply(hub.names, function(x) geno_effect_high_low(x, reverse = FALSE))
+names(all.response) <- hub.names
+
+#plot.grouped.boxes(group.list = lapply(all.response, abs), type = "matrix", plot.grouping = "outer")
+
+all.diff <- lapply(all.response, function(x) abs(x[,2] - x[,1]))
+mean.diff <- sapply(all.diff, mean)
+all.diff.reverse <- lapply(all.response.reverse, function(x) abs(x[,2] - x[,1]))
+mean.reverse <- sapply(all.diff.reverse, mean)
+
+#Srsf5 still has the largest effect interactions
+#plot.with.model(mean.forward, mean.reverse, xlim = c(0.1, 1.3))
+#text(mean.forward, mean.reverse, labels = hub.names, pos = 4)
+
+
+boxplot(all.diff.forward[order(sapply(all.diff.forward, mean))], las = 2, main = "Forward");abline(h = 0)
+
+plot.grouped.boxes(list("forward" = all.diff.forward[mean.order], "reverse" = all.diff.reverse[mean.order]))
+abline(h = 0)
+
+plot.with.model(unlist(all.diff.forward), unlist(all.diff.reverse))
+abline(h = 0, v = 0)
+
+plot.response <- all.response.forward
+max.effect <- max(sapply(plot.response, max))
+min.effect <- min(sapply(plot.response, min))
+#pdf("~/Desktop/hub_response_forward.pdf")
+for(i in 1:length(plot.response)){
+    row.order <- order(plot.decomp(plot.response[[i]], plot.result = FALSE)$u[,1])
+    par(mar = c(4,8,4,8))
+    if(all(sign(plot.response[[i]]) == 1)){
+        imageWithText(plot.response[[i]][row.order,], main = hub.names[i],
+            col.scale = "brown", row.text.shift = 0.5, cex = 1, col.text.rotation = 0, 
+            col.text.adj = 0.5, col.text.shift = 0.1, grad.dir = "high")
+        }
+    if(all(sign(plot.response[[i]]) == -1)){
+        imageWithText(plot.response[[i]][row.order,], main = hub.names[i],
+            col.scale = "blue", row.text.shift = 0.5, cex = 1, col.text.rotation = 0, 
+            col.text.adj = 0.5, col.text.shift = 0.1, grad.dir = "low")
+    }
+    if(length(unique(as.vector(sign(plot.response[[i]])))) > 1){
+        imageWithText(plot.response[[i]][row.order,], main = hub.names[i], split.at.vals = TRUE,
+            col.scale = c("blue", "brown"), global.color.scale = TRUE, global.min = min.effect,
+            global.max = max.effect, row.text.shift = 0.5, cex = 1, col.text.rotation = 0, col.text.adj = 0.5,
+            col.text.shift = 0.1, grad.dir = "ends")
+    }
+}
+#dev.off()
+
+#for some genes high expression allows Klotho genotype to have an effect.
+#for other genes low expression allows Klotho genotype to have an effect.
+
+which.high.effect <- sapply(plot.response, function(x) which.max(apply(x, 2, function(y) mean(y^2))))
+high.kl.effect <- which(which.high.effect == 2)
+low.kl.effect <- which(which.high.effect == 1)
+
+high.enrich <- gost(hub.names[high.kl.effect], organism = "mmusculus")
+low.enrich <- gost(hub.names[low.kl.effect], organism = "mmusculus")
+plot.enrichment(high.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho effect at high expression")
+#quartz()
+plot.enrichment(low.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho effect at low expression")
+
+
+#pdf("~/Desktop/hub_Klotho_response_low.pdf", width = 15, height = 12)
+par(mfrow = c(4,5))
+for(i in low.kl.effect){
+    plot.new()
+    plot.window(xlim = c(1, 2), ylim = c(min.effect, max.effect))
+    apply(plot.response[[i]], 1, function(x) points(c(1,2), x, type = "b"))
+    text(x = c(1, 2), y = rep(min.effect, 2), labels = paste(c("Low", "High"), names(plot.response)[i]))
+    axis(2)
+    mtext(names(plot.response)[i], side = 3, cex = 2)
+    mtext("Effect of Klotho Genotype", side = 2, line = 2.5)
+    abline(h = 0, col = "red")
+}
+#dev.off()
+
 
 straight.cor <- sapply(conn.id, function(x) cor(adj_expr[,x], adj_expr[,srsf5.id]))
 imageWithTextColorbar(response.mat, use.pheatmap.colors = TRUE, cex = 1, bar.lwd = 3)
@@ -3085,21 +3812,21 @@ agora.list[common.idx,]
 ```{r lookup_genes, eval = FALSE}
 gene1 <- "Srsf5"
 #pdf("~/Desktop/down_with_kl.pdf", width = 6, height = 7)
-pdf("~/Desktop/up_with_kl.pdf", width = 11, height = 6)
+#pdf("~/Desktop/up_with_kl.pdf", width = 11, height = 6)
 for(i in 1:length(up.with.kl)){
     gene2 <- names(up.with.kl)[i]
     directed_residuals(gene1, gene2, cex.lab = 1.5)
     #directed_residuals(gene1, gene2, plot.results = FALSE, plot.geno.effect = TRUE, stat.x = 0.1, stat.y = 0.9, cex.lab = 1.2, autoplace.text = FALSE, autoflip.stat.y = TRUE)
 }
-dev.off()
+#dev.off()
 
-pdf("~/Desktop/down_with_kl_alone.pdf", width = 12, height = 12)
+#pdf("~/Desktop/down_with_kl_alone.pdf", width = 12, height = 12)
 par(mfrow = c(4,4))
 for(i in 1:length(down.with.kl)){
     gene2 <- names(down.with.kl)[i]
     gene_vioplot(gene2)
 }
-dev.off()
+#dev.off()
 
 #try looking up some of the connector genes in relation to 
 #various topics
@@ -3113,7 +3840,7 @@ hit_mat <- matrix(0, nrow = (length(u_conn)+1), ncol = length(search_string))
 rownames(hit_mat) <- c("Srsf5", u_conn)
 colnames(hit_mat) <- search_string
 
-pdf("~/Desktop/term_search.pdf")
+#pdf("~/Desktop/term_search.pdf")
 for(i in 1:length(search_string)){
     all.pubmed <- lapply(c("Srsf5", u_conn), function(x) get_pubmed_ids(paste(search_string[i], "AND", x)))
     num.articles <- as.numeric(sapply(all.pubmed, function(x) x$Count))
@@ -3123,7 +3850,7 @@ for(i in 1:length(search_string)){
         main = search_string[i])
     #abstracts <- fetch_pubmed_data(all.pubmed, format = "medline")
 }
-dev.off()
+#dev.off()
 
 has.hits <- which(rowSums(hit_mat) > 0)
 pheatmap(log10(hit_mat[has.hits,]+1))
@@ -3158,362 +3885,17 @@ plot(string.net, vertex.color = node.col)
 
 ```
 
-I've checked quite a few of these, and the directionality
-of the interactions doesn't seem to be terribly useful.
-There are some interactions, like the Mmp2-Usp8 one that,
-really do seem to be directional, but many of them have
-similar interaction profiles going forward and backward,
-but the significance of those interaction is on one side
-of our threshold or the other.
-
-Thus, genotype really does affect the relationship, but
-that influence isn't really directed. So I think the
-network itself is interesting, but I think we should
-look at it as an undirected network.
-
-### Network hubs
-
-The barplot below shows the top 20 genes in the network
-in terms of degree. 
-
-```{r degree, fig.width = 7, fig.height = 15}
-deg <- degree(dir.net)
-
-show.n <- min(c(20, length(deg)))
-top.deg <- rev(sort(deg, decreasing = TRUE)[1:show.n])
-in_ad <- which(!is.na(match(names(top.deg), ad.genes[,1])))
-#top.deg[in_ad]
-```
-
-The degree by frequency of each degree is shown below on a log-log
-scale. This network is pretty modular. There are many nodes with 
-degree 1, and there is a heavy tail of high-degree nodes.
-
-```{r deg_freq}
-deg.freq <- sapply(1:max(deg), function(x) length(which(deg == x)))
-no.zero <- which(deg.freq > 0)
-plot(c(1:max(deg))[no.zero], deg.freq[no.zero], log = "xy", xlab = "Degree", ylab = "Frequency")
-```
-
-
-### Correlations by carrier status {.tabset .tabset-fade .tabset-pills}
-
-The following plots show the correlation networks for significant
-edges in the two genotypes (FC carriers and VS carriers.) 
-
-The FC and VS carriers have strong correlations in different parts
-of the network.
-
-```{r diff_net, fig.width = 10, fig.height = 10, results = "asis"}
-
-#pdf("~/Desktop/geno_nets.pdf", width = 20, height = 20)
-geno.nets <- net_by_geno(int_result = corr_result, p.thresh = net.thresh, 
-    plot.result = TRUE, layout.mat = net.layout, title.level = "####")
-#dev.off()
-```
-
-### Edge weight comparison
-
-The plot below shows that the correlations between genes tend to
-oppose each other in the two genotypes. Is this just an artifact
-of the way we are doing the test? It might be. Let's not put too
-much into this.
-
-```{r edge_comparison}
-plot(E(geno.nets$FC_net)$weight, E(geno.nets$VS_net)$weight, xlab = "FC edge weights",
-    ylab = "VS edge weights")
-abline(v = 0, h = 0)
-```
-
-### The large connected component
-
-The following plot shows the functional enrichment for the genes
-in the large connected component. It is mostly the same as the 
-differential expression: synapse and ribosome.
-
-```{r large_enrich}
-large.comp <- largest_component(dir.net)
-large.enrich <- gost(V(large.comp)$name, organism = "mmusculus")
-plot.enrichment(large.enrich, num.terms = 30, max.term.size = 3000,
-    plot.label = "Connected Component Enrichment")
-```
-
-Below we explore this large connected component more.
-The connected component is highly modular. 
-
-The plot below shows just the large connected component
-with the top 20 hubs highlighted.
-
-```{r large_comp, fig.width = 20, fig.height = 20}
-
-large.name <- V(large.comp)$name
-comp.layout <- net.layout[match(large.name, rownames(net.layout)),]
-
-#plot the large component alone and with the top 20 hubs labeled
-#pdf("~/Desktop/large_comp.pdf", width = 20, height = 20)
-#plot_net(large.comp, layout.mat = comp.layout)
-plot_net(large.comp, layout.mat = comp.layout, highlight.nodes = names(top.deg),
-    highlight.width = 0.05, highlight.height = 0.02, highlight.cex = 1.5,
-    highlight.lwd = 3)
-#dev.off()
-```
-
-### Differential expression in the large connected component
-
-The plot below shows the expression results for the genes
-in the large connected component.
-
-```{r, fig.width = 11, fig.height = 7}
-#diff expp
-
-#png("~/Desktop/large_expression.png", width = 11, height = 7, units = "in", res = 300)
-large.id <- mouse.genes[match(large.name, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
-large.stats <- plot_individual_genes(gene.list = large.id, order.by = "PC", 
-    plot.label = "Large Connected Component", return.full.result = TRUE, plot.enrich = TRUE)
-#dev.off()
-```
-
-The plot below shows the relative VS expression for each gene
-in this connected component. Brown means that the gene is 
-upregulated in VS animals. Blue means it is downregulated in
-VS animals. There is no obvious pattern.
-
-```{r relative_expr, fig.width = 20, fig.height = 20}
-
-#weight the nodes based on relative VS expression
-large.expr <- lapply(large.name, function(x) gene_vioplot(x, plot.results = FALSE))
-large.mean <- t(sapply(large.expr, function(x) sapply(x, mean)))
-rel.vs <- large.mean[,3] - large.mean[,1]
-V(large.comp)$weight <- rel.vs
-
-#pdf("~/Desktop/large_comp_vertex.pdf", width = 20, height = 20)
-plot_net(large.comp, layout.mat = comp.layout, vertex.size = 5, edge.width.factor = 1,
-    highlight.nodes = names(top.deg), highlight.width = 0.05, highlight.height = 0.02, 
-    highlight.cex = 1.5)
-#dev.off()
-```
-
-### Biodomains and KEGG pathways in the large connected component
-
-How are the biodomains and KEGG pathways distributed in this component?
-The bar plots below show the -log10(p) for the enrichments of each 
-biodomain, and the top 20 KEGG pathways, in the large connected
-component.
-
-Ribosome and proteostasis really shine through.
-
-```{r biodomain_enrich, fig.width = 10, fig.height = 7}
-bd.enrich.p <- sapply(bd.list, function(x) gene_set_enrich(x, large.id, test.id))
-par(mar = c(4,16,4,2))
-barplot(sort(-log10(bd.enrich.p)), las = 2, horiz = TRUE, xlab = "-log10(p)",
-    main = "Biodomains enriched in large connected component")
-
-kegg.enrich.p <- sapply(kegg.list, function(x) gene_set_enrich(x, large.id, test.id))
-par(mar = c(4,24,4,2))
-barplot(rev(sort(-log10(kegg.enrich.p), decreasing = TRUE)[1:20]), las = 2, horiz = TRUE, xlab = "-log10(p)",
-    main = "KEGG pathways enriched in\nlarge connected component")
-```
-
-What about localization in the network? How spread out 
-are these nodes? Does that matter?
-
-I selected 5000 random samples of genes using the number of 
-genes in the biodomains. I got a distribution of node sizes 
-and average node distances for each group. There are a couple 
-domains in Proteostasis and Structural Stabilization that have
-lower distances relative to their size than the random distribution.
-They are in Ribosome and COVID (read virus response?) KEGG pathways.
-
-So Ribosome genes and COVID (virus response genes?) are closer
-to each other in this network than we expect by chance. Not 
-particularly interesting...
-
-```{r node_clustering, eval = FALSE}
-
-get_list_dist <- function(net, gene.list, plot.results = TRUE){
-    edges <- as_edgelist(net) #we need to remove the weights from the network
-    flat.net <- graph_from_edgelist(edges, directed = FALSE)
-    node.dist <- distances(flat.net)
-
-    gene.name <- lapply(gene.list, function(x) mouse.genes[match(x, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"])
-    common.name <- lapply(gene.name, function(x) intersect(V(flat.net)$name, x))
-    common.dist <- lapply(common.name, function(x) node.dist[x,x])
-    avg.dist <- sapply(common.dist, mean)
-    
-    if(plot.results){
-        par(mfrow = c(1,2), mar = c(4,12,4,2))
-        barplot(sort(avg.dist, decreasing = TRUE), las = 2, horiz = TRUE)
-
-        par(mar = c(4,4,4,2))
-        n.nodes <- sapply(common.name, length)
-        plot(n.nodes, avg.dist)
-        #boxplot(lapply(bd.dist, function(x) x[upper.tri(x, diag = FALSE)]), las = 2)
-    }
-    invisible(common.dist)
-}
-
-bd.list.len <- sapply(bd.list, length)
-rnd_sample <- lapply(1:5000, function(x) sample(unique(unlist(bd.list)), sample(bd.list.len, 1))) #pull some random samples from the biodomainlist
-rnd_cl <- get_list_dist(large.comp, rnd_sample, plot.results = FALSE)
-rnd.dist <- sapply(rnd_cl, mean)
-rnd.nodes <- sapply(rnd_cl, function(x) if(class(x)[1] == "matrix"){nrow(x)}else{0})
-#plot(rnd.nodes, rnd.dist) #the randomly sampled cluster sizes and distances in the large component
-#plot.hexbin.as.plot(rnd.nodes, rnd.dist)
-
-pdf("~/Desktop/cl_test.pdf", width = 5, height = 5)
-for(bd in 1:length(kegg.bd.list)){
-    if(length(kegg.bd.list[[bd]]) > 0){
-        test <- get_list_dist(large.comp, kegg.bd.list[[bd]], plot.results = FALSE)
-        test.dist <- sapply(test, mean)
-        test.nodes <- sapply(test, function(x) if(class(x)[1] == "matrix"){nrow(x)}else{0})
-        plot.hexbin.as.plot(rnd.nodes, rnd.dist, main = names(kegg.bd.list)[bd], xlim = c(0, 200))
-        points(test.nodes, test.dist, pch = 16)
-
-        #check <- intersect(which(test.nodes > 25), which(test.dist < 4))
-        #names(kegg.bd.list[[bd]])[check]
-    }
-}
-dev.off()
-```
-
- 
-The biodomain-KEGG intersections that were significantly
-enriched in the large connected component are the following.
-Purple vertices show biodomains, green show Kegg pathways.
-Edge color and width reflect the -log10(p) of the enrichment.
-
-```{r enrich_int, fig.width = 7, fig.height = 7}
-enrich.p.mat <- matrix(NA, nrow = length(bd.list), ncol = length(kegg.list))
-rownames(enrich.p.mat) <- names(bd.list)
-colnames(enrich.p.mat) <- names(kegg.list)
-for(bd in 1:length(kegg.bd.list)){
-    bd.name <- names(kegg.bd.list)[bd]
-    if(length(kegg.bd.list[[bd]]) == 0){next()}
-    for(k in 1:length(kegg.bd.list[[bd]])){
-        kegg.name <- names(kegg.bd.list[[bd]])[k]
-        test.set <- kegg.bd.list[[bd]][[k]]
-        sub.enrich <- gene_set_enrich(test.set, large.id, test.id)
-        enrich.p.mat[bd.name, kegg.name] <- sub.enrich
-    }
-}
-sig.enrich <- which(enrich.p.mat <= 1e-5, arr.ind = TRUE)
-int.enrich <- cbind(rownames(enrich.p.mat)[sig.enrich[,1]], colnames(enrich.p.mat)[sig.enrich[,2]])
-test <- graph_from_edgelist(int.enrich, directed = FALSE)
-ecol <- colors.from.values(-log10(enrich.p.mat[sig.enrich]), col.scale = "blue", grad.dir = "high")
-vcol <- rep("#7FC97F", vcount(test)) #kegg color
-vcol[which(V(test)$name %in% names(bd.list))] <- "#beaed4" #biodomain color
-
-par(mar = c(0,8,0,6))
-plot(test, vertex.color = vcol, edge.color = ecol, edge.width = -log10(enrich.p.mat[sig.enrich])/2)
-
-#imageWithTextColorbar(matrix(-log10(enrich.p.mat[sig.enrich]), ncol = 1), col.scale = "blue", 
-#    grad.dir = "high", cex = 1, bar.lwd = 2)
-```
-
-### Enrichments Localized {.tabset .tabset-fade .tabset-pills}
-
-The following plots show where these intersections lie in the 
-network.
-
-```{r enrich_net, fig.width = 20, fig.height = 20, results = "asis"}
-#pdf("~/Desktop/enriched_intersections.pdf", width = 20, height = 20)
-for(i in 1:nrow(int.enrich)){
-    bd.name <- int.enrich[i,1]
-    bd.idx <- which(names(kegg.bd.list) == bd.name)
-    kegg.name <- int.enrich[i,2]
-    kegg.idx <- which(names(kegg.bd.list[[bd.idx]]) == kegg.name)
-    cat("####", bd.name, "-", kegg.name, "\n")
-
-    int.genes <- kegg.bd.list[[bd.idx]][[kegg.idx]]
-    int.names <- mouse.genes[match(int.genes, mouse.genes[,"ensembl_gene_id"]),"external_gene_name"]
-    common.genes <- intersect(int.names, large.name)
-
-    plot_net(large.comp, layout.mat = comp.layout, vertex.size = 5, edge.width.factor = 5,
-    highlight.nodes = common.genes, highlight.width = 0.05, highlight.height = 0.02, 
-    highlight.cex = 1.5, plot.label = paste(bd.name, kegg.name, sep = " - "))
-    cat("\n\n")
-}
-#dev.off()
-```
-
-### Networks by genotoype {.tabset .tabset-fade .tabset-pills}
-
-The following plots how the genes in the network are differentially
-correlated in the VS and FC genotypes.
-
-```{r, results = "asis", fig.width = 20, fig.height = 20}
-#geno nets just for connected component
-large.idx <- match(large.name, colnames(corr_result[[1]]))
-large.result <- lapply(corr_result, function(x) x[large.idx, large.idx])
-
-#pdf("~/Desktop/geno_nets_large.pdf", width = 20, height = 20)
-geno.nets <- net_by_geno(int_result = large.result, p.thresh = net.thresh, 
-    plot.result = TRUE, layout.mat = net.layout, title.level = "####",
-    highlight.nodes = names(top.deg),
-    highlight.width = 0.05, highlight.height = 0.02, highlight.cex = 1.5,
-    highlight.lwd = 3)
-
-#without labels
-geno.nets <- net_by_geno(int_result = large.result, p.thresh = net.thresh, 
-    plot.result = TRUE, layout.mat = net.layout, title.level = "####")
-
-#dev.off()
-
-```
-
-### Hub Neighborhoods {.tabset .tabset-fade .tabset-pills}
-
-The following plots show the expression results for the genes
-in the neighborhood of each of the top 20 hubs.
-
-```{r connect_enrich, results = "asis", fig.width = 11, fig.height = 7}
-#gene.name = "Srsf5"
-#gene.name <- c("Mylpf", "Atp2a1", "Tnnc2")
-gene.name <- names(top.deg) #top 20 hubs
-
-connected <- lapply(gene.name, function(x) names(direct_connect(dir.net, x)))
-#cat(connected, sep = "\n")
-connected.id <- lapply(connected, function(x) mouse.genes[match(x, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"])
-names(connected.id) <- gene.name
-#connect.enrich <- gost(connected[[1]], organism = "mmusculus")
-#plot.enrichment(connect.enrich, max.term.size = 3000, num.terms = 20, plot.label = gene.name)
-
-
-for(i in 1:length(gene.name)){
-    cat("####", gene.name[i], "\n")
-    hub.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene.name[i]),"ensembl_gene_id"]
-    #png(paste0("~/Desktop/hub_neighborhoods/", gene.name[i], ".png"), width = 11, height = 7, units = "in", res = 300)
-    gene.stats <- plot_individual_genes(gene.list = c(hub.id, connected.id[[i]]), 
-        plot.label = paste("genes connected to", gene.name[i]), plot.enrich = TRUE,
-        return.full.result = TRUE)
-    #test <- gost(c(hub.id, connected.id[[i]]), organism = "mmusculus")
-    #plot.enrichment(test)
-    #dev.off()
-    cat("\n\n")
-}
-cat("#### All connected genes")
-all.connected <- unique(unlist(connected.id))
-#png(paste0("~/Desktop/all_connected.png"), width = 11, height = 7, units = "in", res = 300)
-plot_individual_genes(gene.list = all.connected, 
-    plot.label = "genes connected to all genes", plot.enrich = TRUE)
-cat("\n\n")
-#dev.off()
-
-
-```
-
-### Remaining analysis
 
 ```{r ind_terms, eval = FALSE}
 #here we plot violin plots of specific terms we are interested in.
 
-pdf("~/Desktop/mapk.pdf", width = 7, height = 5)
+#pdf("~/Desktop/mapk.pdf", width = 7, height = 5)
 term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "Apoptosis", 
     mean.term.vals = mean.bd.k.vals)
 
 term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "DNA Repair", 
     mean.term.vals = mean.bd.k.vals, stat.y = 0.95, autoflip.stat.y = FALSE)
-dev.off()
+#dev.off()
 
 term_vioplot(outer.term = "Type II diabetes mellitus", mean.term.vals = mean.k.vals)
 term_vioplot(outer.term = "Proteasome", mean.term.vals = mean.k.vals, stat.y = 0.95)
@@ -3590,3 +3972,18 @@ plot.enrichment(int.enrich, max.term.size = 3000, num.terms = 30, plot.label = t
 
 ```
 
+## Apoe and Klotho
+
+for later...
+
+APP regulates brain APOE and cholesterol metabolism through
+the lipoprotein receptor LRP1 (Liu et al. 2007, Neuron, 
+pmid: 17920016). Overexpression of LDLR inhibits amyloid
+deposition and increases extracellular A-beta clearance
+(Kim et al. 2009, Neuron, pmid: 20005821). 
+
+Cholesterol is also used to make vitamin D, which is 
+also Klotho related. Klotho forms a complex with FGF23
+to suppress conversion of inactive vitamin D to its 
+active form. Vitamin D increases Klotho expression 
+(more details in pmid: 38213484).
