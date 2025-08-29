@@ -932,6 +932,9 @@ dimnames(scaled.expr) <- dimnames(norm.expr)
 saveRDS(scaled.expr, file.path(processed.data.dir, 
   paste0("Scaled_Expression_", carrier.text, ".RDS")))
 
+#just testing...
+scaled.expr <- t(apply(scaled.expr, 1, rankZ))
+
 if(expression.type == "transcript"){
   tx.id <- sub.id[which(sub.id[,"gene_id"] == kl.ensembl),"transcript_id"]  
 }else{
