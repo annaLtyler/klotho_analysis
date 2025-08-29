@@ -82,10 +82,7 @@ rank.normalize <- TRUE #If TRUE, the expression values are rankZ normalized to r
 final.params <- TRUE 
 
 if(expression.type == "transcript"){final.params = FALSE}
-if(min.term.size != 10){final.params = FALSE}
-if(fdr.thresh != 0.1){final.params = FALSE}
 if(length(subgroup) != 1 && subgroup[[1]] != 12){final.params = FALSE}
-if(!remove.qc){final.params = FALSE}
 if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC > WT > VS
 if(group.representation != "means"){final.params = FALSE}
 if(!adjust.ide){final.params = FALSE}
@@ -104,13 +101,7 @@ This workflow used the following parameters:
 
 Subgroup: `r paste(names(subgroup), subgroup, sep = " = ")`
 
-Genotypes analyzed: `r geno.used`
-
 Units of expression: `r expression.type`
-
-Minimum number of genes in a group: `r min.term.size`
-
-FDR threshold for significance: `r fdr.thresh`
 
 Adjusted for Ide expression: `r as.character(adjust.ide)`
 
