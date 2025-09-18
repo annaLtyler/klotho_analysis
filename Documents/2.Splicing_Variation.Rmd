@@ -44,9 +44,6 @@ rm(list = ls())
 
 library(here)
 
-ref.geno <- "FC"
-alt.geno <- "VS"
-
 expression.type = "transcript"
 
 args <- commandArgs(trailingOnly=T)
@@ -68,12 +65,31 @@ if(subgroup == "all ages"){
   results.dir <- here("Results", paste(subgroup.results, expression.type, sep = "_"))
 }
 general.data.dir <- here("Data", "general")
+
+carrier.text <- "carriers" #this is always set to carriers to maximize n
+
+
+#test by genotoype
+#test.factor = "genotype"; ref.geno <- "FC"; alt.geno <- "VS"
+
+#or by high and low expression levels of a gene
+test.factor = "expr"; gene.name = "Srsf5"; ref.geno <- "low"; alt.geno  <- "high"
+
+if(test.factor == "genotype"){
+  test.text <- paste("We are testing differential exon usage based on Klotho genotype.
+  The reference allele is", ref.geno, "and the alternative allele is", alt.geno)
+}else{
+  test.text <- paste("We are testing differential exon usage based on", ref.geno, "and",
+  alt.geno, "expression of", gene.name)
+}
 ```
+
+
 
 The subgroup analyzed in this workflow is:
 `r paste(names(subgroup), subgroup, sep = " = ")`
 
-The genotypes compared are `r ref.geno` and `r alt.geno`.
+`r test.text`
 
 ```{r load_code}
 all.fun <- list.files(here("Code"), full.names = TRUE)
@@ -97,13 +113,13 @@ load_libraries(needed.libraries)
 
 ```{r load_data}
 tx.info <- read.delim(file.path(general.data.dir, "mouse_transcript_info.txt"))
-mouse.info <- read.csv(file.path(processed.data.dir, "mouse_info.csv"))
+mouse.info <- read.csv(file.path(processed.data.dir, paste0("mouse_info_", carrier.text, ".csv")))
 #add X to make all labels characters
 rownames(mouse.info) <- paste0("X", rownames(mouse.info))
 tx.expr <- read.delim(file.path(raw.data.dir, "rsem.merged.transcript_counts.tsv"))
 ```
 
-```{r build_objects}
+```{r match_expr_covar}
 expr.mat <- as.matrix(tx.expr[,3:ncol(tx.expr)])
 rownames(expr.mat) <- tx.expr[,1]
 common.mouse <- intersect(colnames(expr.mat), rownames(mouse.info))
@@ -111,17 +127,43 @@ info.idx <- match(common.mouse, rownames(mouse.info))
 expr.idx <- match(common.mouse, colnames(expr.mat))
 matched.expr <- expr.mat[,expr.idx]
 matched.info <- mouse.info[info.idx,]
+```
 
-carrier.factor <- rep("WT", nrow(matched.info))
-carrier.factor[grep("VS", matched.info[,"climb_geno"])] <- "VS"
-carrier.factor[grep("FC", matched.info[,"climb_geno"])] <- "FC"
-geno_factor <- ordered(carrier.factor, levels = c("FC", "WT", "VS"))
-sub.cols <- c("FC" = orig.geno.cols["FC/FC"], "WT" = orig.geno.cols["WT/WT"], "VS" = orig.geno.cols["VS/VS"])
-geno.cols <- sub.cols
+Here we set up a data frame with the factors for testing.
+This could be genotypes of the Klotho alleles, or high and
+low expression of a particular gene.
 
-ref.idx <- which(geno_factor == ref.geno)
-alt.idx <- which(geno_factor == alt.geno)
-test.idx <- c(ref.idx, alt.idx)
+```{r set_test_factor}
+if(test.factor == "genotype"){
+  carrier.factor <- rep("WT", nrow(matched.info))
+  carrier.factor[grep("VS", matched.info[,"ordered_geno"])] <- "VS"
+  carrier.factor[grep("FC", matched.info[,"ordered_geno"])] <- "FC"
+  geno_factor <- ordered(carrier.factor, levels = c("FC", "WT", "VS"))
+  sub.cols <- c("FC" = orig.geno.cols["FC/FC"], "WT" = orig.geno.cols["WT/WT"], "VS" = orig.geno.cols["VS/VS"])
+  geno.cols <- sub.cols
+  ref.idx <- which(geno_factor == ref.geno)
+  alt.idx <- which(geno_factor == alt.geno)
+  test.idx <- c(ref.idx, alt.idx)
+}
+
+if(test.factor == "expr"){
+  gene.expr  <- readRDS(file.path(gsub("transcript", "gene", results.dir), "processed_data", "Batch_Adjusted_Expr.RDS"))
+  carrier.factor <- rep("low", nrow(matched.info))
+  gene.idx <- which(tx.info[ ,"external_gene_name"] == gene.name)
+  gene.id <- tx.info[gene.idx[1],"ensembl_gene_id"]
+  tx.idx <- which(colnames(gene.expr) %in% gene.id)
+
+  gene.expr <- gene.expr[match(gsub("X", "", rownames(matched.info)), rownames(gene.expr)), tx.idx]
+  low.expr <- which(gene.expr < mean(gene.expr))
+  high.expr <- which(gene.expr > mean(gene.expr))
+  carrier.factor[high.expr] <- "high"
+
+  geno_factor <- ordered(carrier.factor, levels = c("low", "high"))
+  geno.cols <- c("#3182bd", "#a6611a")
+  ref.idx <- which(geno_factor == ref.geno)
+  alt.idx <- which(geno_factor == alt.geno)
+  test.idx <- c(ref.idx, alt.idx)  
+}
 
 plotting.df <- data.frame("sequencingBatch" = as.factor(mouse.info[test.idx,"sequencingBatch"]),
   "sex_ge" = as.factor(mouse.info[test.idx,"sex_ge"]),
@@ -134,13 +176,21 @@ rownames(plotting.df) <- rownames(mouse.info)[test.idx]
 
 ```{r exon_usage}
 #test.sample <- 1:1000
-test.sample <- 1:nrow(expr.mat)
+test.sample <- 1:nrow(matched.expr)
 
-common.tx <- intersect(rownames(expr.mat)[test.sample], tx.info[,"ensembl_transcript_id"])
-expr.idx <- match(common.tx, rownames(expr.mat))
+common.tx <- intersect(rownames(matched.expr)[test.sample], tx.info[,"ensembl_transcript_id"])
+expr.idx <- match(common.tx, rownames(matched.expr))
 info.idx <- match(common.tx, tx.info[,"ensembl_transcript_id"])
 tx.table <- data.frame("gene_id" = tx.info[info.idx,"ensembl_gene_id"], 
   "feature_id" = tx.info[info.idx,"ensembl_transcript_id"])
+
+#if(test.factor == "expr"){
+#  #adjust for klotho genotype
+#  dummy.geno <- dummy_covar(as.matrix(matched.info[,"ordered_geno"]))
+#  adj.expr <- t(adjust(t(matched.expr), dummy.geno))
+#  #the minimum count is now below zero. makde all counts positive
+#  matched.expr <- adj.expr-min(adj.expr)
+#}
 
 #test.sample <- 3:ncol(expr.table)
 expr.table <- data.frame(feature_id = tx.info[info.idx,"ensembl_transcript_id"], 
@@ -318,7 +368,7 @@ genes. The alternative splicing seems to be primarily
 related to synaptic genes.
 
 ```{r enrich, fig.height = 7, fig.width = 7}
-sig.enrich <- gost(sig.genes, organism = "mmusculus", sources = "GO")
+sig.enrich <- gost(sig.genes, organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP"))
 plot.enrichment(sig.enrich, plot.label = "Enrichment of alternatively spliced genes",
   num.terms = 30, max.term.size = 3000)
 ```
@@ -416,10 +466,10 @@ results.files <- list.files(results.dir, pattern = "DEx_results", full.names = T
 if(length(results.files) == 3){
   all.dex <- lapply(results.files, function(x) read.csv(x))
   names(all.dex) <- gsub(".csv", "", gsub("DEx_results_", "", basename(results.files)))
+  
+  gene.lists <- lapply(all.dex, function(x) unique(x[which(x[,"gene"] <= alpha),"geneID"]))
+  plotVenn(gene.lists)
 }
-
-gene.lists <- lapply(all.dex, function(x) unique(x[which(x[,"gene"] <= alpha),"geneID"]))
-plotVenn(gene.lists)
 ```
 
 The bar plot below shows more clearly that the VS-FC comparison
@@ -428,8 +478,10 @@ VS-WT comparison has the next most, and the FC-WT comparison
 has the fewest.
 
 ```{r counts}
-barplot_with_num(sapply(gene.lists, length), main = "Significant genes in each comparison",
-  ylab = "Gene Count")
+if(length(results.files) == 3){
+  barplot_with_num(sapply(gene.lists, length), main = "Significant genes in each comparison",
+    ylab = "Gene Count")
+}
 ```
 
 The enrichments below show that all comparisons are enriched
@@ -438,23 +490,27 @@ strongest enrichments. Probably because it is the largest
 group of genes.
 
 ```{r comp_enrich, fig.width = 7, fig.heigh = 7}
-comp.enrich <- lapply(gene.lists, function(x) gost(x, organism = "mmusculus", 
-  sources = c("GO", "KEGG")))
+if(length(results.files) == 3){
+  comp.enrich <- lapply(gene.lists, function(x) gost(x, organism = "mmusculus", 
+    sources = c("GO", "KEGG")))
 
-plot.enrichment.group(comp.enrich, transformation = "sqrt", 
-  plot.label = "Square root of the -log10(p) for enrichments",
-  max.term.size = 3000, cluster_cols = FALSE)
+  plot.enrichment.group(comp.enrich, transformation = "sqrt", 
+    plot.label = "Square root of the -log10(p) for enrichments",
+    max.term.size = 3000, cluster_cols = FALSE)
+}
 ```
 
 ## Comparison to differentially expressed genes
 
 Do differential expression and differential splicing occur
-in the same genes?
+in the same genes? About a third of the genes with significant
+differential exon usage were also differentially expressed.
 
 ```{r deg_deu_comparison}
 deg.dir <- gsub("transcript", "gene", results.dir)
-deg.table <- read.delim(file.path(deg.dir, "Significant_gene_climb_geno.txt"))
-sig.overlap <- intersect(deg.table[,"geneID"], sig.genes)
+deg.table <- read.delim(file.path(deg.dir, "DEG_clusters_carriers.txt"))
+sig.overlap <- intersect(rownames(deg.table), sig.genes)
+plotVenn(list("DEG" = rownames(deg.table), "DEU" = sig.genes))
 ```
 
 There were `r length(sig.overlap)` genes with differential
@@ -494,26 +550,32 @@ significance we see in this data set.
 ```{r pandey_overlap}
 pandey <- read.csv(here("Data", "Mouse", "Pandey_et_al_Table7.csv"))
 overlap <- intersect(pandey[,"ENSEMBL"], sig.genes)
-overlap.names <- pandey[match(overlap, pandey[,"ENSEMBL"]), "SYMBOL"]
-overlap.idx <- lapply(overlap, function(x) which(padj[,"geneID"] == x))
-names(overlap.idx) <- overlap.names
-overlap.p <- lapply(overlap.idx, function(x) padj[x,])
-barplot(sapply(overlap.p, function(x) -log10(x[1,"gene"])), ylab = "-log10(p value)")
+if(length(overlap) > 0){
+  overlap.names <- pandey[match(overlap, pandey[,"ENSEMBL"]), "SYMBOL"]
+  overlap.idx <- lapply(overlap, function(x) which(padj[,"geneID"] == x))
+  names(overlap.idx) <- overlap.names
+  overlap.p <- lapply(overlap.idx, function(x) padj[x,])
+  barplot(sapply(overlap.p, function(x) -log10(x[1,"gene"])), ylab = "-log10(p value)")
+}else{
+  plot.text("No overlap with Pandey genes")
+}
 ```
 
 The following plots show the differential transcript usage
 for each of the above genes. Not terribly compelling.
 
 ```{r details, results = "asis", fig.height = 7, fig.width = 7}
-for(i in 1:length(overlap)){
-  top_gene_id <- overlap[i]
-  top_gene_name <- pandey[which(pandey[,"ENSEMBL"] == top_gene_id),"SYMBOL"]
-  cat("###", top_gene_name, "\n")
+if(length(overlap) > 0){
+  for(i in 1:length(overlap)){
+    top_gene_id <- overlap[i]
+    top_gene_name <- pandey[which(pandey[,"ENSEMBL"] == top_gene_id),"SYMBOL"]
+    cat("###", top_gene_name, "\n")
 
-  print(plotProportions(d, gene_id = top_gene_id, group_variable = "genotype", 
-    plot_type = "boxplot1", group_colors = geno.cols[c(1,3)]))
-  
-  cat("\n\n")
+    print(plotProportions(d, gene_id = top_gene_id, group_variable = "genotype", 
+      plot_type = "boxplot1", group_colors = geno.cols[c(1,3)]))
+    
+    cat("\n\n")
+  }
 }
 ```
 
@@ -521,3 +583,21 @@ Otherwise this paper is a huge mess. Every single subdivision of
 the animals you can possible imagine has it's own list of differential
 expression and differential exon use from multiple different packages.
 There is absolutely no use in looking at overlaps with these gene lists.
+
+## Comparison to Srsf5 connectors
+
+Are the genes that are connected to Srsf5 in the gene interaction network
+differentially spliced? No. The line shows a p value of 0.05.
+
+```{r srsf5_net}
+#pdf("~/Desktop/Srsf5_conn_deu.pdf")
+srsf5.conn <- c("Capzb", "Rpl27a", "Ash1l", "Bsg", "Per3", "Suclg1", "Snrpd1")
+conn.id <- tx.info[match(srsf5.conn, tx.info[,"external_gene_name"]), "ensembl_gene_id"]
+conn.p <- padj[match(conn.id, padj[,"geneID"]), "gene"]
+names(conn.p) <- srsf5.conn
+barplot(-log10(conn.p), 
+  main = "-log10(p) for differential exon usage\nof genes connected to Srsf5",
+  ylim = c(0, -log10(0.01)))
+abline(h = -log10(0.05), lty = 2)
+```
+

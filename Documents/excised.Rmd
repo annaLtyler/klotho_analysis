@@ -738,8 +738,8 @@ use.power
 
 #signed if no negative values
 #unsigned if negative values are included
-#type = "unsigned"
-type = "signed"
+type = "unsigned"
+#type = "signed"
 net = blockwiseModules(adj_expr, power = use.power, 
     TOMType = type, minModuleSize = 10, 
     reassignThreshold = 0, mergeCutHeight = 0.25, 
@@ -753,6 +753,37 @@ num.wgcna.modules <- length(unique(modules))
 u_mods <- sort(unique(modules))
 mod.size <- sapply(u_mods, function(x) length(which(modules == x)))
 barplot(mod.size)
+
+mod.genes <- lapply(u_mods, function(x) names(modules)[which(modules == x)])
+
+mean.mod.vals <- non_nested_mean_vals(non_nested_gene_list = mod.genes, 
+    expr.mat = adj_expr, group.representation = group.representation)
+
+#Mean module expression is not strongly associated with genotype
+mod.result <- plot_mean_bd_k(mean.bd.k.mat = mean.mod.vals, 
+    covar.mat = covar.table, plot.results = TRUE, order.by = "PC",
+    path.stats = "R2", stat.x = 0.8, stat.y = 0.2, label.margin = 20)
+
+high.idx <- which(mod.result$row.r2 > 0.2)
+high.enrich <- gost(mod.genes[high.idx], organism = "mmusculus", sources = "GO")
+plot.enrichment(high.enrich, num.terms = 30, max.term.size = 3000)
+
+pdf(paste0("~/Desktop/WGCNA_", type, ".pdf"), width = 10, height = 7)
+test <- lapply(1:length(mod.genes), function(x) plot_individual_genes(gene.list = mod.genes[[x]], 
+  plot.label = paste0("Module", x), return.full.result = TRUE))
+dev.off()
+
+mod.r2 <- sapply(test, function(x) x$overall.r2)
+hist(mod.r2)
+mod.p <- sapply(test, function(x) x$vioplot_results$model.p)
+bonf.thresh <- 0.05/length(mod.p)
+hist(-log10(mod.p));abline(v = -log10(bonf.thresh))
+sig.mod <- which(mod.p <= bonf.thresh)
+
+high.mod.eig <- which(mod.r2 >= 0.2)
+high.mod.enrich <- lapply(mod.genes[high.mod.eig], function(x) gost(x, organism = "mmusculus", sources = "GO"))
+names(high.mod.enrich)  <- paste0("Module", high.mod.eig)
+plot.enrichment.group(high.mod.enrich, max.term.size = 3000, transformation = "sqrt")
 
 
 enrich.file <- file.path(results.dir, paste0("WGCNA_Module_Enrichment_", type, ".RDS"))
@@ -1686,4 +1717,25 @@ for(i in 1:nrow(int.enrich)){
     cat("\n\n")
 }
 #dev.off()
+```
+
+## selecting large connected component of network for plotting
+
+```{r lcc}
+
+  #there is an unconnected pair that makes plotting difficult. Just plot the large connected component
+
+  comp <- components(high.net, mode = "weak")
+  lcc.id <- which.max(comp$csize)
+  lcc.verts <- V(high.net)[comp$membership == lcc.id]
+  lcc.net <- induced_subgraph(high.net, lcc.verts)
+
+  #suppress labels for nodes with degree less than 3
+  high.names <- V(lcc.net)$name
+  high.names[which(degree(lcc.net) < 5)] <- ""
+  #put back things connected to APP metabolism
+  keep.names <- c("Dopaminergic synapse", "Nicotine addiction", "APP Metabolism")
+  for(i in 1:length(keep.names)){
+      high.names[which(V(lcc.net)$name == keep.names[i])] <- keep.names[i]
+  }
 ```

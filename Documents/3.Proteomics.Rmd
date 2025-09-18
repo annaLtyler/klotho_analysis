@@ -1,0 +1,285 @@
+---
+title: "Klotho proteomics"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+## Introduction
+
+The purpose of this workflow is to start looking at the proteomics
+data from the Klotho mice.
+
+```{r}
+
+rm(list = ls())
+
+library(here)
+
+general.data.dir <- here("Data", "general")
+proteomics.data.dir <-  here("Data", "Proteomics")
+
+use.carrier.status <- TRUE #if true, fits models with the ordered factor FC > WT > VS
+                          #if false, fits modesl with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
+
+results.dir <- here("Results", "Proteomics")
+processed.data.dir <- here("Results", "all_gene", "processed_data")
+general.processed.data.dir <- here("Results", "Processed_Data")
+mouse.data.dir <- here("Data", "Mouse")
+
+adjust.ide = TRUE
+```
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+```
+
+```{r geno_type}
+
+geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
+ordered.geno <- c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
+if(use.carrier.status){
+    geno.cols <- geno.cols[c("FC/FC", "WT/WT", "VS/VS")]
+    names(geno.cols) <- c("FC", "WT", "VS")
+    ordered.geno <- c("FC", "WT", "VS")
+    carrier.text <- "carriers"
+}else{
+    carrier.text <- "all_geno"
+}
+```
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "VennDiagram", "DT")
+load_libraries(needed.libraries)
+```
+
+```{r read_data}
+mouse.info <- read.csv(file.path(mouse.data.dir, "metadata_validated.csv"))
+orthos <- read.delim(file.path(general.data.dir, "human.mouse.orthologs.txt"))
+#mouse.genes <- read.delim(here("Data", "general", paste0("mouse_", expression.type, "_info.txt")))
+
+#read in the appropriate covariate table
+covar.mat <- read.table(file.path(processed.data.dir, 
+    paste0("covariates_", carrier.text, ".csv")), sep = ",", header = TRUE, row.names = 1)
+    
+#convert to a data frame with appropriate ordered factors.
+covar.table <- data.frame("sequencingBatch" = as.factor(covar.mat[,"sequencingBatch"]),
+    "sex_ge" = as.factor(covar.mat[,"sex_ge"]),
+    "age_batch" = ordered(covar.mat[,"age_batch"], levels = c("4", "12")),
+    "ordered_geno" = ordered(covar.mat[,"ordered_geno"], levels = ordered.geno))
+
+
+if(adjust.ide){
+    #add Ide expression if requested
+    covar.table$scaled_Ide_expression <- as.numeric(covar.mat[,"scaled_Ide_expression"])
+}
+rownames(covar.table) <- rownames(covar.mat)
+
+test.factor <- covar.table$ordered_geno
+```
+
+```{r read_proteome}
+pr.mouse <- read.delim(file.path(proteomics.data.dir, "observations.tsv"))
+gene.features <- read.delim(file.path(proteomics.data.dir, "gg.features.tsv"))
+protein.features <- read.delim(file.path(proteomics.data.dir, "pg.features.tsv"))
+
+gene.mat <- read.delim(file.path(proteomics.data.dir, "gg.expression.tsv"))
+```
+
+Match our transcriptomic mouse information with the proteomic mouse information.
+
+```{r match_mats}
+all.trans.meta <- read.csv(here("Data", "Mouse", "metadata_validated.csv"))
+trans.ind <- all.trans.meta[,"animalName"]
+prot.ind <- pr.mouse[,"animal_id"]
+plotVenn(list("transcriptomic" = unique(all.trans.meta[,"animalName"]), "proteomic" = unique(prot.ind)))
+```
+
+There were animals in each data set that did not appear in the other.
+The animals that were included in the proteomics data set but not the
+transcriptomics data set appear below. They all appear to be from a 
+Trem2 experiment. I didn't include these in the Klotho transcriptomic
+analysis, so these aren't a problem.
+
+```{r not_in_prot}
+not.in.prot <- setdiff(trans.ind, prot.ind)
+trans.info <- all.trans.meta[match(not.in.prot, all.trans.meta[,"animalName"]),]
+datatable(trans.info)
+```
+
+The table below shows the animals that were in the proteomics data 
+set, but not in the transcriptomics data set. These animals, however, 
+were not in my 
+
+```{r not_in_trans}
+not.in.trans <- setdiff(prot.ind, trans.ind)
+prot.info <- pr.mouse[match(not.in.trans, pr.mouse[,"animal_id"]),]
+datatable(prot.info)
+```
+
+We will set up a mouse information table separately for the proteomics
+data and compare to the information we have in the transcriptomics data
+just to be sure everything matches. 
+
+```{r parse_geno}
+parse_geno <- function(allele.label, dip.label){
+    kl.type <- gsub("Klotho", "", allele.label)
+    if(use.carrier.status){
+        return(kl.type)
+    }else{
+        if(dip.label == "HOM"){
+            kl.geno <- paste0(kl.type, "/", kl.type)
+        }else{
+            kl.geno <- paste0("WT/", kl.type)
+        }
+        return(kl.geno)
+    }
+}
+```
+
+We generated a table for each observation in the proteomics data. 
+There are multiple replicates per individual mouse.
+
+```{r pr_covar}
+pr.id <- pr.mouse[,"animal_id"]
+pr.sex <- pr.mouse[,"sex"]
+
+raw.age <- pr.mouse[,"age"]/30
+#hist(raw.age, xlab = "months") #just double check these are 4 and 12-month olds
+pr.age.m <- bin.vector(raw.age, c(4, 12)) #bin ages into four and 12 months old
+pr.geno <- apply(pr.mouse[,c("klotho", "geno")], 1, function(x) parse_geno(x[1], x[2]))
+
+split.pr.info <- strsplit(pr.mouse[,"obs_id"], "_")
+pr.rep <- sapply(split.pr.info, function(x) tail(x, 1))
+pr.run <- sapply(split.pr.info, function(x) x[1])
+pr.unsure <- sapply(split.pr.info, function(x) x[3]) 
+pr.date <- sapply(split.pr.info, function(x) x[4])
+
+pr.info.table <- cbind(pr.id, pr.sex, pr.age.m, pr.geno, pr.rep, pr.run, pr.unsure, pr.date)
+colnames(pr.info.table) <- c("animalID", "sex", "age_months", "genotype", "replicate", "run", "not_sure", "date")
+```
+
+We first went through the replicates to make sure that each individual
+mouse had consistent information across all replicates. They all checked
+out.
+
+```{r rep_info}
+u_id <- unique(pr.info.table[,"animalID"])
+split_ind <- lapply(u_id, function(x) unique(pr.info.table[which(pr.info.table[,"animalID"] == x),c("animalID", "sex", "age_months", "genotype")]))
+check.info <- unique(sapply(split_ind, nrow))
+#all animals have one set of ID, sex, age, and genotype associated. Good!
+```
+
+We then aligned every mouse id in both the transcriptomic and
+proteomic data sets to make sure the information was the same
+in both.
+
+```{r extract_info_fun}
+get.pr.info <- function(animalID){
+    animal.idx <- which(pr.info.table[,"animalID"] == animalID)[1]
+    if(is.na(animal.idx)){
+        animal.info <- c("animalID" = animalID, "sex" = NA, "age_months" = NA, "genotype" = NA)
+    }else{
+        animal.info <- pr.info.table[animal.idx,c("animalID", "sex", "age_months", "genotype")]
+    }
+    return(animal.info)
+}
+
+get.tr.info <- function(animalID){
+    #use the covariate matrix because this has already gone through a QC process
+    animal.idx <- which(rownames(covar.mat) == animalID)
+    if(length(animal.idx) == 0){
+        animal.info <- c("animalID" = animalID, "sex" = NA, "age_months" = NA, "genotype" = NA)
+    }else{
+        animal.sex <- substr(covar.mat[animal.idx, "sex_ge"], 1, 1)
+        animal.age <- covar.mat[animal.idx,"age_batch"]
+        animal.geno <- covar.mat[animal.idx,"ordered_geno"]
+        animal.info <- c("animalID" = animalID, "sex" = animal.sex, "age_months" = animal.age, "genotype" = animal.geno)
+    }
+return(animal.info)
+}
+
+compare.info <- function(one.tr.info, one.pr.info){
+
+    both.present <- TRUE
+    
+    #if the animal is not in the transcript data
+    #or not in the protein data, just say so
+    if(all(is.na(one.tr.info[2:length(one.tr.info)]))){
+        check.result <- "Not present in transcript data"
+        both.present = FALSE
+    }
+    if(all(is.na(one.pr.info[2:length(one.pr.info)]))){
+        check.result <- "Not present in proteomic data"
+        both.present = FALSE
+    }
+
+    if(both.present){
+        #otherwise, compare data bitwise 
+        check.stats <- sapply(1:length(one.tr.info), function(x) one.tr.info[x] == one.pr.info[x])
+        if(all(check.stats)){
+            check.result <- "Pass"
+        }else{
+            check.result <- "Fail"
+        }
+    }
+    return(check.result)
+}
+```
+
+```{r align}
+all.id <- unique(c(prot.ind, trans.ind))
+#plotVenn(list("prot" = unique(prot.ind), "trans" = unique(trans.ind)))
+all.tr.info <- t(sapply(all.id, get.tr.info))
+all.pr.info <- t(sapply(all.id, get.pr.info))
+
+check.match <- sapply(1:length(all.id), 
+    function(x) compare.info(one.tr.info = all.tr.info[x,], one.pr.info = all.pr.info[x,]))
+fail.idx <- which(check.match == "Fail")
+```
+
+There were `r length(fail.idx)` IDs for which information in the 
+transcriptomic and proteomic data did not match. It looks as if these
+might be the missing wild type mice. All mice in the proteomic data
+are listed as either FC or VS. 
+
+All of the fails except one match on everything except genotype,
+and all of these are listed as WT in the transcriptomic data.
+
+There is one mouse (83901) that differs only on sex. It is male
+in the transcriptomic data and female in proteomic data. We 
+converted this one to male in the transcriptomic data based 
+on transcriptomic evidence. We will also convert it to male here.
+
+For the rest, we will convert the genotoypes in the proteomics
+data to WT.
+
+```{r fail_checking}
+fail.id <- all.id[fail.idx]
+fail.table <- cbind(all.tr.info[fail.idx,], all.pr.info[fail.idx,])
+
+switch.id <- "83901"
+switch.idx <- which(all.pr.info[,"animalID"] == switch.id)
+all.pr.info[switch.idx,"sex"] <- "M"
+
+wt.idx <- which(all.tr.info[,"genotype"] == "WT")
+all.pr.info[wt.idx,"genotype"] <- "WT"
+```
+
+Now we are ready to start looking into the protein data. There 
+were three replicates done per animal, and there are some other 
+numbers in the observation ID that I'm not yet sure what to do 
+with. I'm in touch with Mitch and Tim about this. 
+
+We'll want to look at missing data across replicates to start
+thinking about what we want to do with that.
+
+```{r read_pr}
+#gene.mat
+```

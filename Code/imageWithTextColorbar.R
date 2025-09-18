@@ -7,11 +7,15 @@
 #exp.steepness = 1; global.color.scale = FALSE; global.min = NULL; global.max = NULL 
 #axis.line = -3; use.pheatmap.colors = FALSE; ax.min = NULL; ax.max = NULL; n.ax.ticks = NULL
 #hadj = NA; padj = NA; bounding.box = TRUE; bar.lwd = 1; las = 1
+#imageWithTextColorbar(mat, col.scale = "blue", bar.lwd = 3, n.col = 10)
+#imageWithTextColorbar(mat, col.scale = c("blue", "purple"), bar.lwd = 3, n.col = 10, split.at.vals = TRUE, grad.dir = "ends")
+#imageWithTextColorbar(mat, col.scale = list("pink", "cyan"), bar.lwd = 3, n.col = 10, split.at.vals = TRUE, grad.dir = "high")
+#imageWithTextColorbar(mat, col.scale = list(c("white", "yellow", "blue"), c("white", "yellow", "red")), bar.lwd = 3, n.col = 25, split.at.vals = TRUE, grad.dir = "ends")
 
 imageWithTextColorbar <- function(mat, x = NULL, y = NULL, orientation = c("h", "v"), 
 cex = 0.5, split.at.vals = FALSE, split.points = 0, 
 col.scale = c("green", "purple", "orange", "blue", "gray"), light.dark = "f", 
-class.mat = NULL, grad.dir = c("high", "low", "middle", "ends"), 
+n.col = 4, class.mat = NULL, grad.dir = c("high", "low", "middle", "ends"), 
 color.fun = c("linear", "exponential"), exp.steepness = 1,
 global.color.scale = FALSE, global.min = NULL, global.max = NULL,
 axis.line = 0, use.pheatmap.colors = FALSE, round.nearest = 1, 
@@ -78,7 +82,6 @@ bounding.box = TRUE, bar.lwd = 1,  las = 1){
 			grad.dir <- "high"
 			}
 		
-		n.col <- 4
 		dir.list <- vector(mode = "list", length = num.classes)
 		if(grad.dir == "high"){
 			for(i in 1:length(dir.list)){
@@ -149,7 +152,7 @@ bounding.box = TRUE, bar.lwd = 1,  las = 1){
 					}
 
 				#make the function to generate 
-				col.vals <- get.color(col.scale[cl], light.dark = light.dark)
+				col.vals <- get.color(col.scale[[cl]], light.dark = light.dark, n.colors = n.col)
 				color.scales[[cl]] <- colorRampPalette(col.vals[dir.list[[cl]]])
 				
 				#find the entries in each class

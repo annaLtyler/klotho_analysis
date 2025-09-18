@@ -1,20 +1,28 @@
-
-#testing: 
-# mat <- matrix((1:100), 10, 10)
-# mat <- matrix(rnorm(25), 5, 5)
-#xlab = ""; ylab = ""; main = NULL; main.shift = 0.12; col.names = NULL; row.names = NULL; row.text.adj = 1; row.text.shift = 0; row.text.rotation = 0; col.text.rotation = 90; col.text.adj = 1; col.text.shift = 0; show.text = TRUE; cex = 0.5; col.text.cex = 1; row.text.cex = 1; main.cex = 1; split.at.vals = FALSE; split.points = 0; col.scale = c("green", "purple", "orange", "blue", "brown", "gray"); light.dark = "f"; class.mat = NULL; grad.dir = c("high", "low", "middle", "ends"); color.fun = c("linear", "exponential"); exp.steepness = 1; global.color.scale = FALSE; global.min = NULL; global.max = NULL; sig.digs = 3;use.pheatmap.colors = FALSE
+#xlab = ""; ylab = ""; main = NULL; main.shift = 0.12; col.names = NULL; row.names = NULL; row.text.adj = 1; row.text.shift = 0; row.text.rotation = 0; col.text.rotation = 90; col.text.adj = 1; col.text.shift = 0; show.text = TRUE; cex = 0.5; col.text.cex = 1; row.text.cex = 1; main.cex = 1; split.at.vals = FALSE; split.points = 0; col.scale = c("green", "purple", "orange", "blue", "brown", "gray"); light.dark = "f"; class.mat = NULL; grad.dir = c("high", "low", "middle", "ends"); color.fun = c("linear", "exponential"); exp.steepness = 1; global.color.scale = FALSE; global.min = NULL; global.max = NULL; sig.digs = 3;use.pheatmap.colors = FALSE; color.dist = NULL
 #The custom color distribution automatically sets a global color scale
+#col.scale can be a single color, one of c("green", "purple", "orange", "blue", "brown", "gray")
+#or it can be a list the same length as the number of 
+#classes in the class matrix. Each element should be the colors
+#you want a gradient of in that class.
+#if you use the list, you need to pay more attention to the order
+#that you enter the ramps.
+#testing: 
+#display.brewer.all()
+#mat <- matrix((1:100), 10, 10); imageWithText(mat, col.scale = list(brewer.pal(8, "Blues")), grad.dir = "low")
+#mat <- matrix(sort(rnorm(25)), 5, 5); imageWithText(mat, split.at.vals = TRUE, col.scale = list(brewer.pal(8, "Blues"), brewer.pal(8, "Reds")), grad.dir = "ends")
+#mat <- matrix(sort(rnorm(25)), 5, 5); imageWithText(mat, split.at.vals = TRUE, col.scale = c("blue", "brown"), grad.dir = "ends")
 
 imageWithText <- function(mat, xlab = "", ylab = "", main = NULL, main.shift = 0.12, 
 col.names = colnames(mat), row.names = rownames(mat), row.text.adj = 1, row.text.shift = 0, 
 row.text.rotation = 0, col.text.rotation = 90, col.text.adj = 1, 
 col.text.shift = 0, show.text = TRUE, cex = 0.5, col.text.cex = 1, 
 row.text.cex = 1, main.cex = 1, split.at.vals = FALSE, split.points = 0, 
-col.scale = "gray", light.dark = "f", class.mat = NULL, 
-grad.dir = c("high", "low", "middle", "ends"), color.fun = c("linear", "exponential",
-"custom"), color.dist = NULL, 
-exp.steepness = 1, global.color.scale = FALSE, global.min = NULL, global.max = NULL, 
-sig.digs = 3, use.pheatmap.colors = FALSE, na.col = "lightgray", gridlines = FALSE){
+col.scale = c("green", "purple", "red", "orange", "blue", "brown", "yellow", "gray"), 
+light.dark = "f", n.col = 4, class.mat = NULL, 
+grad.dir = c("high", "low", "middle", "ends"), color.fun = c("linear", "exponential", "custom"), 
+color.dist = NULL, exp.steepness = 1, global.color.scale = FALSE, global.min = NULL, 
+global.max = NULL, sig.digs = 3, use.pheatmap.colors = FALSE, na.col = "lightgray", 
+gridlines = FALSE){
 
 		require(grid)
 		
@@ -81,7 +89,6 @@ sig.digs = 3, use.pheatmap.colors = FALSE, na.col = "lightgray", gridlines = FAL
 		if(length(get.default) > 0){
 			grad.dir <- "high"
 			}
-		
 		
 		# if(light.dark == "f"){max.col = 4}else{max.col = 8}
 		max.col = 4
@@ -200,8 +207,8 @@ sig.digs = 3, use.pheatmap.colors = FALSE, na.col = "lightgray", gridlines = FAL
 	
 					#plot(ColorLevels)
 
-					#make the function to generate 
-					col.vals <- get.color(col.scale[cl], light.dark = light.dark)
+					col.vals <- get.color(col.scale[[cl]], light.dark = light.dark, n.colors = n.col)
+					#barplot(rep(1:length(col.vals)), col = col.vals)
 
 					color.locale <- which(names(color.scales) == classes[cl])
 					color.scales[[color.locale]] <- colorRampPalette(col.vals[dir.list[[color.locale]]])

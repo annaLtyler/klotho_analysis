@@ -51,8 +51,8 @@ args <- commandArgs(trailingOnly=T)
 subgroup <- args[2]
 
 if(is.na(subgroup)){
-  #subgroup <- "all ages"
-  subgroup <- list("age_batch" = 12)
+  subgroup <- "all ages"
+  #subgroup <- list("age_batch" = 12)
   #subgroup <- list("age_batch" = 4)
   #subgroup <- list("age_batch" = 4, "sex_ge" = "Female") #example with more than one filter
 }
@@ -78,7 +78,7 @@ remove.qc <- TRUE #if 1a_Klotho_QC.Rmd has been run, and animals were identified
 ordered.geno <- c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
 
 use.carrier.status <- TRUE #if true, fits models with the ordered factor FC > WT > VS
-                          #if false, fits modesl with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
+                          #if false, fits models with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
 if(use.carrier.status){
   geno.used = c("FC, WT, VS"); carrier.text = "carriers"
   }else{
@@ -92,6 +92,15 @@ if(use.carrier.status){
                             #this is giving very strange results, so I'm abandoning it for now
 group.representation = "means"
 
+#heatmap.neg.col = "purple"
+#heatmap.pos.col = "brown"
+heatmap.pos.col = brewer.pal(11, "BrBG")[6:1]
+heatmap.neg.col = brewer.pal(11, "BrBG")[6:11]
+
+
+rank.normalize.expression = FALSE
+
+get.enrichments = FALSE #this allows us to turn of gprofiler code when gprofiler is down or we are offline
 ```
 
 ```{r is_final}
@@ -111,6 +120,7 @@ if(length(subgroup) != 1 && subgroup[[1]] != 12){final.params = FALSE}
 if(!remove.qc){final.params = FALSE}
 if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC > WT > VS
 if(group.representation != "means"){final.params = FALSE}
+if(rank.normalize.expression){final.params = FALSE}
 
 if(final.params){
   final.text <- "This IS the final set of parameters for the paper."
@@ -737,7 +747,7 @@ plot_pc_factors <- function(expr.mat, factors, n.pc = 4, top.genes = NULL,
       }
     }else{ #otherwise we have a number. Assign numerical colors
       factor.cols = colors.from.values(factors[,i], split.at.vals = TRUE, 
-        col.scale = c("blue", "brown"), grad.dir = "ends")
+        col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends")
       gcol <- factor.cols
     }
 
@@ -804,7 +814,7 @@ plot_pc_factors <- function(expr.mat, factors, n.pc = 4, top.genes = NULL,
     }else{
       par(mar = c(4,5,2,5))
       imageWithTextColorbar(matrix(factors[,i], ncol = 1), split.at.vals = TRUE, 
-        col.scale = c("blue", "brown"), grad.dir = "ends", cex = 1)
+        col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1)
     }
     
 
@@ -932,8 +942,9 @@ dimnames(scaled.expr) <- dimnames(norm.expr)
 saveRDS(scaled.expr, file.path(processed.data.dir, 
   paste0("Scaled_Expression_", carrier.text, ".RDS")))
 
-#just testing...
-scaled.expr <- t(apply(scaled.expr, 1, rankZ))
+if(rank.normalize.expression){
+  scaled.expr <- t(apply(scaled.expr, 1, rankZ))
+}
 
 if(expression.type == "transcript"){
   tx.id <- sub.id[which(sub.id[,"gene_id"] == kl.ensembl),"transcript_id"]  
@@ -1000,7 +1011,7 @@ plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat,
 if(final.params){
   pdf(here("Results", "for_paper", 
     paste0("Klotho_expression_by_genotype_", basename(results.dir), "_months.pdf")), 
-    width = 5, height = 6)
+    width = 4, height = 6)
     par(bg = NA)
   plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
     tx_name = tx.id, "ordered_geno", 
@@ -1053,8 +1064,8 @@ if(age.varies > 0 && use.carrier.status){
     par(bg = NA)
   age.varies <- which(colnames(covar.mat) == "age_batch")
   plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
-    tx.id, "age_batch", "numeric", 
-    paste0("Kl Transcript", 1:length(tx.id)), 
+    tx_name = tx.id, factor_name = "age_batch",
+    tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
     ylab = "Expression (A.U.)", cex.label = 1.5)
   dev.off()
 }
@@ -1220,7 +1231,7 @@ This is unexpected.
 There are many more genes that have a sex by age interaction.
 
 ```{r qq}
-effect.fdr  <- apply(effect.p, 2, function(x) p.adjust(x, "fdr"))
+effect.fdr <- apply(effect.p, 2, function(x) p.adjust(x, "fdr"))
 model.r2 <- model.r2[-big.sex.effect]
 
 layout(get.layout.mat(ncol(effect.p)))
@@ -1256,9 +1267,11 @@ The following heat map shows enrichments for genes that were
 nominally significant for each main effect or interaction. 
 
 ```{r enrich, fig.width = 7, fig.height = 7}
-enrich <- lapply(sig.factor, function(x) gost(names(x), organism = "mmusculus", 
-  sources = c("GO", "KEGG", "CORUM", "HP", "REACTOME")))
-plot.enrichment.group(enrich, max.term.size = 3000, transformation = sqrt, max.char = 100)
+if(get.enrichments){
+  enrich <- lapply(sig.factor, function(x) gost(names(x), organism = "mmusculus", 
+    sources = c("GO", "KEGG", "CORUM", "HP", "REACTOME")))
+  plot.enrichment.group(enrich, max.term.size = 3000, transformation = sqrt, max.char = 100)
+}
 ```
 
 Interaction plots for any genes with significant age by genotype
@@ -1390,41 +1403,135 @@ write.table(cbind(gene.names, mean.sig.expr, annot.col)[order(annot.col[,1]),],
   sep = "\t", quote = FALSE)
 ```
 
+If we are looking at all genotypes separately, the following code compares
+the additive and dominant models to justify grouping the carriers together.
+That is, we group the WT/VS and the VS/VS together as "VS carriers" and the 
+WT/FC and FC/FC together as "FC carriers" and compare these two groups to 
+the WT/WT animals.
+
+The 
+
+```{r dominance, warning = FALSE, fig.width = 10, fig.height = 5}
+
+if(!use.carrier.status){
+
+  library(locfit)
+
+  deg.decomp <- plot.decomp(t(sig.expr), plot.results = FALSE)
+  deg.pc <- deg.decomp$u[,1]
+
+  add_dom <- function(y){
+
+    carrier.factor <- rep("WT", length(geno_factor))
+    carrier.factor[grep("VS", geno_factor)] <- "VS"
+    carrier.factor[grep("FC", geno_factor)] <- "FC"
+    dom_coding <- ordered(carrier.factor, levels = c("FC", "WT", "VS"))
+
+    add.levels <- levels(geno_factor)
+    add.num <- sapply(geno_factor, function(x) which(add.levels == x)-3)
+
+    dom.levels <- levels(dom_coding)
+    dom.num <- sapply(dom_coding, function(x) which(dom.levels == x)-2)
+
+    #add.model <- lm(y~geno_factor) 
+    #dom.model <- lm(y~dom_coding)
+
+    add.model <- lm(y~add.num) 
+    dom.model <- lm(y~dom.num)
+
+    geno.add.r2 <- summary(add.model)$adj.r.squared
+    geno.add.p <- coef(summary(add.model))[2,"Pr(>|t|)"]
+    geno.add.aic <- aic(add.model)
+
+    geno.dom.r2 <- summary(dom.model)$adj.r.squared
+    geno.dom.p <- coef(summary(dom.model))[2,"Pr(>|t|)"]
+    geno.dom.aic <- aic(dom.model)
+
+    result <- cbind(c(geno.add.r2, geno.add.p, geno.add.aic["aic"]), c(geno.dom.r2, geno.dom.p, geno.dom.aic["aic"]))
+    colnames(result) <- c("Additive", "Dominant")
+    rownames(result) <- c("R2", "p", "AIC")
+    return(result)
+  }
+
+
+  sig.deg.comparison <- lapply(1:nrow(sig.expr), function(x) add_dom(sig.expr[x,]))
+  comp.r2 <- t(sapply(sig.deg.comparison, function(x) x["R2",]))
+  comp.p <- t(sapply(sig.deg.comparison, function(x) x["p",]))
+  comp.AIC <- t(sapply(sig.deg.comparison, function(x) x["AIC",]))
+  
+  pc.model.comparison <- add_dom(deg.pc)
+  
+  pdf("~/Desktop/Additive_vs_Dominant.pdf", width = 9, height = 9)
+  par(mfrow = c(3,3))
+  barplot_with_num(signif(pc.model.comparison["R2",], 2), ylab = "R2", 
+    main = "Variance Explained", ylim = c(0, 0.25), text.shift = 0.13)
+  barplot_with_num(signif(-log10(pc.model.comparison["p",]), 2), 
+    ylab = "-log10(p)", main = "-log10(p)", ylim = c(0, 8), text.shift = 0.13)
+  barplot_with_num(signif(pc.model.comparison["AIC",], 2), 
+    ylab = "AIC", main = "AIC", ylim = c(0, 12), text.shift = 0.09)
+
+  boxplot(comp.r2, ylab = "R2", main = "Variance Explained")
+  boxplot(-log10(comp.p), ylab = "-log10(p)", main = "-log10(p)")
+  boxplot(comp.AIC, ylab = "AIC", main = "AIC")
+
+  plot(comp.r2, main = "Variance Explained", xlab = "Additive R2", ylab = "Dominant R2")
+    abline(0,1, col = "red")
+  plot(-log10(comp.p), main = "-log10(p)", xlab = "Additive -log10(p)", ylab = "Dominant -log10(p)")
+    abline(0,1, col = "red")
+  plot(comp.AIC, main = "AIC", xlab = "Additive AIC", ylab = "Dominant AIC")
+    abline(0,1, col = "red")
+  dev.off()
+}
+```
+
 ```{r deg_fig}
 cluster.id <- expr.clust$clustering
 if(final.params){
-  png(here("Results", "for_paper", "deg_clusters.png"), width = 7, height = 3,  units = "in", res = 300)
+  
+  if(use.carrier.status){
+    png(here("Results", "for_paper", "deg_clusters.png"), width = 7, height = 2,  units = "in", res = 300)
+    y.nudge = 0.15; x.nudge.left = 0.04; x.nudge.right = 0.03; row.text.shift = 0.045; label.y = 0.15
+  }else{
+    #only run by hand
+    png(here("Results", "for_paper", "deg_clusters_all_geno.png"), width = 7, height = 3,  units = "in", res = 300)
+    y.nudge = 0.06; x.nudge.left = 0.09; x.nudge.right = 0.03; row.text.shift = 0.07; label.y = 0.12
+  }
+
+  par(bg = NA)
   scaled.mat <- t(apply(mean.sig.expr[col.order,alleles], 1, scale))
   dimnames(scaled.mat) <- dimnames(mean.sig.expr[,alleles])
 
   layout.mat <- matrix(c(1,2), nrow = 1)
   layout(layout.mat, widths = c(1, 0.2))
   par(mar = c(2,4,4,1), xpd = NA)
-  imageWithText(t(scaled.mat), show.text = FALSE, use.pheatmap.colors = TRUE,
-    col.names = NULL, row.text.shift = 0.07, row.text.adj = 0.5)
+  imageWithText(t(scaled.mat), show.text = FALSE, split.at.vals = TRUE,
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends",
+    col.names = NULL, row.text.shift = row.text.shift, row.text.adj = 0.5)
   plot.dim <- par("usr")
   plot.height <- plot.dim[4] - plot.dim[3]
   plot.width <- plot.dim[2] - plot.dim[1]
   c1.mid <- mean(which(cluster.id[col.order] == 1))
   c2.mid <- mean(which(cluster.id[col.order] == 2))
-  label.y <- (plot.dim[4]+(plot.height*0.09))
+  label.y <- (plot.dim[4]+(plot.height*label.y))
   text(x = c1.mid, y = label.y, labels = "Neuron and Synapse")
   text(x = c2.mid, y = label.y, labels = "Mitochondria and Ribosome")
 
   #add colored labels for the genotypes
-  y.vals <- 1:length(ordered.geno)
-  y.shift <- plot.height*0.06
-  label.xmin <- plot.dim[1] - (plot.width*0.09)
-  label.xmax <- plot.dim[1] + (plot.width*0.03)
+  y.vals <- 1:length(alleles)
+  y.shift <- plot.height*y.nudge
+  label.xmin <- plot.dim[1] - (plot.width*x.nudge.left)
+  label.xmax <- plot.dim[1] + (plot.width*x.nudge.right)
   for(i in 1:length(y.vals)){
     draw.rectangle(label.xmin, label.xmax, (y.vals[i] - y.shift), (y.vals[i] + y.shift),
-      border = geno.cols[match(rev(ordered.geno)[i], names(geno.cols))], 
+      border = geno.cols[match(rev(alleles)[i], names(geno.cols))], 
       lwd = 3)
   }
 
   #add scale bar
   par(mar = c(2,4,4,1))
-  imageWithTextColorbar(mean.sig.expr, use.pheatmap.colors = TRUE, cex = 1, bar.lwd = 3)
+  imageWithTextColorbar(mean.sig.expr, split.at.vals = TRUE, 
+  col.scale = list(heatmap.neg.col, heatmap.pos.col), cex = 1, 
+  grad.dir = "ends", bar.lwd = 3)
   dev.off()
 }
 ```
@@ -1433,21 +1540,25 @@ We clustered these genes into two groups and looked at enrichment.
 The enrichments of the groups are shown below.
 
 ```{r enrich_groups}
-group.genes <- lapply(1:2, function(x) rownames(annot.col)[which(annot.col[,1] == x)])
-group.enrich = lapply(group.genes, function(x) gost(x, organism = "mmusculus",
-  sources = c("GO", "KEGG", "REACOME", "CORUM", "HP", "WP")))
-names(group.enrich) <- c(1,2)
-plot.enrichment.group(group.enrich, max.term.size = 3000, n.terms = 15)
+if(get.enrichments){
+  group.genes <- lapply(1:2, function(x) rownames(annot.col)[which(annot.col[,1] == x)])
+  group.enrich = lapply(group.genes, function(x) gost(x, organism = "mmusculus",
+    sources = c("GO", "KEGG", "REACOME", "CORUM", "HP", "WP")))
+  names(group.enrich) <- c(1,2)
+  plot.enrichment.group(group.enrich, max.term.size = 3000, n.terms = 15)
+}
 ```
 
 ```{r enrichment_tables}
-if(final.params){
-  pdf(here("Results", "for_paper", "Enrichment.pdf"), width = 8, height = 7)
-  for(i in 1:length(group.enrich)){
-    plot.enrichment(group.enrich[[i]], plot.label = paste("Cluster", i), 
-      max.term.size = 3000, num.terms = 15)
+if(get.enrichments){
+  if(final.params){
+    pdf(here("Results", "for_paper", "Enrichment.pdf"), width = 8, height = 7)
+    for(i in 1:length(group.enrich)){
+      plot.enrichment(group.enrich[[i]], plot.label = paste("Cluster", i), 
+        max.term.size = 3000, num.terms = 15)
+    }
+    dev.off()
   }
-  dev.off()
 }
 ```
 
@@ -1468,27 +1579,33 @@ The WT mice are also more correlated with the FC than with the
 VS animals.
 
 ```{r geno_cor, fig.width = 4, fig.height = 4}
-pheatmap(cor(mean.sig.expr), display_numbers = TRUE)
+#png("~/Desktop/geno_cor.png", width = 4, height = 3, units = "in", res = 300); par(bg = NA)
+pheatmap(cor(mean.sig.expr), display_numbers = TRUE, cluster_rows = FALSE, cluster_cols = FALSE)
+#dev.off()
 ```
 
 The following table shows functional enrichments for the group
 of genes that are differentially expressed across Klotho genotypes.
 
 ```{r enrich_genotype, fig.width = 7, fig.height = 7}
-sig.enrich <- gost(rownames(mean.sig.expr), organism = "mmusculus", 
-  sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP", "HPA"))
-plot.enrichment(sig.enrich, plot.label = "DEG by Klotho genotype", num.terms = 30,
-  max.term.size = 3000)
+if(get.enrichments){
+  sig.enrich <- gost(rownames(mean.sig.expr), organism = "mmusculus", 
+    sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP", "HPA"))
+  plot.enrichment(sig.enrich, plot.label = "DEG by Klotho genotype", num.terms = 30,
+    max.term.size = 3000)
+}
 ```
 
 The following plot is a wordcloud version of the above data.
 
 ```{r enrich_word, fig.width = 12, fig.height = 6}
-#pdf("~/Desktop/overall_enrich.pdf", width = 12, height = 7)
-par(mfrow = c(1,2), mar = c(0,0,0,0))
-plot.enrichment.wordcloud(sig.enrich, plot.label = "DEG by Klotho genotype", num.terms = 20,
-  max.term.size = 3000, just.wordcloud = FALSE)
-#dev.off()
+if(get.enrichments){
+  #pdf("~/Desktop/overall_enrich.pdf", width = 12, height = 7)
+  par(mfrow = c(1,2), mar = c(0,0,0,0))
+  plot.enrichment.wordcloud(sig.enrich, plot.label = "DEG by Klotho genotype", num.terms = 20,
+    max.term.size = 3000, just.wordcloud = FALSE)
+  #dev.off()
+}
 ```
 
 The following plot shows that compared with WT mice,
@@ -1529,22 +1646,24 @@ for(i in 1:nrow(quads)){
   enrich.idx[[i]] <- intersect(x.idx, y.idx)
 }
 
-quad.enrich <- lapply(enrich.idx, function(x) gost(names(vs.mean)[x], 
-  organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP")))
+if(get.enrichments){
+  quad.enrich <- lapply(enrich.idx, function(x) gost(names(vs.mean)[x], 
+    organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP")))
 
-#pdf("~/Desktop/enrichment.pdf", width = 10, height = 10)
-layout.matrix <- matrix(c(4,1,3,2), nrow = 2, byrow = TRUE)
-layout(layout.matrix)
-par(mar = c(4,0,4,0))
-for(i in 1:length(quad.enrich)){
-  if(i == 3){max.cex = 2}else{max.cex = 2.5}
-  plot.enrichment.wordcloud(quad.enrich[[i]], max.term.size = 3000,
-  plot.label = "", just.wordcloud = TRUE, max.cex = max.cex, num.terms = 30)
-  mtext(paste0("VS ", quads[i,1], "; FC ", quads[i,2]), side = 3, font = 2)
-  plot.dim <- par("usr")
-  draw.rectangle(plot.dim[1],plot.dim[2],plot.dim[3],plot.dim[4])
+  #pdf("~/Desktop/enrichment.pdf", width = 10, height = 10)
+  layout.matrix <- matrix(c(4,1,3,2), nrow = 2, byrow = TRUE)
+  layout(layout.matrix)
+  par(mar = c(4,0,4,0))
+  for(i in 1:length(quad.enrich)){
+    if(i == 3){max.cex = 2}else{max.cex = 2.5}
+    plot.enrichment.wordcloud(quad.enrich[[i]], max.term.size = 3000,
+    plot.label = "", just.wordcloud = TRUE, max.cex = max.cex, num.terms = 30)
+    mtext(paste0("VS ", quads[i,1], "; FC ", quads[i,2]), side = 3, font = 2)
+    plot.dim <- par("usr")
+    draw.rectangle(plot.dim[1],plot.dim[2],plot.dim[3],plot.dim[4])
+  }
+  #dev.off()
 }
-#dev.off()
 ```
 
 ## AD Gene expression {.tabset .tabset-fade .tabset-pills}
@@ -1730,7 +1849,8 @@ dev.off()
 
 
 
-```{r fig_ad_marked}
+```{r fig_ad_marked, eval = FALSE}
+#this is plotted above
 if(final.params){
   
 cluster.id <- expr.clust$clustering
@@ -1743,7 +1863,7 @@ cluster.id <- expr.clust$clustering
   layout(layout.mat, widths = c(1, 0.2))
   par(mar = c(2,4,4,1), xpd = NA)
   imageWithText(t(scaled.mat), show.text = FALSE, split.at.vals = TRUE, 
-    col.scale = c("blue", "brown"), grad.dir = "ends",
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends",
     col.names = NULL, row.text.shift = 0.07, row.text.adj = 0.5)
   plot.dim <- par("usr")
   plot.height <- plot.dim[4] - plot.dim[3]
@@ -1781,7 +1901,7 @@ cluster.id <- expr.clust$clustering
   #add scale bar
   par(mar = c(2,4,4,1))
   imageWithTextColorbar(mean.sig.expr, split.at.vals = TRUE, 
-    col.scale = c("blue", "brown"), cex = 1, bar.lwd = 3, 
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), cex = 1, bar.lwd = 3, 
     grad.dir = "ends")
   dev.off()
 }
@@ -1812,7 +1932,8 @@ if(final.params){
 #top.decomp <- plot.decomp(supp.table[p.order[1:25],expr.col])
 #pc.order <- order(top.decomp$u[,1])
 #top.mat <- supp.table[p.order[1:25],expr.col]
-#imageWithText(as.matrix(top.mat), col.scale = c("blue", "brown"), split.at.vals = TRUE, grad.dir = "ends", show.text = FALSE)
+#imageWithText(as.matrix(top.mat), col.scale = list(heatmap.neg.col, heatmap.pos.col), 
+  #split.at.vals = TRUE, grad.dir = "ends", show.text = FALSE)
 ```
 
 ## Individual AD genes {.tabset .tabset-fade .tabset-pills}
@@ -1895,7 +2016,7 @@ dev.off()
 
 ```{r ad_interest_fig}
 if(final.params){
-  pdf(here("Results", "for_paper", "AD-related_expression.pdf"), width = 7, height = 7)
+  pdf(here("Results", "for_paper", "AD-related_expression.pdf"), width = 5, height = 7)
   for(i in 1:length(ad.interest)){
     gene.id <- gene.info[which(gene.info[,"external_gene_name" ]%in% ad.interest[i]), id_col]
     test <- plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
@@ -2108,6 +2229,8 @@ if(!file.exists(mean.bd.val.file)){
         tx_label = mouse.bd.genes[[bd]][x,"external_gene_name"], 
         plot.results = FALSE)[[1]])
 
+    plot_individual_genes(mouse.bd.genes[[bd]][,1])
+
     has.vals <- which(sapply(bd.vals, length) > 0)
     bd.mean <- t(sapply(bd.vals[has.vals], function(x) sapply(x[[1]], mean)))
     rownames(bd.mean) <- sapply(bd.vals[has.vals], names)
@@ -2126,7 +2249,6 @@ if(!file.exists(mean.bd.val.file)){
 #In previous runs I tried 2 to 10 clusters. All ended up with 2,
 #so I am just setting k = 2 here to save time, but leaving the 
 #code for testing for future work. 
-
 clustered.gene.file <- file.path(results.dir, paste0("Clustered_Coef_", carrier.text, ".RDS"))
 clustered.enrich.file <- file.path(results.dir, paste0("Clustered_Enrich_", carrier.text, ".RDS"))
 
@@ -2145,11 +2267,14 @@ if(!file.exists(clustered.gene.file)){
     k = 2
     final.clust <- pam(mean.bd.vals[[i]], k = k)
     clustered.genes[[i]] <- final.clust$clustering
-    cluster.enrich <- lapply(1:k, function(x) gost(names(clustered.genes[[i]])[which(clustered.genes[[i]] == x)], 
-      organism = "mmusculus", source = c("GO", "KEGG", "REACTOME", "HP", "CORUM")))
-    names(cluster.enrich) <- paste0("cluster", 1:k)
-    gene.enrich[[i]] <- cluster.enrich
-    #plot.enrichment.group(cluster.enrich, max.term.size = 3000, n.terms = 30, cluster_cols = FALSE, plot.label = names(mean.bd.vals)[i])
+
+    if(get.enrichments){
+      cluster.enrich <- lapply(1:k, function(x) gost(names(clustered.genes[[i]])[which(clustered.genes[[i]] == x)], 
+        organism = "mmusculus", source = c("GO", "KEGG", "REACTOME", "HP", "CORUM")))
+      names(cluster.enrich) <- paste0("cluster", 1:k)
+      gene.enrich[[i]] <- cluster.enrich
+      #plot.enrichment.group(cluster.enrich, max.term.size = 3000, n.terms = 30, cluster_cols = FALSE, plot.label = names(mean.bd.vals)[i])
+    }
   }
   saveRDS(clustered.genes, clustered.gene.file)
   saveRDS(gene.enrich, clustered.enrich.file)
@@ -2157,6 +2282,7 @@ if(!file.exists(clustered.gene.file)){
   clustered.genes <- readRDS(clustered.gene.file)
   gene.enrich <- readRDS(clustered.enrich.file)
 }
+
 
 bd.means <- matrix(nrow = length(mean.bd.vals), ncol = length(alleles))
 rownames(bd.means) <- names(mean.bd.vals)
@@ -2223,7 +2349,7 @@ layout.mat <- matrix(c(1,2), nrow = 1)
 layout(layout.mat, widths = c(1, 0.5))
 par(mar = c(4,18, 2,1))
 imageWithText(signif(bd.means[row.order,], 2), split.at.vals = TRUE, 
-  col.scale = c("blue", "brown"), grad.dir = "ends", row.text.shift = 0.25,
+  col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", row.text.shift = 0.25,
   col.text.shift = 0.03)
 par(mar = c(4,1,2,2))
 barplot(bd.mean.decomp$v[row.order,1], horiz = TRUE, xlab = "PC1")
@@ -2379,7 +2505,7 @@ layout.mat <- matrix(c(1,2), nrow = 1)
 layout(layout.mat, widths = c(1, 0.5))
 par(mar = c(4,35, 2,1))
 imageWithText(signif(sbd.means[big.idx[row.order],], 2), split.at.vals = TRUE, 
-  col.scale = c("blue", "brown"), grad.dir = "ends", row.text.shift = 0.15,
+  col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", row.text.shift = 0.15,
   col.text.shift = 0.05)
 par(mar = c(4,1,2,2))
 barplot(sbd.decomp$u[big.idx[row.order],1], horiz = TRUE, xlab = "PC1")
@@ -2465,12 +2591,12 @@ row.order <- order(top.decomp$u[,1])
 layout(matrix(c(1,2), nrow = 1), widths = c(1, 0.2))
 par(mar = c(4,16,4,2))
 imageWithText(mean.mean[sig.path[rev(row.order)],], show.text = FALSE, split.at.vals = TRUE,
-  col.scale = c("blue", "brown"), grad.dir = "ends", col.text.rotation = 0,
+  col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", col.text.rotation = 0,
   col.text.adj = 0.5, col.text.shift = 0.1, row.text.shift = 0.3, 
   main = "Top KEGG pathways")
 par(mar = c(20,2,4,2))
 imageWithTextColorbar(mean.mean[sig.path[row.order],], split.at.vals = TRUE,
-  col.scale = c("blue", "brown"), grad.dir = "ends", cex = 1)
+  col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1)
 
 ```
 

@@ -10,12 +10,12 @@ mix_colors <- function(col1, col2, mixing.parameter = 0.5, plot.result = FALSE){
     mixed.color <- color.ramp(100)[round(mixing.parameter*100)]
 
     if(plot.result){
-    par(mar = c(0,0,0,0))
-    plot.new()
-    plot.window(xlim = c(0,3), ylim = c(0,1))
-    draw.rectangle(0.1, 0.9, 0.3, 0.6, fill = col1)
-    draw.rectangle(1.1, 1.9, 0.3, 0.6, fill = mixed.color)
-    draw.rectangle(2.1, 2.9, 0.3, 0.6, fill = col2)
+        par(mar = c(0,0,0,0))
+        plot.new()
+        plot.window(xlim = c(0,3), ylim = c(0,1))
+        draw.rectangle(0.1, 0.9, 0.3, 0.6, fill = col1)
+        draw.rectangle(1.1, 1.9, 0.3, 0.6, fill = mixed.color)
+        draw.rectangle(2.1, 2.9, 0.3, 0.6, fill = col2)
     }
 
     return(mixed.color)

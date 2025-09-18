@@ -1,15 +1,20 @@
 #This function is based on imageWithText
 #it gets colors for numeric values
+#col.scale can be a single color, one of c("green", "purple", "orange", "blue", "brown", "gray")
+#or it can be a list the same length as the number of 
+#classes in the class matrix. Each element should be the colors
+#you want a gradient of in that class.
+#if you use the list, you need to pay more attention to the order
+#that you enter the ramps.
+#test <- colors.from.values(vals = seq(-1, 1, 0.01), split.at.vals = TRUE, col.scale = list(brewer.pal(8, "Blues"), brewer.pal(8, "Reds")), grad.dir = "ends")
+#test <- colors.from.values(vals = seq(-1, 1, 0.01), split.at.vals = TRUE, col.scale = c("brown", "purple"), grad.dir = "ends")
+#plot(seq(-1, 1, 0.01), col = test, pch = 16)
 
 colors.from.values <- function(vals, split.at.vals = FALSE, split.points = 0, 
 col.scale = c("green", "purple", "orange", "blue", "brown", "gray"), light.dark = "f", 
-grad.dir = c("high", "low", "middle", "ends"), color.fun = c("linear", "exponential"), 
+grad.dir = c("high", "low", "middle", "ends"), n.col = 4, color.fun = c("linear", "exponential"), 
 exp.steepness = 1, global.color.scale = FALSE, global.min = NULL, global.max = NULL, 
-use.pheatmap.colors = FALSE, na.col = "lightgray", custom.colors = NULL){
-
-		if(length(custom.colors) > 0){
-			if(length(custom.colors) < 4){stop("custom.colors should be a vector of four values.")}
-		}
+use.pheatmap.colors = FALSE, na.col = "lightgray"){
 
 		require(grid)
 	 	class.mat = NULL
@@ -49,9 +54,11 @@ use.pheatmap.colors = FALSE, na.col = "lightgray", custom.colors = NULL){
 			class.mat <- rep(1, length(vals))
 			}
 
-		if(num.classes > 1 && !is.null(custom.colors)){
-			stop("I can only do custom colors for a single color scale.")
-		}	
+		if(class(col.scale) == "list"){
+			if(num.classes != length(col.scale)){
+				stop("If col.scale is a list, it must be the same length as the number of classes.")
+			}	
+		}
 
 		if(length(col.scale) == (length(split.points)+1)){
 			class.cols <- col.scale
@@ -68,32 +75,29 @@ use.pheatmap.colors = FALSE, na.col = "lightgray", custom.colors = NULL){
 			grad.dir <- "high"
 			}
 		
-		max.col = 4
 		dir.list <- vector(mode = "list", length = num.classes)
 		names(dir.list) <- classes
 		if(grad.dir == "high"){
 			for(i in 1:length(dir.list)){
-				dir.list[[i]] <- 1:max.col
+				dir.list[[i]] <- 1:n.col
 				}
 			}
 		if(grad.dir == "low"){
 			for(i in 1:length(dir.list)){
-				dir.list[[i]] <- max.col:1
+				dir.list[[i]] <- n.col:1
 				}
 			}
 		if(grad.dir == "middle"){
 			if(length(dir.list) != 2){stop("I can only color the middle if there are exactly two classes")}
-			dir.list[[1]] <- 1:max.col
-			dir.list[[2]] <- max.col:1
-			}
-		
+			dir.list[[1]] <- 1:n.col
+			dir.list[[2]] <- n.col:1
+			}		
 			
 		if(grad.dir == "ends"){
 			if(length(dir.list) != 2){stop("I can only color the ends if there are exactly two classes")}
-			dir.list[[1]] <- max.col:1
-			dir.list[[2]] <- 1:max.col
+			dir.list[[1]] <- n.col:1
+			dir.list[[2]] <- 1:n.col
 			}
-
 
 
 		#============================================================================
@@ -145,11 +149,7 @@ use.pheatmap.colors = FALSE, na.col = "lightgray", custom.colors = NULL){
 						}
 	
 					#make the function to generate 
-					if(is.null(custom.colors)){
-						col.vals <- get.color(col.scale[cl], light.dark)
-					}else{
-						col.vals <- custom.colors
-					}
+					col.vals <- get.color(col.scale[[cl]], light.dark, n.colors = n.col)
 					color.locale <- which(names(color.scales) == classes[cl])
 					color.scales[[color.locale]] <- colorRampPalette(col.vals[dir.list[[color.locale]]])
 					
@@ -170,7 +170,6 @@ use.pheatmap.colors = FALSE, na.col = "lightgray", custom.colors = NULL){
 			}
 		
 		#============================================================================
-
 
 
 		if(use.pheatmap.colors){
@@ -205,4 +204,4 @@ use.pheatmap.colors = FALSE, na.col = "lightgray", custom.colors = NULL){
 		return(col)
 		
 
-	}
+}
