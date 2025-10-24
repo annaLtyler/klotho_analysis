@@ -1739,3 +1739,97 @@ for(i in 1:nrow(int.enrich)){
       high.names[which(V(lcc.net)$name == keep.names[i])] <- keep.names[i]
   }
 ```
+
+## Proteomics
+
+In case we need to do a more careful thresholding for proteins with odd
+measurement, I'm keeping this code.
+
+
+I have done some spot checking, and it looks like the genes that 
+have very high variance are cases where two replicates in one 
+animal have relatively close expression on one side of the population
+mean, and the third replicate has an outlier expression on the 
+other side of the population mean. Or, one of the replicates 
+is just way outside of the population distribution in general.
+
+If I delve further down the list of proteins with high variance,
+I start encountering proteins with multimodal distribution that
+isn't explained by any of the variables we measured, like sex,
+age, or genotype.
+
+```{r spot_check}
+high.var <- which(gene.var > 5, arr.ind = TRUE)
+check.idx <- 1
+
+animal.which <- final.mouse.table[high.var[check.idx,2], "animalID"]
+gene.which <- rownames(high.var)[check.idx]
+animal.idx <- which(final.obs.info[,"animalID"] == animal.which)
+gene.idx <- which(rownames(log.gene.mat) == gene.which)
+barplot(as.numeric(log.gene.mat[gene.idx,animal.idx]), names = paste("rep", 1:3), 
+    ylab = "log2 protein level", main = gene.which)
+
+#check other expression levels of this gene
+par(mfrow = c(2,3))
+hist(as.numeric(log.gene.mat[gene.idx,]))
+plot(as.numeric(log.gene.mat[gene.idx,]), col = as.numeric(as.factor(final.obs.info[,"age_months"])), main = gene.which)
+
+abline(h = as.numeric(log.gene.mat[gene.idx,animal.idx]))
+plot(as.numeric(log.gene.mat[gene.idx,]), col = as.numeric(as.factor(final.obs.info[,"genotype"])))
+plot(as.numeric(log.gene.mat[gene.idx,]), col = as.numeric(as.factor(final.obs.info[,"sex"])))
+plot(as.numeric(log.gene.mat[gene.idx,]), col = as.numeric(as.factor(final.obs.info[,"animalID"])))
+rep.id <- sapply(strsplit(rownames(final.obs.info), "_"), function(x) tail(x, 1))
+plot(as.numeric(log.gene.mat[gene.idx,]), col = as.numeric(as.factor(rep.id)))
+```
+
+
+
+## limma
+
+I tried limma, since that is frequently used for proteomics
+analyses. It gives me basically identical results to my initial
+results, so I'm going to go with the simpler analysis.
+
+```{r set_up_data, eval = FALSE}
+library(limma)
+library(edgeR)
+
+
+protein_data <- t(mean.gene.mat[twelve.idx,])
+sample_info <- pr.info.table[twelve.idx,]
+
+sex_twelve <- sex[twelve.idx]
+geno_twelve <- genotype[twelve.idx]
+design <- model.matrix(~0 + sex_twelve + geno_twelve)
+fit <- lmFit(protein_data, design)
+
+contrast_matrix <- makeContrasts(
+  geno_twelve.L,
+  levels = design
+)
+
+fit2 <- contrasts.fit(fit, contrast_matrix)
+fit2 <- eBayes(fit2)
+
+#qqunif.plot(fit2$p.value)
+adj.p <- p.adjust(fit2$p.value, method = "fdr")
+geno.effect <- coef(fit2)
+sig.idx <- which(adj.p <= 0.1)
+up.idx <- which(geno.effect > 0)
+down.idx <- which(geno.effect < 0)
+
+sig.up <- intersect(sig.idx, up.idx)
+sig.down <- intersect(sig.idx, down.idx)
+up.pr <- rownames(geno.effect)[sig.up]
+down.pr <- rownames(geno.effect)[sig.down]
+
+
+#the limma results are basically the same as the lm results 
+plotVenn(list("limma" = up.pr, "lm" = pos.pr))
+plotVenn(list("limma" = down.pr, "lm" = neg.pr))
+
+#setdiff(pos.pr, up.pr)
+#setdiff(up.pr, pos.pr)
+#setdiff(neg.pr, down.pr)
+#setdiff(down.pr, neg.pr)
+```

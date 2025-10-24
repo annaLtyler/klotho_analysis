@@ -3,7 +3,8 @@ group.cols = c("#66c2a5", "#fc8d62", "#8da0cb", "#e78ac3", "#a6d854", "#ffd92f",
 main = "", type = c("list", "matrix"), plot.grouping = c("outer", "inner"),
 plot.type = c("box", "stripchart", "vioplot"), strip.method = "jitter", strip.offset = 0.1, 
 print.vals = c("mean", "median"), ylab = "", las = 1,
-stats.cex = 0.7, label.srt = 0, legend.x = NULL, legend.y = NULL, notch = FALSE,
+stats.cex = 0.7, label.srt = 0, label.adj = 0.5, label.y = NULL,
+legend.x = NULL, legend.y = NULL, notch = FALSE,
 cex = 1, cex.names = 1, pch = 16, within.group.sep = 0.7, between.group.sep = 1.3){
 
 	oldPar <- par(no.readonly = TRUE)
@@ -111,8 +112,11 @@ cex = 1, cex.names = 1, pch = 16, within.group.sep = 0.7, between.group.sep = 1.
 			} #end looping through groups
 		#write a label for the group
 		par(xpd = TRUE)
-		text(x = mean(group.pos), y = (ymin - (plot.height*0.15)), labels = label, srt = label.srt, 
-			cex = cex.names)
+		if(is.null(label.y)){
+			label.y <- (ymin - (plot.height*0.15))
+		}
+		text(x = mean(group.pos), y = label.y, 
+			labels = label, srt = label.srt, cex = cex.names, adj = label.adj)
 		par(xpd = FALSE)
 		} #end looping through group elements
 

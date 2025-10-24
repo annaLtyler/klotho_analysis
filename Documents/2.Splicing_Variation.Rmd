@@ -66,14 +66,13 @@ if(subgroup == "all ages"){
 }
 general.data.dir <- here("Data", "general")
 
-carrier.text <- "carriers" #this is always set to carriers to maximize n
-
+carrier.text <- "carriers" #this is always set to carriers to maximize n in each group
 
 #test by genotoype
-#test.factor = "genotype"; ref.geno <- "FC"; alt.geno <- "VS"
+test.factor = "genotype"; ref.geno <- "FC"; alt.geno <- "VS"
 
 #or by high and low expression levels of a gene
-test.factor = "expr"; gene.name = "Srsf5"; ref.geno <- "low"; alt.geno  <- "high"
+#test.factor = "expr"; gene.name = "Srsf5"; ref.geno <- "low"; alt.geno  <- "high"
 
 if(test.factor == "genotype"){
   test.text <- paste("We are testing differential exon usage based on Klotho genotype.
@@ -83,7 +82,6 @@ if(test.factor == "genotype"){
   alt.geno, "expression of", gene.name)
 }
 ```
-
 
 
 The subgroup analyzed in this workflow is:

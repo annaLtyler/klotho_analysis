@@ -1,6 +1,5 @@
-
-autoplace_text <- function(x, y, x.samples = 10, y.samples = 25, text.window.x = 4,
-    text.window.y = 4){
+autoplace_text <- function(x, y, x.samples = 100, y.samples = 100, text.window.x = x.samples/4,
+    text.window.y = y.samples/4){
     
     plot.test = FALSE
     #plot.test = TRUE

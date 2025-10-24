@@ -15,7 +15,7 @@ output:
 The purpose of this workflow is to start looking at the proteomics
 data from the Klotho mice.
 
-```{r}
+```{r parameters}
 
 rm(list = ls())
 
@@ -27,12 +27,32 @@ proteomics.data.dir <-  here("Data", "Proteomics")
 use.carrier.status <- TRUE #if true, fits models with the ordered factor FC > WT > VS
                           #if false, fits modesl with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
 
-results.dir <- here("Results", "Proteomics")
-processed.data.dir <- here("Results", "all_gene", "processed_data")
 general.processed.data.dir <- here("Results", "Processed_Data")
+
+results.dir <- here("Results", "Proteomics")
+if(!file.exists(results.dir)){dir.create(results.dir)}
+
+processed.data.dir <- file.path(results.dir, "processed_data")
+if(!file.exists(processed.data.dir)){dir.create(processed.data.dir)}
+
+gene.dump.dir <- file.path(results.dir, "removed_genes")
+if(!file.exists(gene.dump.dir)){dir.create(gene.dump.dir)}
+
+tx.processed.data.dir <- here("Results", "all_gene", "processed_data")
 mouse.data.dir <- here("Data", "Mouse")
 
 adjust.ide = TRUE
+
+compare.age <- 12
+
+if(compare.age == 12){
+    compare.age.text <- "twelve"
+}
+if(compare.age == 4){
+    compare.age.text <- "four"
+}
+
+offline = FALSE #set to TRUE if offline. Enrichment queries will not be run.
 ```
 
 ```{r load_code}
@@ -52,20 +72,30 @@ if(use.carrier.status){
 }else{
     carrier.text <- "all_geno"
 }
+
+factor.cols <- c(geno.cols, "F" = "#99d8c9", "M" = "#bcbddc", 
+    "4" = "#fdae6b", "12" = "#e6550d")
+#dot.col <- "gray50"
+dot.col <- "#dd1c77"
+
+heatmap.neg.col <- "purple"
+heatmap.pos.col <- "brown"
 ```
 
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
-needed.libraries <- c("pheatmap", "VennDiagram", "DT")
+needed.libraries <- c("pheatmap", "VennDiagram", "DT", "knitr", "impute", "gprofiler2",
+    "vioplot", "igraph", "stringr", "easyPubMed", "tm", "readxl")
 load_libraries(needed.libraries)
 ```
 
 ```{r read_data}
+gene.info <- read.delim(here("Data", "general", "mouse_gene_info.txt"))
 mouse.info <- read.csv(file.path(mouse.data.dir, "metadata_validated.csv"))
 orthos <- read.delim(file.path(general.data.dir, "human.mouse.orthologs.txt"))
 #mouse.genes <- read.delim(here("Data", "general", paste0("mouse_", expression.type, "_info.txt")))
 
 #read in the appropriate covariate table
-covar.mat <- read.table(file.path(processed.data.dir, 
+covar.mat <- read.table(file.path(tx.processed.data.dir, 
     paste0("covariates_", carrier.text, ".csv")), sep = ",", header = TRUE, row.names = 1)
     
 #convert to a data frame with appropriate ordered factors.
@@ -74,27 +104,97 @@ covar.table <- data.frame("sequencingBatch" = as.factor(covar.mat[,"sequencingBa
     "age_batch" = ordered(covar.mat[,"age_batch"], levels = c("4", "12")),
     "ordered_geno" = ordered(covar.mat[,"ordered_geno"], levels = ordered.geno))
 
-
-if(adjust.ide){
-    #add Ide expression if requested
-    covar.table$scaled_Ide_expression <- as.numeric(covar.mat[,"scaled_Ide_expression"])
-}
 rownames(covar.table) <- rownames(covar.mat)
+#write.table(covar.table, file.path(processed.data.dir, "covar_table.txt"), sep = "\t", quote = FALSE)
 
 test.factor <- covar.table$ordered_geno
 ```
 
 ```{r read_proteome}
 pr.mouse <- read.delim(file.path(proteomics.data.dir, "observations.tsv"))
-gene.features <- read.delim(file.path(proteomics.data.dir, "gg.features.tsv"))
-protein.features <- read.delim(file.path(proteomics.data.dir, "pg.features.tsv"))
+#gene.features <- read.delim(file.path(proteomics.data.dir, "gg.features.tsv"))
+#gene.mat <- read.delim(file.path(proteomics.data.dir, "gg.expression.tsv"))
 
-gene.mat <- read.delim(file.path(proteomics.data.dir, "gg.expression.tsv"))
+#try using unique features. Does this make us less likely to attribute an ambiguous peptide to the wrong gene?
+gene.features <- read.delim(file.path(proteomics.data.dir, "ug.features.tsv"))
+gene.mat <- read.delim(file.path(proteomics.data.dir, "ug.expression.tsv"))
 ```
+
+```{r check, eval = FALSE}
+tx.dir <- here("Results", paste0("age_batch_", compare.age, "_gene"))
+all.tx <- readRDS(file.path(tx.dir, "processed_data", "Batch_Adjusted_Expr.RDS"))
+tx.covar <- read.csv(file.path(tx.dir, "processed_data", "covariates_carriers.csv"))
+
+
+gene.chr <- gene.info[match(rownames(gene.mat), gene.info[,"external_gene_name"]), "chromosome_name"]
+x.genes <- rownames(gene.mat)[which(gene.chr == "X")]
+x.id <- gene.info[match(x.genes, gene.info[,"external_gene_name"]), "ensembl_gene_id"]
+y.genes <- rownames(gene.mat)[which(gene.chr == "Y")]
+y.id <- gene.info[match(y.genes, gene.info[,"external_gene_name"]), "ensembl_gene_id"]
+
+
+#checking sex-specific genes
+gene.name <- "Ddx3y"
+gene.name <- "Ddx3x"
+#gene.name <- sample(x.genes, 1)
+
+gene.idx <- which(rownames(gene.mat) == gene.name)
+stripchart(log2(as.numeric(gene.mat[gene.idx,]))~as.factor(pr.mouse[,"sex"]), main = gene.name,
+    ylab = "log2(abundance)", xlab = "", vertical = TRUE, method = "jitter", pch = 16)
+
+
+#look at all x-linked genes
+f.abund <- sapply(x.genes, function(x) as.numeric(gene.mat[x,which(pr.mouse[,"sex"] == "F")]))
+m.abund <- sapply(x.genes, function(x) as.numeric(gene.mat[x,which(pr.mouse[,"sex"] == "M")]))
+f.mean <- colMeans(f.abund, na.rm = TRUE)
+m.mean <- colMeans(m.abund, na.rm = TRUE)
+comp.mat <- t(apply(cbind(f.mean, m.mean), 1, scale))
+pdf("~/Desktop/x_linked.pdf", width = 7, height = 40)
+pheatmap(comp.mat, cluster_cols = FALSE)
+dev.off()
+
+#which of these genes are differentially expressed in the sexes?
+x.gene.id <- gene.info[match(x.genes, gene.info[,"external_gene_name"]), "ensembl_gene_id"]
+sex.test <- lapply(x.gene.id, function(x) lm(all.tx[,x]~as.factor(tx.covar[,"sex_ge"])))
+sex.effect <- sapply(sex.test, function(x) coef(x)[2])
+names(sex.effect) <- x.gene.id
+high.effect <- which(abs(sex.effect) > 0.5)
+
+high.effect.names <- gene.info[match(names(high.effect), gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+
+protein.means <- t(apply(cbind("F" = rowMeans(gene.mat[high.effect.names,which(pr.mouse[,"sex"] == "F")], na.rm = TRUE),
+    "M" = rowMeans(gene.mat[high.effect.names,which(pr.mouse[,"sex"] == "M")], na.rm = TRUE)), 1, scale))
+colnames(protein.means) <- c("Pr_F", "Pr_M")
+
+tx.means <- t(apply(cbind("F" = colMeans(all.tx[which(tx.covar[,"sex_ge"] == "Female"),names(high.effect)]),
+    "M" = colMeans(all.tx[which(tx.covar[,"sex_ge"] == "Male"),names(high.effect)])), 1, scale))
+colnames(tx.means) <- c("Tx_F", "Tx_M")
+
+check.mat <- cbind(protein.means, tx.means)
+pheatmap(check.mat, cluster_cols = FALSE)
+
+match.genes <- c(which(apply(check.mat, 1, function(x) all(sign(x) == c(1, -1, 1, -1)))),
+    which(apply(check.mat, 1, function(x) all(sign(x) == c(-1, 1, -1, 1)))))
+mismatch.genes <- check.mat[setdiff(1:nrow(check.mat), match.genes),]
+pheatmap(mismatch.genes, cluster_cols = FALSE)
+mismatch.gene.names <- rownames(mismatch.genes)
+mismatch.id <- gene.info[match(mismatch.gene.names, gene.info[,"external_gene_name"]), "ensembl_gene_id"]
+
+pdf("~/Desktop/sex_effect.pdf", width = 8, height = 4)
+for(i in 1:length(x.gene.id)){
+    par(mfrow = c(1,2))
+    plot(all.tx[,x.gene.id[i]]~as.factor(tx.covar[,"sex_ge"]), main = "Transcript", xlab = "", ylab = "transcript abundance")
+    plot(as.numeric(gene.mat[x.genes[i],])~as.factor(pr.mouse[,"sex"]), main = "Protein", xlab = "", ylab = "protein abundance")
+    mtext(x.genes[i], side = 3, line = -1.5, font = 2, cex = 1.2, outer = TRUE)
+}
+dev.off()
+```
+
+## Align proteomics and transcriptomics
 
 Match our transcriptomic mouse information with the proteomic mouse information.
 
-```{r match_mats}
+```{r match_mats, fig.width = 5, fig.height = 5}
 all.trans.meta <- read.csv(here("Data", "Mouse", "metadata_validated.csv"))
 trans.ind <- all.trans.meta[,"animalName"]
 prot.ind <- pr.mouse[,"animal_id"]
@@ -114,8 +214,7 @@ datatable(trans.info)
 ```
 
 The table below shows the animals that were in the proteomics data 
-set, but not in the transcriptomics data set. These animals, however, 
-were not in my 
+set, but not in the transcriptomics data set. 
 
 ```{r not_in_trans}
 not.in.trans <- setdiff(prot.ind, trans.ind)
@@ -130,13 +229,22 @@ just to be sure everything matches.
 ```{r parse_geno}
 parse_geno <- function(allele.label, dip.label){
     kl.type <- gsub("Klotho", "", allele.label)
+    
     if(use.carrier.status){
-        return(kl.type)
+        if(dip.label == "WT"){
+            return("WT")
+        }else{
+            return(kl.type)
+        }
     }else{
         if(dip.label == "HOM"){
             kl.geno <- paste0(kl.type, "/", kl.type)
-        }else{
+        }
+        if(dip.label == "HET"){
             kl.geno <- paste0("WT/", kl.type)
+        }
+        if(dip.label == "WT"){
+            kl.geno <- "WT/WT"
         }
         return(kl.geno)
     }
@@ -150,7 +258,7 @@ There are multiple replicates per individual mouse.
 pr.id <- pr.mouse[,"animal_id"]
 pr.sex <- pr.mouse[,"sex"]
 
-raw.age <- pr.mouse[,"age"]/30
+raw.age <- pr.mouse[,"age"]/30 #convert age in days to age in months
 #hist(raw.age, xlab = "months") #just double check these are 4 and 12-month olds
 pr.age.m <- bin.vector(raw.age, c(4, 12)) #bin ages into four and 12 months old
 pr.geno <- apply(pr.mouse[,c("klotho", "geno")], 1, function(x) parse_geno(x[1], x[2]))
@@ -163,6 +271,9 @@ pr.date <- sapply(split.pr.info, function(x) x[4])
 
 pr.info.table <- cbind(pr.id, pr.sex, pr.age.m, pr.geno, pr.rep, pr.run, pr.unsure, pr.date)
 colnames(pr.info.table) <- c("animalID", "sex", "age_months", "genotype", "replicate", "run", "not_sure", "date")
+write_table_with_header(pr.info.table, 
+    file.path(processed.data.dir, "split_obsevation.txt"),
+    sep = "\t", row.names = FALSE, header = "Mouse information for each observation. There are multiple observations per mouse because of technical replicates.")
 ```
 
 We first went through the replicates to make sure that each individual
@@ -231,7 +342,15 @@ compare.info <- function(one.tr.info, one.pr.info){
     }
     return(check.result)
 }
+
+#get meta-data information from finalized table
+get_final_info <- function(animalID){
+    animal.idx <- which(all.pr.info[,"animalID"] == animalID)
+    return(all.pr.info[animal.idx,])
+}
 ```
+
+### Non-matches
 
 ```{r align}
 all.id <- unique(c(prot.ind, trans.ind))
@@ -245,20 +364,40 @@ fail.idx <- which(check.match == "Fail")
 ```
 
 There were `r length(fail.idx)` IDs for which information in the 
-transcriptomic and proteomic data did not match. It looks as if these
-might be the missing wild type mice. All mice in the proteomic data
-are listed as either FC or VS. 
+transcriptomic and proteomic data did not match. 
 
-All of the fails except one match on everything except genotype,
-and all of these are listed as WT in the transcriptomic data.
+The information from the transcriptomics data is below:
 
-There is one mouse (83901) that differs only on sex. It is male
-in the transcriptomic data and female in proteomic data. We 
-converted this one to male in the transcriptomic data based 
-on transcriptomic evidence. We will also convert it to male here.
+```{r}
+kable(all.tr.info[fail.idx,])
+```
 
-For the rest, we will convert the genotoypes in the proteomics
-data to WT.
+The information from the proteomics data is below:
+
+```{r}
+kable(all.pr.info[fail.idx,])
+```
+
+## Action taken for non-matches
+
+We have seen a couple of these mice before. In the 
+transcriptomics data we converted 83901 to male 
+based on transcriptomic evidence. We will also convert 
+it to male here.
+
+78933 was listed as female in the climb data and male by the
+transcriptomic data. We used the climb sex (verified by 
+Dylan), and we think that it might be an XO female based
+on transcriptomic evidence. It does not need to be adjusted
+here.
+
+The mouse 89055 had inconclusive genotyping, but it looked
+as if it might have at least one FC allele. However, it is
+listed as WT in the proteomics meta data. The form that 
+Dylan submitted also listed this animal as WT. I think 
+the inconclusive genotyping might have misled me to believe
+this mouse was FC. I will convert this to WT in the transcriptomics
+data set.
 
 ```{r fail_checking}
 fail.id <- all.id[fail.idx]
@@ -267,10 +406,9 @@ fail.table <- cbind(all.tr.info[fail.idx,], all.pr.info[fail.idx,])
 switch.id <- "83901"
 switch.idx <- which(all.pr.info[,"animalID"] == switch.id)
 all.pr.info[switch.idx,"sex"] <- "M"
-
-wt.idx <- which(all.tr.info[,"genotype"] == "WT")
-all.pr.info[wt.idx,"genotype"] <- "WT"
 ```
+
+## Missingness
 
 Now we are ready to start looking into the protein data. There 
 were three replicates done per animal, and there are some other 
@@ -281,5 +419,2093 @@ We'll want to look at missing data across replicates to start
 thinking about what we want to do with that.
 
 ```{r read_pr}
-#gene.mat
+split_id <- Reduce("rbind", strsplit(colnames(gene.mat), "_"))
+colnames(split_id) <- c("run", "submitter", "number", "date", "strain", "allele", "sex", "diplotype", "L7_id", "rep")
+rownames(split_id) <- colnames(gene.mat)
+animal_id <- sapply(rownames(split_id), function(x) pr.mouse[which(pr.mouse[,"obs_id"] == x), "animal_id"])
+all.obs.info <- t(sapply(animal_id, get_final_info))
+
+#split observations up by unique animal ID
+split_obs <- lapply(all.pr.info[,"animalID"], function(x) t(gene.mat[,which(all.obs.info[,"animalID"] == x)]))
+
+missing.by.obs <- sapply(split_obs, function(x) apply(x, 2, function(y) length(which(!is.na(y)))))
+
+#pheatmap(missing.by.obs, show_rownames = FALSE)
+
+#find genes and mice with no data at all
+genes.missing.per.mouse <- apply(missing.by.obs, 2, function(x) length(which(x == 0)))
+mice.missing.per.gene <- apply(missing.by.obs, 1, function(x) length(which(x == 0)))
+```
+
+### Missing by mouse
+
+The bar plot below shows how many observations out of 10,000 are missing
+for each mouse. 
+
+```{r num_missing}
+barplot(sort(genes.missing.per.mouse), ylab = "Number of Genes", 
+    main = "Number of missing genes per mouse", xlab = "mouse")
+no.data <- which(genes.missing.per.mouse == nrow(missing.by.obs))
+```
+
+The table below shows information for the mice that had no data.
+We had no metadata for them either.
+
+```{r no_data}
+kable(all.pr.info[no.data,])
+```
+
+### Missing by gene
+
+The bar plot below shows the number of mice with missing
+data per gene. There were `r ncol(missing.by.obs)` mice. 
+The horizontal line shows the 50\% mark. 
+
+```{r missing_genes}
+half.mark <- ncol(missing.by.obs)/2
+barplot(sort(mice.missing.per.gene), names = NA, 
+    main = "Number of missing mice by gene", xlab = "gene",
+    ylab = "Number of genes")
+abline(h = half.mark)
+
+lots.missing <- which(mice.missing.per.gene >= half.mark)
+```
+
+There were `r length(lots.missing)` genes out of 10,000 for which 
+at least 50\% of the mice had missing data. 
+
+We removed the mice with no data, and removed the genes with more
+than 50\% missingness across the mice.
+
+```{r filter}
+#remove mice with no data and genes with more than 50% missingness
+remove.mice <- all.pr.info[no.data,"animalID"]
+remove.genes <- names(lots.missing)
+write_table_with_header(remove.genes, 
+    file.path(gene.dump.dir, "High_Missingness_Genes.txt"),
+    header = "Genes removed due to overall missing data.", col.names = FALSE)
+
+mice.to.keep <- setdiff(all.pr.info[,"animalID"], remove.mice)
+genes.to.keep <- setdiff(rownames(gene.mat), remove.genes)
+
+final.mouse.table <- all.pr.info[match(mice.to.keep, all.pr.info[,"animalID"]),]
+filtered.gene.mat <- gene.mat[genes.to.keep, which(all.obs.info[,"animalID"] %in% mice.to.keep)]
+final.obs.info <- all.obs.info[which(all.obs.info[,"animalID"] %in% mice.to.keep),]
+
+#identical(rownames(final.obs.info), colnames(filtered.gene.mat))
+```
+
+
+## Variance across replicates
+
+Before we summarize the counts across replicates, we want to
+take a look at how stable the different replicates are. 
+
+The plot below shows the mean expression of all proteins
+vs. their variance. There are a lot of middle-range proteins
+that have extremely high variance. 
+
+
+```{r rep_var}
+log.gene.mat <- log2(filtered.gene.mat+1)
+#boxplot(log.gene.mat[,1:10])
+#hist(as.numeric(log.gene.mat["Ide",])) #checking Ide bimodality
+
+gene.var <- sapply(final.mouse.table[,"animalID"], function(x) apply(log.gene.mat[,which(final.obs.info[,"animalID"] == x)], 1, var))
+gene.mean <- sapply(final.mouse.table[,"animalID"], function(x) rowMeans(log.gene.mat[,which(final.obs.info[,"animalID"] == x)], na.rm = TRUE))
+
+plot(gene.mean, gene.var, xlab = "mean of log2 expression", ylab = "variance of log2 expression")
+```
+
+The plot below shows the distribution of just the variance across
+replicates. 99.9\% of the measurements live below 1.28 (marked).
+Greg wants to err on the side of throwing out anything that has
+a whif of irregularity, so I'm just tossing proteins with 
+inter-replicate log2 variation > 1.28.
+
+```{r var_hist}
+hist(gene.var, breaks = 100, main = "Variation across replicates")
+high.thresh <- get.percentile(gene.var[which(!is.na(gene.var))], 99.9)
+abline(v = high.thresh)
+too.high <- unique(which(gene.var > high.thresh, arr.ind = TRUE)[,1])
+#length(too.high)
+#sort(rownames(gene.var)[too.high])
+write_table_with_header(sort(rownames(gene.var)[too.high]), 
+    file.path(gene.dump.dir, "High_variance.txt"), col.names = FALSE,
+    header = "Genes with variance across replicates exceeding 99.9% of all genes")
+```
+
+There are `r length(too.high)` proteins with variance across replicates
+that exceed this threshold. I guess we can just remove these.
+
+```{r filter_var}
+to.keep <- setdiff(1:nrow(gene.var), too.high)
+low.var.rep <- log.gene.mat[to.keep,]
+#hist(as.numeric(low.var.rep["Ide",])) #checking Ide bimodality
+```
+
+## Reducing to gene-level numbers
+
+We then took the mean of the observations across the replicates.
+
+```{r mean_reps}
+#for each unique animal ID, find all replicates and 
+#average across them.
+mean.gene.mat <- t(sapply(final.mouse.table[,"animalID"], 
+    function(x) rowMeans(low.var.rep[,which(final.obs.info[,"animalID"] == x)], 
+    na.rm = TRUE)))
+#hist(as.numeric(mean.gene.mat[,"Ide"]))
+```
+
+```{r remove_outlier}
+#there is an outlier in the decomposition that is causing problems 
+#in the tests and plots I'm removing it here.
+imp.gene.mat <- impute.knn(mean.gene.mat)$data
+imp.decomp <- plot.decomp(imp.gene.mat, plot.results = FALSE)
+outlier.idx <- which(imp.decomp$u[,1] > 0.3)
+outlier.id <- rownames(mean.gene.mat)[outlier.idx]
+keep.id <- setdiff(rownames(mean.gene.mat), outlier.id)
+keep.idx <- which(all.obs.info[,"animalID"] %in% keep.id)
+
+final.mouse.table <- final.mouse.table[match(keep.id, final.mouse.table[,"animalID"]),]
+filtered.gene.mat <- filtered.gene.mat[,keep.idx]
+final.obs.info <- all.obs.info[keep.idx,]
+mean.gene.mat <- mean.gene.mat[keep.id,]
+#identical(rownames(final.obs.info), colnames(filtered.gene.mat))
+
+```
+
+
+```{r factors}
+genotype <- ordered(final.mouse.table[,"genotype"], levels = c("FC", "WT", "VS"))
+sex <- ordered(final.mouse.table[,"sex"], levels = c("F", "M"))
+age <- ordered(final.mouse.table[,"age_months"], levels = c(4, 12))
+names(genotype) <- names(sex) <- names(age) <- final.mouse.table[,"animalID"]
+#stripchart(mean.gene.mat[,"Ide"]~genotype, vertical = TRUE, method = "jitter")
+#boxplot(mean.gene.mat[,"Pf4"]~genotype)
+write_table_with_header(final.mouse.table, 
+    file.path(processed.data.dir, "covariates.txt"),
+    header = "Final information for all mice included in the analysis.")
+```
+
+## Filter for even distribution
+
+We also want to make sure that values are relatively evenly spread
+across the groups, sex, age, and genotype.
+
+Below we count the number of non NA values we have in each subset.
+The bar plot below shows how many animals there are of each sex.
+
+```{r filter_sex}
+sex.idx <- lapply(levels(sex), function(x) which(sex == x))
+names(sex.idx) <- levels(sex)
+barplot_with_num(sapply(sex.idx, length), text.gap = 0.25, text.shift = 0.15,
+     main = "Number of mice of each sex")
+```
+
+```{r rep_thresh}
+rep.thresh = 0.2
+```
+
+The dot plot below shows how many animals of each sex have counts in 
+each gene. We removed genes with representation below 
+`r rep.thresh*100`\%
+
+```{r gene_count_sex, fig.width = 5, fig.height = 5}
+#for each gene get the proportion of animals in each sex
+#with complete data
+sex.count <- t(apply(mean.gene.mat, 2, function(x) sapply(levels(sex), 
+    function(y) c(length(which(!is.na(x[sex.idx[[y]]]))))/length(which(sex == y)))))
+colnames(sex.count) <- levels(sex)
+
+plot(sex.count, main = "Percentage represented per sex", xlim = c(0, 1), ylim = c(0, 1))
+abline(0,1)
+abline(v = rep.thresh, h = rep.thresh, col = "red")
+to.remove <- which(sex.count < rep.thresh, arr.ind = TRUE)
+
+write_table_with_header(unique(rownames(to.remove)), col.names = FALSE,
+    file.path(gene.dump.dir, "Unbalanced_Sex.txt"), 
+    header = "Genes removed because of low representation in at least one sex. Less than 20% of animals represented.")
+
+to.keep <- setdiff(1:ncol(mean.gene.mat), to.remove)
+text(sex.count[to.remove,1], sex.count[to.remove,2], 
+    labels = rownames(sex.count)[to.remove], pos = 4, cex = 0.5)
+
+sex.filtered.genes <- mean.gene.mat[,to.keep]
+#plot(sex.filtered.genes[,"App"]~genotype)
+#stripchart(sex.filtered.genes[,"Ide"]~genotype, vertical = TRUE, method = "jitter")
+```
+
+The bar plot below shows how many animals are in each age group.
+
+```{r age}
+age.idx <- lapply(levels(age), function(x) which(age == x))
+names(age.idx) <- levels(age)
+barplot_with_num(sapply(age.idx, length), text.gap = 5, text.shift = 1, 
+    main = "Mice represented in each age", ylab = "Number of mice")
+```
+
+The dot plot shows how many 4 and 12-month olds represent each 
+gene. We did not remove any genes based on imbalanced representation
+across the ages.
+
+```{r gene_count_age, fig.width = 5, fig.height = 5}
+age.count <- t(apply(sex.filtered.genes, 2, 
+    function(x) sapply(levels(age), 
+    function(y) c(length(which(!is.na(x[age.idx[[y]]])))/length(which(age == y))))))
+colnames(age.count) <- levels(age)
+
+plot(age.count, main = "Percentage represented per age", xlim = c(0,1), ylim = c(0,1))
+abline(0,1)
+abline(h = rep.thresh, v = rep.thresh, col = "red")
+to.remove <- which(age.count < rep.thresh, arr.ind = TRUE)
+
+write_table_with_header(unique(rownames(to.remove)), col.names = FALSE,
+    file.path(gene.dump.dir, "Unbalanced_age.txt"), 
+    header = "Genes removed because of low representation in at least one age group. Less than 20% of animals represented.")
+
+
+to.keep <- setdiff(1:ncol(sex.filtered.genes), to.remove)
+if(length(to.remove) > 0){
+    text(age.count[to.remove,1], age.count[to.remove,2], 
+        labels = rownames(age.count)[to.remove], pos = 4, cex = 0.5)
+}
+
+age.filtered.genes <- sex.filtered.genes[,to.keep]
+#boxplot(age.filtered.genes[,1:10])
+#plot(age.filtered.genes[,1]~genotype)
+```
+
+The bar plot shows how many animals are of each genotype.
+
+```{r genotype_rep}
+geno.idx <- lapply(levels(genotype), function(x) which(genotype == x))
+names(geno.idx) <- levels(genotype)
+barplot_with_num(sapply(geno.idx, length), text.gap = 3, text.shift = 0.5, 
+    main = "Mice per genotype")
+```
+
+The dot plots compare for each gene how many animals in 
+each genotype have values for that gene. They are pretty well 
+balanced. We did not remove any genes based on imbalanced
+representation across genotypes.
+
+```{r geno_balance, fig.height = 7, fig.width = 7}
+geno.count <- t(apply(age.filtered.genes, 2, 
+    function(x) sapply(levels(genotype), 
+    function(y) c(length(which(!is.na(x[geno.idx[[y]]]))))/length(which(genotype == y)))))
+colnames(geno.count) <- levels(genotype)
+
+pairs(geno.count, main = "Percentage represented per genotype", 
+    xlim = c(0,1), ylim = c(0,1))
+
+to.remove <- which(geno.count < rep.thresh, arr.ind = TRUE)
+to.keep <- setdiff(1:ncol(age.filtered.genes), to.remove)
+
+write_table_with_header(unique(rownames(to.remove)), col.names = FALSE,
+    file.path(gene.dump.dir, "Unbalanced_Genotype.txt"), 
+    header = "Genes removed because of low representation in at least one genotype. Less than 20% of animals represented.")
+
+
+filtered.gene.mat <- age.filtered.genes[,to.keep]
+#boxplot(filtered.gene.mat[,1:10])
+#plot(filtered.gene.mat[1,]~genotype)
+```
+
+
+## Re-check missingness
+
+Let's check missingness again.
+
+```{r missingness2}
+missing.mice <- apply(filtered.gene.mat, 1, 
+    function(x) length(which(is.na(x)))/ncol(filtered.gene.mat))
+missing.genes <- apply(filtered.gene.mat, 2, 
+    function(x) length(which(is.na(x)))/nrow(filtered.gene.mat))
+```
+
+The plot below shows the percent missing across genes.
+We successfully removed genes with greater than 50\%
+missingness. This causes problems when I look for 
+interactions between variables because of sparsity.
+In the interest of analyzing as many genes as possible,
+I will keep the 50\% cutoff and only check for main effects.
+
+```{r plot_missing}
+missing.thresh = 0.5
+hist(missing.genes, xlim = c(0,1))
+abline(v = missing.thresh)
+genes.to.keep <- which(missing.genes <= missing.thresh)
+to.remove <- which(missing.genes > missing.thresh)
+
+write_table_with_header(unique(names(to.remove)), col.names = FALSE,
+    file.path(gene.dump.dir, "Missing_Recheck.txt"), 
+    header = "Genes removed because of low overall missingness on second time through.")
+
+#scale and center so we can compare differences across genes
+#and take group means, etc.
+centered.gene.mat <- apply(filtered.gene.mat[,genes.to.keep], 2, scale)
+dimnames(centered.gene.mat) <- dimnames(filtered.gene.mat)
+#stripchart(centered.gene.mat[,"Ide"]~genotype, vertical = TRUE, method = "jitter")
+#vioplot(centered.gene.mat[,"App"]~genotype)
+
+
+#this is a weird idea, but the 7th protein PC is correlated with 
+#the first transcript PC. I'm going to try to adjust out the first
+#6 PCs from the protein matrix and run everything. This is silly, 
+#and I shouldn't waste my time with such things, but I can't resist.
+
+#imp.mat <- impute.knn(centered.gene.mat)$data
+#imp.decomp <- plot.decomp(imp.mat, pc = 6, plot.results = FALSE)
+#adj.cent <- adjust(centered.gene.mat, imp.decomp$u)
+#centered.gene.mat <- adj.cent
+```
+
+This leaves us `r length(to.keep)` proteins.
+
+The following plot shows how much data individual mice are missing.
+All mice have well below our threshold.
+
+```{r missing_mice}
+hist(missing.mice, xlim = c(0,1), main = "Number of mice with varying degrees of missing data")
+abline(v = missing.thresh)
+mice.to.keep <- which(missing.mice <= missing.thresh)
+centered.gene.mat <- centered.gene.mat[mice.to.keep,]
+```
+
+
+```{r plot_gene_fun}
+#for debugging/re-coding
+#return.text = FALSE; plot.results = FALSE; stat.x = 0.1; stat.y = 0.9; stat.y.spread = 0.15; cex.lab = 1; plot.label = ""; ylab = "Abundance (A.U.)"; autoflip.stat.y = FALSE; autoplace.text = TRUE; n.samples = 25; ylim = NULL; jitter.factor = 1; min.contig = 5
+
+test_effect <- function(values, plot.factor, return.text = FALSE,
+    plot.results = FALSE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
+    cex.lab = 1, plot.label = "", ylab = "Abundance (A.U.)", autoflip.stat.y = FALSE,
+    autoplace.text = FALSE, n.samples = 25, min.contig = 5, jitter.factor = 1, ylim = NULL){
+    
+    model <- lm(values~plot.factor)
+    #summary(model)
+
+    r2 <- summary(model)$adj.r.squared
+    p <- anova(model)$"Pr(>F)"[1]
+    text.p <- threshold_p(p, sig.dig = 2, return.text = TRUE)
+    linear.effect.size <- coefficients(summary(model))["plot.factor.L","Estimate"]
+    linear.effect.p <- coefficients(summary(model))["plot.factor.L","Pr(>|t|)"]
+    
+        if(plot.results){
+            box.cols <- sapply(levels(plot.factor), function(x) factor.cols[which(names(factor.cols) == x)])
+            vioplot(values~plot.factor, col = box.cols, xlab = "", main = plot.label, 
+                ylab = "", cex.names = cex.lab, ylim = ylim)
+            mtext(ylab, side = 2, cex = cex.lab, line = 2)
+            stripchart(values~plot.factor, vertical = TRUE, pch = 16, method = "jitter",
+                add = TRUE, col = dot.col)
+            plot.dim <- par("usr")
+            segments(x0 = plot.dim[1], x1 = plot.dim[2], y0 = 0)
+            
+            if(autoplace.text){
+  
+                possible.coord <- autoplace_text2(x = jitter(as.numeric(plot.factor), factor = jitter.factor), 
+                    y = values, n.samples = n.samples, min.contig = min.contig, plot.result = FALSE) 
+
+                #place in region relative to specified stat.x and stat.y
+                text.x <- fractional_pos(min(possible.coord[,1]), max(possible.coord[,1]), stat.x)
+                
+                plot.dim <- par("usr")
+                plot.height <- plot.dim[4] - plot.dim[3]
+                min.visible <- plot.dim[3] + (plot.height*0.1) #the minimum visible is above the minimum
+                #define the maximum y position based on stat.y and the box we found
+                max.y <- fractional_pos(min(possible.coord[,2]), max(possible.coord[,2]), stat.y)
+                #define min.y based on max.y and stat.y.spread
+                min.y <- max.y - (plot.height*stat.y.spread)
+                
+                if(min.y < min.visible){ #don't let the text go off the bottom of the plot
+                    #move the y position up the amount that it is going off the bottom
+                    off.bottom <- min.visible - min.y
+                    max.y <- max.y + off.bottom
+                    min.y <- min.visible
+                }
+
+                #y positions are evenly distributed from max.y to min.y
+                text.y <- segment_region(max.y, min.y, 3, "ends")
+                r2.y <- text.y[1]
+                p.y <- text.y[2]
+                effect.y <- text.y[3]
+            }else{
+                text.x <- fractional_pos(plot.dim[1], plot.dim[2], stat.x)
+                if(autoflip.stat.y){
+                    if(linear.effect.size < 0){
+                        stat.y <- 1.1-stat.y #automatically flip if the effect size is negative. not sure if this is a good idea
+                    }
+                }
+                text.y <- segment_region(stat.y, stat.y - stat.y.spread, 3, "ends")
+                r2.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[1])
+                p.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[2])
+                effect.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[3])
+            }
+            text(text.x, r2.y, bquote(italic(R)^2==.(signif(r2, 2))), adj = 0)
+            text(text.x, p.y, labels = text.p, adj = 0)
+            text(text.x, effect.y, labels = bquote(beta==.(signif(linear.effect.size, 2))), adj = 0)
+        }
+
+    result <- list("r2" = r2, "model.p" = p, 
+        "linear.effect.size" = linear.effect.size, "linear.effect.p" = linear.effect.p)
+    invisible(result)
+}
+
+
+plot_gene <- function(gene.name, pr.mat, plot.label = "", plot.results = TRUE, stat.x = 0.1, 
+    stat.y = 0.9, stat.y.spread = 0.15, cex.lab = 1, return.text = TRUE,
+    ylab = "Abundance (A.U.)", autoflip.stat.y = FALSE, autoplace.text = FALSE, 
+    n.samples = 25, min.contig = 5, jitter.factor = 1, ylim = NULL, plot.label.cex = 1){
+
+    common.gene <- intersect(gene.name, colnames(pr.mat))
+    if(length(common.gene) == 0){
+        if(plot.results){
+            plot.text("No genes found")
+        }
+        return(NA)
+    }
+
+    gene.idx <- match(gene.name, colnames(pr.mat))
+    if(length(gene.idx) == 1 && is.na(gene.idx)){
+        if(plot.results){
+            plot.text(paste(paste(gene.name, collapse = ", "), "not found"))
+            return(NA)
+        }
+    }
+    not.found <- gene.name[which(is.na(gene.idx))]
+    gene.idx <- gene.idx[which(!is.na(gene.idx))]
+    if(length(gene.idx) == 0){
+        if(plot.results){
+            plot.text(paste("Could not find", paste(gene.name, collapse = ", ")))
+        }
+        return(NA)
+    }
+    
+    if(plot.results){
+        layout.mat <- matrix(c(1,2,6,3,4,5), byrow = TRUE, nrow = 2)
+        layout(layout.mat)
+    }
+
+    #if there is more than one gene, take the average of all values
+    gene.mat <- pr.mat[,gene.idx,drop=FALSE]
+    #hist(gene.mat)
+    if(ncol(gene.mat) > 1){
+        mean.gene  <- matrix(rowMeans(gene.mat, na.rm = TRUE), ncol = 1)
+        gene.label <- "gene group"
+    }else{
+        mean.gene <- gene.mat
+        gene.label <- gene.name
+    }
+
+    #plot one: main effect of sex
+    adj.vals <- adjust(mean.gene, dummy_covar(cbind(age, genotype)), 
+        retain.intercept = FALSE)
+    sex.result <- test_effect(values = adj.vals, plot.factor = sex, 
+        return.text = return.text,
+        plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, 
+        stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
+        paste("Effect of sex on", gene.label), 
+        ylab = ylab, autoflip.stat.y = autoflip.stat.y, autoplace.text = autoplace.text,
+        n.samples = n.samples, min.contig = min.contig, jitter.factor = jitter.factor, ylim = ylim)
+    
+    #plot two: main effect of age
+    adj.vals <- adjust(mean.gene, dummy_covar(cbind(sex, genotype)), 
+        retain.intercept = FALSE)
+    age.result <- test_effect(adj.vals, age, return.text = return.text,
+        plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, 
+        stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
+        paste("Effect of age on", gene.label), 
+        ylab = ylab, autoflip.stat.y = autoflip.stat.y, autoplace.text = autoplace.text,
+        n.samples = n.samples, min.contig = min.contig, jitter.factor = jitter.factor, ylim = ylim)
+
+    #plot three: main effect of genotype
+    adj.vals <- adjust(mean.gene, dummy_covar(cbind(age, sex)), 
+        retain.intercept = FALSE)
+    geno.result <- test_effect(values = adj.vals, plot.factor = genotype, return.text = return.text,
+        plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, 
+        stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
+        paste("Effect of genotype on", gene.label), 
+        ylab = ylab, autoflip.stat.y = autoflip.stat.y, autoplace.text = autoplace.text,
+        n.samples = n.samples, min.contig = min.contig, jitter.factor = jitter.factor, ylim = ylim)
+
+    #plot four to look at interaction effect: main effect of genotype in 4 month old mice
+    four.idx <- which(age == "4")
+    four.result <- test_effect(values = adj.vals[four.idx], plot.factor = genotype[four.idx], 
+        return.text = return.text, plot.results = plot.results, stat.x = stat.x, 
+        stat.y = stat.y, stat.y.spread = stat.y.spread, cex.lab = cex.lab, 
+        plot.label = paste("Effect of genotype on", gene.label, "\nin 4-month old mice"), 
+        ylab = ylab, autoflip.stat.y = autoflip.stat.y, 
+        autoplace.text = autoplace.text, n.samples = n.samples, min.contig = min.contig, 
+        jitter.factor = jitter.factor, ylim = ylim)
+
+    #plot five to look at interaction effect: main effect of genotype in 12 month old mice
+    twelve.idx <- which(age == "12")
+    twelve.result <- test_effect(values = adj.vals[twelve.idx], plot.factor = genotype[twelve.idx], 
+        return.text = return.text, plot.results = plot.results, stat.x = stat.x, 
+        stat.y = stat.y, stat.y.spread = stat.y.spread, cex.lab = cex.lab, 
+        plot.label = paste("Effect of genotype on", gene.label, "\nin 12-month old mice"), 
+        ylab = ylab, autoflip.stat.y = autoflip.stat.y, 
+        autoplace.text = autoplace.text, n.samples = n.samples, min.contig = min.contig, 
+        jitter.factor = jitter.factor, ylim = ylim)
+    
+    if(plot.results){
+        #add a label in the black spot
+        plot.text(plot.label, cex = plot.label.cex)
+    }
+
+    stat.mat <- rbind("sex" = sex.result, "age" = age.result, 
+        "genotype" = geno.result, "geno_four" = four.result,
+        "geno_twelve" = twelve.result)
+
+    result <- list("expr_mat" = gene.mat, "not_found" = not.found, "stats" = stat.mat)
+    invisible(result)
+}
+
+#plot_gene("App", centered.gene.mat, stat.x = 0.5)
+#plot_gene("Apoe", centered.gene.mat)
+#plot_gene("Ide", centered.gene.mat, autoplace.text = TRUE, n.samples = 25, min.contig = 5)
+```
+
+## IDE adjustment
+
+As with the transcriptomes, we adjust for IDE abundance in case that is
+a problem. It does have bimodal protein abundance, as shown below.
+
+```{r ide_abundance, fig.width = 9, fig.height = 6.5}
+plot_gene("Ide", centered.gene.mat, autoplace.text = TRUE)
+```
+
+```{r ide}
+ide.idx <- which(colnames(centered.gene.mat) == "Ide")
+centered.gene.mat <- adjust(centered.gene.mat, centered.gene.mat[,"Ide", drop = FALSE], 
+    retain.intercept = FALSE)
+write.table(centered.gene.mat, file.path(processed.data.dir, "centered_gene_mat.txt"),
+    sep = "\t", quote = FALSE)
+```
+
+
+## PC Plots {.tabset .tabset-fade .tabset-pills}
+
+We then imputed missing data in order to perform a PC analysis of the 
+matrix. The plots below show the first four principal components of the
+imputed protein abundance matrix. The different table show the same
+data but colored by the different experimental factors: gentype, sex,
+and age. Age seems to be correlated with PC1, but the other factors
+are not correlated with any PC.
+
+```{r impute}
+imp.gene.mat <- impute.knn(centered.gene.mat)$data
+
+genotype.col <- sapply(final.mouse.table[,"genotype"], function(x) geno.cols[which(names(geno.cols) == x)])
+sex.col <- as.numeric(sex)
+age.col <- as.numeric(age)
+
+mean.decomp <- plot.decomp(imp.gene.mat, plot.results = FALSE, pc = 4)
+```
+
+The following plots show the first four PCs of the matrix colored
+by different factors. The first PC seems to be age, but none of the
+other factors seem to have an effect. 
+
+```{r plot_decomp}
+mouse.pc <- mean.decomp$u
+colnames(mouse.pc) <- paste0("PC", 1:ncol(mouse.pc))
+```
+
+### Genotype
+```{r geno_col, fig.width = 9, fig.height = 9}
+pairs(mouse.pc, col = genotype.col, pch = 16, main = "colored by genotype")
+```
+
+### Sex
+```{r sex_col, fig.width = 9, fig.height = 9}
+pairs(mouse.pc, col = sex.col, pch = 16, main = "colored by sex")
+```
+
+### Age
+```{r age_col, fig.width = 9, fig.height = 9}
+pairs(mouse.pc, col = age.col, pch = 16, main = "colored by age")
+```
+
+## Fit models
+
+We fit linear models to protein abundance explaining each abundance
+with age, sex, and genotype. We used the unimputed matrix for this.
+
+The qq plots for the p values are shown below. All factors seem to 
+have a large effect, but age has the largest.
+
+```{r get_lin_idx}
+get_lin_idx <- function(model, factor.name){
+    coef.mat <- summary(model)$coefficients
+    want.idx <- grep(factor.name, rownames(coef.mat))
+    dont.want.idx <- grep("Q", rownames(coef.mat))
+    final.want <- setdiff(want.idx, dont.want.idx)
+    #rownames(coef.mat)[final.want]
+    return(final.want)
+}
+```
+
+```{r fit_models_limma, eval = FALSE}
+library(limma)
+library(edgeR)
+protein_data <- t(adjust(mean.gene.mat, dummy_covar(data.frame("sex" = sex, "age" = age))))
+
+design <- model.matrix(~genotype)
+colnames(design) <- levels(group)
+
+
+fit_trend <- lmFit(protein_data, design)
+fit_trend <- eBayes(fit_trend)
+trend_results <- topTable(fit_trend, number = nrow(protein_data))
+
+
+fit <- lmFit(protein_data, design)
+fit <- eBayes(fit)
+p.mat <- fit$p.value
+effect.mat <- coef(fit)
+trend_results <- topTable(fit, adjust = "BH", number = Inf)
+
+
+age.p <- p.mat["age.L"]
+sex.p <- p.mat[,"sexF"]-p.mat[,"sexM"]
+geno.p <- p.mat[,"genotype.L"]
+
+trend_results <- topTable(fit, adjust = "BH", number = Inf)
+
+```
+
+
+```{r fit_models, fig.width = 9, fig.height = 4}
+#with interactions
+age.models <- lapply(1:ncol(centered.gene.mat), function(x) lm(centered.gene.mat[,x]~(genotype+sex+age)^2))
+sex.models <- lapply(1:ncol(centered.gene.mat), function(x) lm(centered.gene.mat[,x]~(age+genotype+sex)^2))
+genotype.models <- lapply(1:ncol(centered.gene.mat), function(x) lm(centered.gene.mat[,x]~(sex+age+genotype)^2))
+
+age.idx <- get_lin_idx(age.models[[1]], "age")
+age.p <- t(sapply(age.models, function(x) summary(x)$coefficients[age.idx,"Pr(>|t|)"]))
+colnames(age.p) <- gsub(".L", "", colnames(age.p))
+age.effect <- t(sapply(age.models, function(x) summary(x)$coefficients[age.idx,"Estimate"]))
+colnames(age.effect) <- gsub(".L", "", colnames(age.effect))
+
+sex.idx <- get_lin_idx(sex.models[[1]], "sex")
+sex.p <- t(sapply(sex.models, function(x) summary(x)$coefficients[sex.idx,"Pr(>|t|)"]))
+colnames(sex.p) <- gsub(".L", "", colnames(sex.p))
+sex.effect <- t(sapply(sex.models, function(x) summary(x)$coefficients[sex.idx,"Estimate"]))
+colnames(sex.effect) <- gsub(".L", "", colnames(sex.effect))
+
+geno.idx <- get_lin_idx(genotype.models[[1]], "genotype")
+geno.p <- t(sapply(genotype.models, function(x) summary(x)$coefficients[geno.idx,"Pr(>|t|)"]))
+colnames(geno.p) <- gsub(".L", "", colnames(geno.p))
+geno.effect <- t(sapply(genotype.models, function(x) summary(x)$coefficients[geno.idx,"Estimate"]))
+colnames(geno.effect) <- gsub(".L", "", colnames(geno.effect))
+
+rownames(age.p) <- rownames(age.effect) <- rownames(sex.p) <- rownames(sex.effect) <- rownames(geno.p) <- rownames(geno.effect) <- colnames(centered.gene.mat)
+```
+
+For each factor, we tested for main effects as well as interaction
+effects with other factors. The plots below show qq plots for each
+of these tests. There appear to be some strong interactions, particularly
+between age and genotype, and to a lesser extent between sex and genotype.
+
+```{r qq_age, fig.width = 9, fig.height = 9}
+par(mfrow = c(3,3))
+test <- sapply(1:ncol(age.p), function(x) qqunif.plot(age.p[,x], plot.label = colnames(age.p)[x]))
+test <- sapply(1:ncol(sex.p), function(x) qqunif.plot(sex.p[,x], plot.label = colnames(sex.p)[x]))
+test <- sapply(1:ncol(geno.p), function(x) qqunif.plot(geno.p[,x], plot.label = colnames(geno.p)[x]))
+
+factor.effect.mat <- cbind(age.effect, sex.effect, geno.effect)
+factor.p.mat <- cbind(age.p, sex.p, geno.p)
+factor.fdr.mat <- apply(factor.p.mat, 2, function(x) p.adjust(x, method = "fdr"))
+
+write_table_with_header(factor.effect.mat, file.path(results.dir, "Protein_Abundance_Tests_Effects.csv"), 
+    sep = ",", header = "Linear effect sizes (betas from linear models) for each protein abundance as it is affected by each tested factor.")
+write_table_with_header(factor.p.mat, file.path(results.dir, "Protein_Abundance_Tests_P.csv"), 
+    sep = ",", header = "P values for linear models for each protein abundance as it is affected by each tested factor.")
+write_table_with_header(factor.p.mat, file.path(results.dir, "Protein_Abundance_Tests_FDR.csv"), 
+    sep = ",", header = "FDR for linear models for each protein abundance as it is affected by each tested factor.")
+```
+
+```{r dups}
+#some of the columns are duplicates of each other. 
+#age:genotype is the same as genotype:age. Remove
+#the duplicates
+all.col <- sapply(strsplit(colnames(factor.p.mat), ":"), function(x) paste(sort(x), collapse = ":"))
+dup.col <- which(duplicated(all.col))
+to.keep <- setdiff(1:ncol(factor.p.mat), dup.col)
+factor.effect.mat <- factor.effect.mat[,to.keep]
+factor.p.mat <- factor.p.mat[,to.keep]
+factor.fdr.mat <- factor.fdr.mat[,to.keep]
+```
+
+## Volcano plots
+
+The volcano plots are shown below all on the same scale. 
+This highlights the huge effects of age relative to all 
+other factors. 
+
+```{r volcano, fig.width = 9, fig.height = 6}
+ylim = c(0, max(-log10(factor.p.mat)))
+xlim = c(min(factor.effect.mat), max(factor.effect.mat))
+
+par(mfrow = c(2,3))
+for(i in 1:ncol(factor.p.mat)){
+    plot(factor.effect.mat[,i], -log10(factor.p.mat[,i]), 
+        main = colnames(factor.p.mat)[i], xlab = "Effect", ylab = "-log10(p)",
+        xlim = xlim, ylim = ylim)
+}
+```
+
+```{r thresh}
+fdr.thresh <- 0.1
+```
+
+Volcano plots on independend scales are shown below.
+Colored dots are significant at an FDR of `r fdr.thresh`.
+The different colors indicate positive and negative effect
+sizes.
+
+```{r volcano_diff, fig.width = 9, fig.height = 6}
+sig.list <- vector(mode = "list", length = ncol(factor.fdr.mat))
+names(sig.list) <- colnames(factor.fdr.mat)
+par(mfrow = c(2,3))
+for(i in 1:ncol(factor.p.mat)){
+    pt.col = rep("black", nrow(factor.fdr.mat))
+    sig.idx <- which(factor.fdr.mat[,i] <= fdr.thresh)
+    down.idx <- which(factor.effect.mat[,i] < 0)
+    down.sig <- intersect(sig.idx, down.idx)
+    up.idx <- which(factor.effect.mat[,i] > 0)
+    up.sig <- intersect(sig.idx, up.idx)
+    factor.sig <- list("Up" = rownames(factor.fdr.mat)[up.sig], 
+        "Down" = rownames(factor.fdr.mat)[down.sig])
+    sig.list[[i]] <- factor.sig
+    if(length(up.idx) > 0){pt.col[up.sig] <- "#8c510a"}
+    if(length(down.idx) > 0){pt.col[down.sig] <- "#01665e"}
+    plot(factor.effect.mat[,i], -log10(factor.p.mat[,i]), 
+        col = pt.col, pch = 16,
+        main = colnames(factor.p.mat)[i], xlab = "Effect", 
+        ylab = "-log10(p)")    
+}
+```
+
+```{r num_sig}
+par(mar = c(4, 12, 4, 4), mfrow = c(1,1))
+num.sig <- sapply(sig.list, function(x) sapply(x, length))
+a <- barplot(num.sig, beside = TRUE, main = "Number of significant proteins",
+    col = c("#8c510a", "#01665e"), las = 2, horiz = TRUE, 
+    xlim = c(0, (max(num.sig)*1.1)), legend = TRUE)
+test <- sapply(1:nrow(a), function(b) text(x = num.sig[b,]+150, y = a[b,], 
+    labels = num.sig[b,]))
+
+
+write.table(num.sig, here("Results", "for_paper", "num_dap_table.txt"),
+quote = FALSE, sep = "\t")
+```
+
+## Enrichments
+
+The enrichments for these significant genes are shown below. 
+I'm adding some discussion based on the results. This may change
+in future iterations of the workflow.
+
+### Age
+
+* Proteins more abundant with age are enriched for synapse, ER,
+    subcellular localization, and anion binding.
+
+* Proteins less abundant with age are enriched for mitochondrion, 
+    and mRNA splicing
+
+### Sex
+
+* Proteins more abundant in males are enriched for neuropeptide
+    activity and siRNA biogenesis
+
+* Proteins more abundant in females are enriched for nuclear 
+    membrane, nuclear migration along microtubule, and mRNA
+    transport.
+
+### Genotype
+* Proteins for which genotype had a positive effect were enriched 
+    for a couple transcription factor motifs, abnormal immunoglobulin 
+    levels, abnormal IgA secretion.
+
+* Proteins for which genotype had a negative effect were enriched
+    for MAPK signaling, blood coagulation, and TLR regulation.
+
+### Genotype:age interaction
+* Positive interaction: more in FC in 4-month olds, more in VS in `r compare.age.text`-month olds
+
+* Proteins for which genotype and age had a positive interaction
+    were enriched for small molecule metabolism, mitochondrial 
+    matrix, and organic acid metabolism.
+
+* Negative interaction: more in VS in 4-month olds, more in FC in `r compare.age.text`-month olds
+
+* There were only two proteins for which genotype and age had a 
+    negative interaction: Cnn2 and Tmed9. Obviously, these didn't
+    have any enrichments.
+
+* Tmed9 is a membrane trafficking protein in the synapse
+* Cnn2 seems to be related to macrophage migration and phagocytosis.
+
+
+```{r enrich, fig.width = 7, fig.height = 12}
+#this file doesn't differ based on which age we are looking at, 
+#since we look at this before we split out the age groups.
+
+all.sig <- unlist(sig.list, recursive = FALSE)
+
+if(!offline){
+    enrich.file <- file.path(results.dir = "group_enrichment.RDS") 
+    if(!file.exists(enrich.file)){
+        enrich <- lapply(all.sig, 
+            function(x) if(length(x) > 0){gost(x, organism = "mmusculus", source = "GO")})
+        saveRDS(enrich, enrich.file)
+    }else{
+        enrich <- readRDS(enrich.file)
+    }
+    #pdf("~/Desktop/protein_enrich.pdf", width = 7, height = 12)
+    plot.enrichment.group(enrich, max.term.size = 3000, 
+        transformation = function(x) log10(x+1), cluster_cols = FALSE)
+    #dev.off()
+}
+```
+
+
+## Top proteins {.tabset .tabset-fade .tabset-pills}
+
+The following tables show stats for the top proteins across
+factors. The maximum number of genes shown for each group is
+10.
+
+```{r top_hits, results = "asis"}
+
+for(i in 1:length(sig.list)){
+    has.vals <- sapply(sig.list[[i]], length)
+    if(any(has.vals) > 0){
+        cat("###", names(sig.list)[i], "{.tabset .tabset-fade .tabset-pills}\n")
+    }
+    for(j in 1:length(sig.list[[i]])){
+        sig.set <- sig.list[[i]][[j]]
+        if(length(sig.set) > 0){
+            cat("####", names(sig.list[[i]])[j], "\n")
+
+            max.num <- min(10, length(sig.set)) #show no more than 10 genes
+            sig.effect <- factor.effect.mat[match(sig.set, rownames(factor.effect.mat)),i,drop=FALSE]
+            if(names(sig.list[[i]])[j] == "Up"){
+                effect.order <- order(sig.effect, decreasing = TRUE)[1:max.num]
+            }
+            if(names(sig.list[[i]])[j] == "Down"){
+                effect.order <- order(sig.effect, decreasing = FALSE)[1:max.num]
+            }
+        sorted.effect <- sig.effect[effect.order,1,drop=FALSE]
+        top.idx <- match(rownames(sorted.effect), rownames(factor.fdr.mat))
+        top.fdr <- factor.fdr.mat[top.idx,i]
+        stat.table <- cbind(signif(sorted.effect, 2), signif(-log10(top.fdr), 2))
+        colnames(stat.table) <- c("Effect Size", "-log10(FDR)")
+        print(kable(stat.table))
+        cat("\n\n")
+        }
+    }
+}
+```
+
+## Examples {.tabset .tabset-fade .tabset-pills}
+
+Below we show examples of each type of effect.
+
+
+### Up with age
+
+```{r age_up, fig.width = 9, fig.height = 6.5}
+#pdf("~/Desktop/example.pdf", width = 9, height = 6.5)
+#age effect up
+#a note about automatic text placement. It's pretty good, but
+#not perfect. It may require fiddling with parameters, especially
+#for violin plots because I don't have a good way of defining
+#where the violin will be drawn. I only jitter the points,
+#so their spread is not based on their density as it is in the
+#violin plots. Also because jitter is random, replotting can lead
+#to different text placement.
+plot_gene(gene.name = "Hapln2", pr.mat = centered.gene.mat, autoplace.text = TRUE) 
+#dev.off()
+```
+
+### Down with age
+
+```{r age_down, fig.width = 9, fig.height = 6.5}
+#age effect down
+plot_gene("Prom1", centered.gene.mat, autoplace.text = TRUE) 
+```
+
+### Positive genotype-age interaction
+```{r geno_age_up, fig.width = 9, fig.height = 6.5}
+#genotype-age interaction positive
+plot_gene("Tspan2", centered.gene.mat, autoplace.text = TRUE, stat.y = 0.2) 
+```
+
+### Negative genotype-age interaction
+```{r geno_age_down, fig.width = 9, fig.height = 6.5}
+#genotype-age interaction negative
+plot_gene("Tmed9", centered.gene.mat, autoplace.text = TRUE) 
+```
+
+### Higher in males
+```{r male_up, fig.width = 9, fig.height = 6.5}
+#higher in males
+plot_gene("Serpina3k", centered.gene.mat, autoplace.text = TRUE)
+```
+
+### Higher in females
+```{r female_up, fig.width = 9, fig.height = 6.5}
+#higher in females
+plot_gene("Ighg", centered.gene.mat, autoplace.text = TRUE) 
+```
+
+### Positive main effect of genotype
+```{r geno_up, fig.width = 9, fig.height = 6.5}
+#overall positive effect of genotype
+plot_gene("Hmbox1", centered.gene.mat, autoplace.text = TRUE, stat.x = 0.18) 
+```
+
+### Negative main effect of genotype
+```{r geno_down, fig.width = 9, fig.height = 6.5}
+#overall negative effect of genotype
+plot_gene("Csnk2b", centered.gene.mat, autoplace.text = TRUE) 
+```
+
+
+```{r patterns, eval = FALSE}
+par(mfrow = c(2,3))
+for(i in 1:length(sig.list)){
+    category <- names(sig.list)[i]
+    for(j in 1:length(sig.list[[i]])){
+        direction <- names(sig.list[[i]])[j]
+        cat.genes <- sig.list[[i]][[j]]
+        if(length(cat.genes) > 0 && length(grep(":", category, fixed = TRUE)) == 0){
+            sig.mat <- mean.gene.mat[,cat.genes]
+            pheatmap(sig.mat, scale = "column")
+            decomp_with_nas(sig.mat, cols = genotype.col)
+            mean.mat <- apply(sig.mat, 1, function(x) mean(x, na.rm = TRUE))
+            boxplot(mean.mat~get(category), xlab = category, ylab = "Mean abundance (A.U.)",
+                main = paste(category, direction))
+        }
+    }
+
+}
+```
+
+
+## Comparison to transcriptomics
+
+We want to make as direct a comparison as we can to the transcriptomic
+data. So we want to compare the genotype effects in just the `r compare.age.text`-month
+old animals. However, we also want to be able to look at the same stats
+for the four-month old animals. The following sections look at a single
+age that is defined in the parameters section at the top of the workflow.
+For this run, the age is `r compare.age` months.
+
+We fit linear models to protein abundance in just the animals of the 
+specified age. We then compared p values and effect sizes 
+across all common genes. We also noted which genes (if any) have significant
+effects of genotype in both the proteome and the transcriptome in the 
+`r compare.age`
+month animals.
+
+The volcano plot for these tests is below. We have reduced power 
+to detect differences in this data set compared to the transcriptomics,
+likely because of missing data. 
+
+```{r age_thresh}
+raised.fdr.thresh <- 0.1
+```
+
+
+```{r age_test}
+adj.pr <- adjust(centered.gene.mat, dummy_covar(data.frame("sex" = sex, "age" = age)), retain.intercept = FALSE)
+
+age.idx <- which(age == compare.age)
+age.genotype.models <- lapply(1:ncol(adj.pr), 
+    function(x) lm(adj.pr[age.idx,x]~genotype[age.idx]))
+geno.idx <- get_lin_idx(age.genotype.models[[1]], "genotype")
+age.geno.p <- t(sapply(age.genotype.models, 
+    function(x) summary(x)$coefficients[geno.idx,"Pr(>|t|)"]))
+colnames(age.geno.p) <- colnames(centered.gene.mat)
+age.geno.effect <- t(sapply(age.genotype.models, 
+    function(x) summary(x)$coefficients[geno.idx,"Estimate"]))
+age.adj.p <- p.adjust(age.geno.p, method = "fdr")
+names(age.geno.effect) <- names(age.adj.p) <- colnames(centered.gene.mat)
+age.sig.idx <- which(age.adj.p < raised.fdr.thresh)
+#length(age.sig.idx)
+```
+
+At the same FDR threshold as in the transcriptomics 
+(`r raised.fdr.thresh`), we get `r length(age.sig.idx)` 
+significantly different proteins by genotype in the 
+`r compare.age`-month old animals. These are shown in red 
+on the volcano plots below.
+
+```{r age_months}
+pr.col <- rep("black", length(age.adj.p))
+
+if(length(age.sig.idx) > 0){
+    pr.col[age.sig.idx] <- "red"
+}
+plot(age.geno.effect, -log10(age.geno.p), xlab = paste("Effect of genotype at", compare.age, "months"), ylab = "-log10(p value)", 
+    col = pr.col, pch = 16)
+if(length(age.sig.idx) > 0){
+    text(age.geno.effect[age.sig.idx], -log10(age.geno.p[age.sig.idx]), 
+    labels = colnames(centered.gene.mat)[age.sig.idx], pos = 4, cex = 0.5)
+}
+
+geno.result.table <- cbind(as.numeric(age.geno.effect), as.numeric(age.geno.p), as.numeric(age.adj.p))
+rownames(geno.result.table) <- colnames(centered.gene.mat)
+colnames(geno.result.table) <- c("Effect", "p", "fdr")
+
+write.table(geno.result.table, 
+    file.path(results.dir, paste0("Effect_of_Genotype_at_", compare.age, "_months.csv")),
+    sep = ",", quote = FALSE)
+```
+
+At `r compare.age` months, the upregulated proteins are enriched 
+for mitochondrial function. This tracks with the transcriptomic 
+results in which mitochondrial metabolism genes overall were up in VS.
+
+The downregulated proteins are enriched for protein 
+localization and blood coagulation. This doesn't have 
+a clear analog in the transcriptomic data set. Greg thinks
+the "blood coagulation" might be a marker of something else,
+like ECM, since we take all the blood out of the brains before
+testing.
+
+```{r test_sig_age, fig.width = 15, fig.height = 7}
+neg.idx <- which(age.geno.effect < 0)
+pos.idx <- which(age.geno.effect > 0)
+neg.sig <- intersect(age.sig.idx, neg.idx)
+pos.sig <- intersect(age.sig.idx, pos.idx)
+neg.pr <- colnames(centered.gene.mat)[neg.sig]
+pos.pr <- colnames(centered.gene.mat)[pos.sig]
+
+enrich.file <- file.path(results.dir, paste0("pos_neg_enrich_at_", compare.age, "_months.RDS"))
+if(file.exists(enrich.file)){
+    enrich <- readRDS(enrich.file)    
+}
+if(!file.exists(enrich.file) && !offline){
+    enrich <- lapply(list("Positive" = pos.pr, "Negative" = neg.pr), function(x) gost(x, organism = "mmusculus", source = "GO"))
+    saveRDS(enrich, enrich.file)
+}
+
+#quartz(width = 15, height = 7)
+par(mfrow = c(1,2))
+for(i in 1:length(enrich)){
+    plot.enrichment(enrich[[i]], max.term.size = 3000, num.terms = 25, plot.label = paste(names(enrich)[i], "effects of genotype"))
+}
+#dev.off()
+```
+
+The code below plots out gene-GO term plots all together
+as well as split by GO compartment (biological process,
+molecular function, and cellular compartment).
+
+Looking at all GO classificatoins together, we see that
+the proteins upregulated in VS divided into two large clusters:
+one related to mitochondria, and the other related to small
+molecule metabolism. These clusters are highly connected,
+suggesting that this small molecule metabolism might
+be related to mitochondrial activity.
+
+The proteins downregulated in VS cluster aroung three major
+and two minor collections of GO terms. The three major clusters
+are response to wounding (blood coagulation), protein metabolism,
+and protein transport. The two minor clusters are enzyme activity,
+and cholesterol/triglyceride stuff (connected to Apo genes).
+
+These are pretty cool, actually, but we can't put these network
+plots in a paper.
+
+
+```{r go_part}
+max.pval = 1e-3 #make this low to reduce some of the noise
+enrich.file <- file.path(results.dir, paste0("GO_part_enrich_at_", compare.age, "_months.RDS"))
+
+if(file.exists(enrich.file)){
+    enrich.list <- readRDS(enrich.file)
+    up.enrich <- enrich.list$up
+    down.enrich <- enrich.list$down
+    all.enrich <- enrich.list$all
+}
+if(!file.exists(enrich.file) && !offline){
+    up.enrich <- gost(pos.pr, organism = "mmusculus", evcodes = TRUE, sources = "GO")
+    down.enrich <- gost(neg.pr, organism = "mmusculus", evcodes = TRUE, sources = "GO")
+    all.enrich <- gost(c(pos.pr, neg.pr), organism = "mmusculus", evcodes = TRUE, sources = "GO")
+    enrich.list <- list("up" = up.enrich, "down" = down.enrich, "all" = all.enrich)
+    saveRDS(enrich.list, enrich.file)
+}
+
+all.var <- ls() #check to see if we have the enrichment data
+got.enrich <- length(which(all.var == "all.enrich")) > 0
+
+if(got.enrich){
+
+    go.parts <- c("GO:CC", "GO:MF", "GO:BP")
+
+
+    pdf(file.path(results.dir, paste0("GO_gene_net_at_", compare.age, "_months.pdf")), width = 30, height = 20)
+        up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000,
+            plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8, 
+            max.pval = max.pval)
+        mtext("Up in VS", side = 3, outer = TRUE, line = -2.5)    
+        
+        #up.mat <- go_gene_net(up.enrich, max.term.size = 3000, max.pval = max.pval, plot.as.heatmap = TRUE)
+        #up.decomp <- plot.decomp(up.mat$biadjacency_matrix, label.points = TRUE)
+        #plot.decomp(t(up.mat$biadjacency_matrix), label.points = TRUE)
+        #png("~/Desktop/up_in_vs_adj.png", width = 11, height = 4, units = "in", res = 300)
+        #par(mar = c(4,15,4,2))
+        #imageWithText(up.mat$biadjacency_matrix[order(up.decomp$u[,1]), order(up.decomp$v[,1])], row.text.shift = 0.03, col.text.shift = 0.05, show.text = FALSE, col.scale = "blue", main = "Up in VS")
+        #dev.off()
+
+        down.net <- go_gene_net(enrichment.result = down.enrich, plot.results = TRUE, 
+            max.pval = max.pval, max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
+        mtext("Down in VS", side = 3, outer = TRUE, line = -2.5) 
+
+        #down.mat <- go_gene_net(down.enrich, max.term.size = 3000, max.pval = max.pval, plot.as.heatmap = TRUE)
+        #down.decomp <- plot.decomp(down.mat$biadjacency_matrix, label.points = TRUE)
+        #plot.decomp(t(down.mat$biadjacency_matrix), label.points = TRUE)
+        #row.order <- hclust(dist(down.mat$biadjacency_matrix))$order
+        #col.order <- hclust(dist(t(down.mat$biadjacency_matrix)))$order
+        #png("~/Desktop/down_in_vs_adj.png", width = 16, height = 6, units = "in", res = 300)
+        #par(mar = c(4,22,4,2))
+        #imageWithText(down.mat$biadjacency_matrix[row.order, col.order], row.text.shift = 0.03, col.text.shift = 0.05, show.text = FALSE, col.scale = "blue", main = "Down in VS")
+        #dev.off()
+    dev.off()
+
+    for(i in 1:length(go.parts)){
+        pdf(file.path(results.dir, paste0(gsub(":", "_", go.parts[i]), "_", compare.age, "_months_net.pdf")), 
+            width = 15, height = 10)
+        up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000, 
+            filter.source = go.parts[i], max.pval = max.pval,
+            plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
+            mtext("Up in VS", side = 3, outer = TRUE, line = -2.5)    
+        
+        down.net <- go_gene_net(enrichment.result = down.enrich, plot.results = TRUE, 
+            filter.source = go.parts[i], max.pval = max.pval,
+            max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
+            mtext("Down in VS", side = 3, outer = TRUE, line = -2.5) 
+        dev.off()
+    }
+}
+```
+
+Below we plot the mean abundance per genotype as we did
+for the transcripts with the up and down clusters labeled.
+
+```{r mean_by_geno, fig.width = 10, fig.height = 2.5}
+adj.pr <- adjust(centered.gene.mat[,age.sig.idx], dummy_covar(data.frame("age" = age, "sex" = sex)), retain.intercept = FALSE)
+age.pr <- adj.pr[age.idx,]
+
+geno.abund <- sapply(levels(genotype), function(x) colMeans(age.pr[which(genotype[age.idx] == x),], na.rm = TRUE))
+#col.order <- order(plot.decomp(geno.abund, plot.results = FALSE)$u[,1])
+col.order <- order(age.geno.effect[age.sig.idx])
+
+#use automatic summaries so we don't mix up which is positive and negative
+#we can do something prettier by hand later
+enrich.text <- lapply(enrich, function(x) words_to_paragraph(summarize_enrichment(x, 
+    remove.words = c(data(PubMed_stopwords), stopwords(), "process", "positive", "negative"),
+    num.words = 4, num.terms = 30, max.term.size = 3000), line.len = 5))
+
+#in-line figure
+imageWithText(t(geno.abund[col.order,]), split.at.vals = TRUE, 
+    col.scale = c(heatmap.neg.col, heatmap.pos.col),
+    grad.dir = "ends", show.text = FALSE, col.text.shift = 0.3, row.text.shift = 0.01, 
+    col.names = NULL)
+plot.dim <- par("usr")
+plot.width = plot.dim[2] - plot.dim[1]
+box.center <- 3:1
+nudge.y <- 0.3
+for(i in 1:length(geno.cols)){
+    draw.rectangle(min.x = plot.dim[1]-(plot.width*0.02), max.x = 0, 
+        min.y = box.center[i]-nudge.y, 
+        max.y = box.center[i]+nudge.y, border = geno.cols[i], lwd = 3) 
+}
+text(x = length(neg.pr)/2, y = 3.5, 
+    labels = enrich.text$Negative, adj = 0.5, cex = 0.7)
+text(x = length(neg.pr)+length(pos.pr)/2, y = 3.5, 
+    labels = enrich.text$Positive, adj = 0.5, cex = 0.7)
+
+#png for putting in paper
+pos.text <- "Mitochondria"
+neg.text <- "ECM, integrins, MAPK signaling"
+png(here("Results", "for_paper", paste0("DAP_", compare.age, "_months.png")), width = 8, height = 3, units = "in", res = 300)
+par(bg = NA)
+imageWithText(t(geno.abund[col.order,]), split.at.vals = TRUE, 
+    col.scale = c(heatmap.neg.col, heatmap.pos.col),
+    grad.dir = "ends", show.text = FALSE, col.text.shift = 0.3, row.text.shift = 0.015, 
+    col.names = NULL)
+plot.dim <- par("usr")
+plot.width = plot.dim[2] - plot.dim[1]
+box.center <- 3:1
+nudge.y <- 0.3
+for(i in 1:length(geno.cols)){
+    draw.rectangle(min.x = plot.dim[1]-(plot.width*0.02), max.x = 0, 
+        min.y = box.center[i]-nudge.y, 
+        max.y = box.center[i]+nudge.y, border = geno.cols[i], lwd = 3) 
+}
+text(x = length(neg.pr)/2, y = 3.5, 
+    labels = neg.text, adj = 0.5, cex = 1.2)
+text(x = length(neg.pr)+length(pos.pr)/2, y = 3.5, 
+    labels = pos.text, adj = 0.5, cex = 1.2)
+dev.off()
+
+png(here("Results", "for_paper", "colorbar_vertical_protein.png"), height = 4, width = 1.5, units = "in", res = 300)
+par(bg = NA, xpd = NA)
+imageWithTextColorbar(signif(geno.abund, 2), split.at.vals = TRUE, 
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", 
+    cex = 1, round.nearest = 1)
+plot.dim <- par("usr")
+plot.width <- plot.dim[2] - plot.dim[1]
+text(x = plot.dim[2]+(plot.width*0.4), y = mean(plot.dim[3:4]), 
+    labels = "Abundance (A.U.)", srt = 270, cex = 1.2)
+dev.off()
+
+png(here("Results", "for_paper", "colorbar_horiz_protein.png"), height = 2, width = 5, units = "in", res = 300)
+par(bg = NA, xpd = NA)
+imageWithTextColorbar(signif(geno.abund, 2), split.at.vals = TRUE, 
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", 
+    cex = 1, round.nearest = 1, orientation = "h", axis.line = 1)
+plot.dim <- par("usr")
+plot.width <- plot.dim[2] - plot.dim[1]
+text(x = 0, y = 1.4, labels = "Abundance (A.U.)", srt = 0, cex = 1.2)
+dev.off()
+```
+
+```{r mean_effect, eval = FALSE}
+#just a check 
+
+geno.annot <- data.frame("genotype" = genotype[age.idx])
+pos.mat <- adjust(centered.gene.mat[age.idx,pos.pr], dummy_covar(data.frame(sex[age.idx])), retain.intercept = FALSE)
+#pheatmap(t(pos.mat), annotation_col = geno.annot, annotation_colors = list("genotype" = geno.cols))
+pos.mean <- rowMeans(pos.mat, na.rm = TRUE)
+boxplot(pos.mean~genotype[age.idx], xlab = "genotype", ylab = "Mean abundance", main = "Positive Effect Proteins")
+
+neg.mat <- adjust(centered.gene.mat[age.idx,neg.pr], dummy_covar(data.frame(sex[age.idx])), retain.intercept = FALSE)
+#pheatmap(t(neg.mat), annotation_col = geno.annot, annotation_colors = list("genotype" = geno.cols))
+neg.mean <- rowMeans(neg.mat, na.rm = TRUE)
+boxplot(neg.mean~genotype[age.idx], xlab = "genotype", ylab = "Mean abundance", main = "Negative Effect Proteins")
+```
+
+Did we see differential expression of any of these genes in the
+transcriptomic data? We test this below.
+
+```{r transcriptome_results}
+#get gene information for the proteins
+protein.info.file <- file.path(processed.data.dir, "protein_info.tsv")
+if(!file.exists(protein.info.file)){
+    protein.info <- gconvert(colnames(centered.gene.mat), organism = "mmusculus")
+    write.table(protein.info[,2:6], protein.info.file, sep = "\t", quote = FALSE, row.names = FALSE)
+}else{
+    protein.info <- read.delim(protein.info.file)
+}
+sig.tx <- read.delim(here("Results", paste0("age_batch_", compare.age, "_gene"), "DEG_clusters_carriers.txt"))
+```
+
+```{r matching}
+common.pos <- intersect(pos.pr, sig.tx[,"geneName"])
+common.neg <- intersect(neg.pr, sig.tx[,"geneName"])
+
+pos.pr.idx <- match(common.pos, rownames(geno.result.table))
+neg.pr.idx <- match(common.neg, rownames(geno.result.table))
+
+pos.tr.idx <- match(common.pos, sig.tx[,"geneName"])
+neg.tr.idx <- match(common.neg, sig.tx[,"geneName"])
+
+all.pos.table <- cbind(sig.tx[pos.tr.idx,1:5], geno.result.table[pos.pr.idx,,drop=FALSE])
+all.neg.table <- cbind(sig.tx[neg.tr.idx,1:5], geno.result.table[neg.pr.idx,,drop=FALSE])
+colnames(all.pos.table)[3:5] <- colnames(all.neg.table)[3:5] <- paste0("transcript_", colnames(all.pos.table)[3:5])
+colnames(all.pos.table)[6:8] <- colnames(all.neg.table)[6:8] <- paste0("protein_", colnames(all.pos.table)[6:8])
+
+all.common.table <- rbind(all.pos.table, all.neg.table)
+write.table(all.common.table, file.path(results.dir, paste0("Common_Effects_", compare.age, "_months.txt")),
+    quote = FALSE, sep = "\t", row.names = FALSE)
+```
+
+The scatter plot below shows that there is no relationship 
+between the effect of genotype on a gene's transcript and its
+protein abundance, even for significantly affected proteins. 
+
+If we are looking at 4-month olds, there won't be many
+dots. This is because Klotho genotype has basically no
+effect on any transcripts in the 4-month olds, so it's
+hard to compare. In any case, even with the few genes 
+shown, there is no relationship between the effects
+of genotype on transcripts and those on proteins. 
+
+```{r compare, fig.width = 5, fig.height = 5}
+plot(all.common.table[,"transcript_genotype_beta"], 
+    all.common.table[,"protein_Effect"], xlab = "Transcript Beta",
+    ylab = "Protein Beta")
+
+text(all.common.table[,"transcript_genotype_beta"], 
+    all.common.table[,"protein_Effect"], labels = all.common.table[,"geneName"],
+    pos = 4, cex = 0.7)
+#abline(0,1)
+abline(v = 0, h = 0)
+```
+
+Below we expanded the plot to include all transcripts with 
+significant effects of genotype. It looks very similar to the
+above plot.
+
+```{r common}
+#use ensembl IDs
+common.gene <- intersect(rownames(sig.tx), protein.info[,"target"])
+```
+
+There were `r length(common.gene)` positively identifiable common 
+genes between the two data sets.
+
+Below we've plotted the effect size of genotype on each common 
+transcript vs. the effect size of gentype on each common protein.
+They are uncorrelated to a hilarious degree. Greg thinks that this
+is probably grounds to dismiss the data. He says they usually see
+a correlation of 0.15 to 0.3 for genotype effects. Bummer.
+
+```{r align_genes, fig.width = 5, fig.height = 5}
+tx.idx <- match(common.gene, rownames(sig.tx))
+pr.name <- protein.info[match(common.gene, protein.info[,"target"]), "input"]
+pr.idx <- match(pr.name, rownames(geno.result.table))
+
+tx.effect <- sig.tx[tx.idx,"genotype_beta"]
+
+combined.result.table <- cbind("Name" = pr.name, "ID" = common.gene, 
+    "Transcript Effect" = tx.effect, 
+    "Protein Effect" = geno.result.table[pr.idx, "Effect"])
+
+plot.with.model(as.numeric(combined.result.table[,"Transcript Effect"]), 
+    as.numeric(combined.result.table[,"Protein Effect"]),
+    xlab = "Effect of genotype on transcript", ylab = "Effect of genotype on protein",
+    report = "cor.test")
+
+#combined.result.table[which(as.numeric(combined.result.table[,"Protein Effect"]) > 0.4),]
+
+```
+
+```{r top_example, fig.width = 9, fig.height = 6.5, eval = FALSE}
+plot_gene("Ppbp", centered.gene.mat, autoplace.text = TRUE)
+plot_gene("Apoe", centered.gene.mat, autoplace.text = TRUE)
+plot_gene("App", centered.gene.mat, autoplace.text = TRUE)
+
+
+ad.genes <- read.delim(here("Results", paste0("age_batch_", compare.age, "_gene"), "AD_genes.txt"), comment.char = "#")
+ad.pos.pr <- intersect(ad.genes[,1], pos.pr)
+ad.neg.pr <- intersect(ad.genes[,1], neg.pr)
+
+plot_gene(ad.neg.pr[2], centered.gene.mat, autoplace.text = TRUE)
+
+pdf("~/Desktop/common_pos.pdf", width = 9, height = 6.5)
+for(i in 1:length(common.pos)){
+    print(i)
+    plot_gene(common.pos[i], autoplace.text = TRUE)
+}
+dev.off()
+
+pdf("~/Desktop/examples.pdf", width = 9, height = 6.5)
+#stats placed for age-specific animals
+#stat placement are relative and run from 0 to 1 for both x and 1
+plot_gene("Apoe", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.9, autoflip.stat.y = FALSE, cex.lab = 1.5)
+plot_gene("App", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.9, autoflip.stat.y = FALSE, cex.lab = 1.5)
+plot_gene("Pf4", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.9, autoflip.stat.y = FALSE, cex.lab = 1.5)
+plot_gene("Grin2b", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.23, autoflip.stat.y = FALSE, cex.lab = 1.5)
+dev.off()
+
+#platelet factors from Dubal paper
+plot_gene("Pf4", centered.gene.mat) #negative effect, which is the opposite of what we would predict
+plot_gene("Tln1", centered.gene.mat) #no effect
+plot_gene("Fermt3", centered.gene.mat, stat.x = 0.7, stat.y = 0.9) #negative effect
+plot_gene("Thbs1", centered.gene.mat, stat.y = 0.9, stat.x = 0.7) #negative effect
+plot_gene(c("Pf4", "Tln1", "Fermt3", "Thbs1"), centered.gene.mat, stat.y = 0.9, stat.x = 0.7)
+
+plot_gene("Ckm", centered.gene.mat) #creatinine metabolism, no effect
+#plot_gene("Gadph", centered.gene.mat) #not captured
+
+platelet.genes <- gene.features[grep("platelet", gene.features[,"gene_desc"], ignore.case = TRUE),"gene_name"]
+plot_gene(platelet.genes, centered.gene.mat, plot.label = "platelet factors")
+
+glutamate.genes <- gene.features[grep("glutamate", gene.features[,"gene_desc"], ignore.case = TRUE),"gene_name"]
+plot_gene(glutamate.genes, centered.gene.mat, plot.label = "glutamate genes")
+
+#proteins annotated to blood coagulation tend to be 
+#less abundant in VS at specified age
+coag.table <- read.table("~/Downloads/GO_MFeatures.tsv", sep = "\t")
+coag.genes <- coag.table[,8]
+coag.list <- plot_gene(coag.genes, centered.gene.mat, autoplace.text = TRUE, plot.label = "coagulation") 
+
+#proteins annotatied to mitochondrion are not differentially
+#abundant at specified age
+mito.table <- read.table("~/Downloads/GO_MFeatures (1).tsv", sep = "\t", fill = TRUE)
+mito.genes <- mito.table[,8]
+mito.list <- plot_gene(mito.genes, centered.gene.mat, autoplace.text = TRUE, plot.label = "mitochondria")
+
+oxphos.genes <- c("Cox7a2l", "Ndufa6", "Slc25a33", "Pink1", "Nupr1", "Atp6v0a1",
+    "Atp6v1b2", "Ndufa11", "Iscu", "Tmem135")
+plot_gene(oxphos.genes, centered.gene.mat, autoplace.text = TRUE, plot.label = "oxphos")
+```
+
+## Biodomains and KEGG pathways
+
+We looked at biodomains and KEGG pathways just to round this out.
+There were no overall effects on biodomain or KEGG lists
+
+```{r plot_list}
+plot_list <- function(gene.list, pr.mat, list.label = "BD", plot.results = TRUE){
+
+    gene.stats <- vector(mode = "list", length = length(gene.list))
+    names(gene.stats) <- names(gene.list)
+    
+    if(plot.results){
+        pdf(file.path(results.dir, paste0(list.label, ".pdf")), width = 9, height = 6)
+    }
+    for(i in 1:length(gene.list)){
+        gene.names <- gene.info[match(gene.list[[i]], gene.info[,"ensembl_gene_id"]),"external_gene_name"]
+        gene.stats[[i]] <- plot_gene(gene.names, pr.mat, plot.label = names(gene.list)[i], 
+            plot.label.cex = 2, plot.results = plot.results)
+    }
+    if(plot.results){
+        dev.off()
+    }
+
+    return(gene.stats)
+}
+
+plot_nested_list <- function(nested.gene.list, pr.mat, list.label = "KEGG_BD", plot.results = TRUE){
+
+    gene.stats <- vector(mode = "list", length = length(nested.gene.list))
+    names(gene.stats) <- names(nested.gene.list)
+    
+    if(plot.results){
+        pdf(file.path(results.dir, paste0(list.label, ".pdf")), width = 9, height = 6)
+    }
+    for(i in 1:length(nested.gene.list)){
+        if(length(nested.gene.list[[i]]) == 0){next()}
+        sub.stats <- vector(mode = "list", length = length(nested.gene.list[[i]]))
+        names(sub.stats) <- names(nested.gene.list[[i]])
+        for(j in 1:length(nested.gene.list[[i]])){
+            plot.label <- paste(names(nested.gene.list)[i], "AND\n", names(nested.gene.list[[i]])[j])
+            gene.names <- gene.info[match(nested.gene.list[[i]][[j]], gene.info[,"ensembl_gene_id"]),"external_gene_name"]
+            group.result <- plot_gene(gene.names, pr.mat, plot.label = plot.label, plot.label.cex = 1, plot.results = plot.results)
+            sub.stats[[j]] <- group.result
+        }
+        gene.stats[[i]] <- sub.stats
+    }
+    if(plot.results){
+        dev.off()
+    }
+
+    return(gene.stats)
+}
+
+get_list_stat <- function(list.result, 
+    stat.label = c("sex", "age", "genotype", "geno_four", paste0("geno_", compare.age.text)), 
+    stat.type = c("r2", "model.p", "linear.effect.size", "linear.effect.p")){
+
+
+    stat.p <- rep(NA, length(list.result))
+    names(stat.p) <- names(list.result)
+    for(i in 1:length(list.result)){
+        stat.mat <- list.result[[i]]$stats
+        if(length(stat.mat) > 1){
+            stat.p[i] <- as.numeric(stat.mat[stat.label, stat.type])
+        }
+    }
+    return(stat.p)
+}
+
+get_nested_stat <- function(nested.list.result, 
+    stat.label = c("sex", "age", "genotype", "geno_four", paste0("geno_", compare.age.text)), 
+    stat.type = c("r2", "model.p", "linear.effect.size", "linear.effect.p")){
+
+    stat.label <- stat.label[1]
+    stat.type <- stat.type[1]
+
+    stat.p <- vector(mode = "list", length(nested.list.result))
+    names(stat.p) <- names(nested.list.result)
+    
+    for(i in 1:length(nested.list.result)){
+        sub.stat.p <- rep(NA, length(nested.list.result[[i]]))
+        names(sub.stat.p) <- names(nested.list.result[[i]])
+        for(j in 1:length(nested.list.result[[i]])){
+            if(length(nested.list.result[[i]][[j]]) > 1){
+                stat.mat <- nested.list.result[[i]][[j]]$stats
+            }else{
+                stat.mat <- NA
+            }
+            if(length(stat.mat) > 1){
+                sub.stat.p[j] <- as.numeric(stat.mat[stat.label, stat.type])
+            }
+        }
+        stat.p[[i]] <- sub.stat.p
+    }
+    return(stat.p)
+}
+```
+
+```{r gene_lists}
+bd.list <- readRDS(file.path(general.processed.data.dir, "Mouse_Biodomains_for_GSEA.RDS"))
+sub.bd.list <- readRDS(file.path(general.processed.data.dir, "Mouse_Subdomains_for_GSEA.RDS"))
+bd.go.list <- readRDS(file.path(general.processed.data.dir, "Mouse_Biodomains_sub_GO_for_GSEA.RDS"))
+kegg.list <- readRDS(file.path(general.processed.data.dir, "Mouse_KEGG_for_GSEA.RDS"))
+kegg.bd.list <- readRDS(file.path(general.processed.data.dir, "Mouse_KEGG_Intersections_for_GSEA.RDS"))
+```
+
+There were no significantly differentially abundant biodomains at `r compare.age.text` months.
+
+```{r bd, fig.width = 5, fig.height = 5}
+bd.stats <- plot_list(gene.list = bd.list, pr.mat = centered.gene.mat, list.label = paste0("Biodomains_", compare.age, "_months"), plot.results = FALSE)
+n.bd.genes <- sapply(bd.stats, function(x) if(length(x) > 0){ncol(x$expr_mat)}else{NA})
+age.bd.p <- get_list_stat(bd.stats, stat.label = paste0("geno_", compare.age.text), stat.type = "model.p")
+qqunif.plot(age.bd.p,  plot.label = "Biodomain p values")
+```
+
+There were no significantly differentially abundant biodomains at `r compare.age.text` months.
+
+```{r k, fig.width = 5, fig.height = 5}
+kegg.stats <- plot_list(bd.list, centered.gene.mat, "KEGG", plot.results = FALSE)
+n.kegg.genes <- sapply(kegg.stats, function(x) if(length(x) > 0){ncol(x$expr_mat)}else{NA})
+age.kegg <- get_list_stat(kegg.stats, stat.label = paste0("geno_", compare.age.text), stat.type = "model.p")
+qqunif.plot(age.kegg, plot.label = "KEGG p values")
+```
+
+There were no significantly differentially abundant subdomains at `r compare.age.text` months.
+
+```{r sbd, fig.width = 5, fig.height = 5}
+sub.bd.stats <- plot_nested_list(nested.gene.list = sub.bd.list, centered.gene.mat, "Subdomains", plot.results = FALSE)
+n.sbd.genes <- lapply(sub.bd.stats, function(x) sapply(x, function(y) if(length(y) > 0){ncol(y$expr_mat)}else{NA}))
+pass.thresh <- which(unlist(n.sbd.genes) >= 10)
+age.sub.bd <- get_nested_stat(nested.list.result = sub.bd.stats, stat.label = paste0("geno_", compare.age.text), stat.type = "model.p")
+qqunif.plot(unlist(age.sub.bd)[pass.thresh],  plot.label = "Subdomain p values")
+```
+
+There were no significantly differentially abundant 
+KEGG-biodomain intersections.
+
+
+```{r bdk}
+bd.kegg.stats <- plot_nested_list(nested.gene.list = kegg.bd.list, 
+    centered.gene.mat, list.label = "KEGG-Biodomains", plot.results = FALSE)
+n.bdk.genes <- lapply(bd.kegg.stats, function(x) sapply(x, function(y) if(length(y) > 1){ncol(y$expr_mat)}else{NA}))
+#hist(unlist(n.bdk.genes), breaks = 100)
+pass.thresh <- unlist(lapply(n.bdk.genes, function(x) which(x >= 10)))
+age.kegg.bd.p <- unlist(get_nested_stat(nested.list.result = bd.kegg.stats, 
+    stat.label = paste0("geno_", compare.age.text), stat.type = "model.p"))
+age.kegg.bd.effect <- unlist(get_nested_stat(nested.list.result = bd.kegg.stats, 
+    stat.label = paste0("geno_", compare.age.text), stat.type = "linear.effect.size"))
+
+qqunif.plot(age.kegg.bd.p[names(pass.thresh)],  plot.label = "KEGG-Biodomain p values")
+```
+
+The volcano plot is shown below. Significant intersections (FDR < 0.1)
+are highlighted.
+
+```{r bdk_volcano, fig.width = 5, fig.height = 5}
+stat.table <- cbind(age.kegg.bd.effect[names(pass.thresh)], 
+    age.kegg.bd.p[names(pass.thresh)])
+colnames(stat.table) <- c("effect", "p")
+
+adj.p <- p.adjust(stat.table[,"p"], method = "fdr")
+#plot(-log10(stat.table[,"p"]), -log10(adj.p))
+sig.idx <- which(adj.p <= 0.1)
+#stat.table[sig.idx,]
+sig.col <- rep("black", length(adj.p))
+sig.col[sig.idx] <- "red"
+
+plot(stat.table[,"effect"], -log10(stat.table[,"p"]), 
+    col = sig.col, pch = 16, xlab = "Effect Size", 
+    ylab = "-log10(p)", main = "KEGG-Biodomain Intersections")
+```
+
+## Biodomain-Kegg examples {.tabset .tabset-fade .tabset-pills}
+
+If there are significant effects, we plot the significant ones below.
+We show a maximum of 5.
+
+```{r example, fig.width = 9, fig.height = 6, results = "asis"}
+max.show <- 5
+show.num <- min(c(max.show, length(sig.idx)))
+if(show.num > 0){
+    sig.int <- rownames(stat.table)[sig.idx]
+    split.int <- strsplit(sig.int, ".", fixed = TRUE)
+    sig.table <- Reduce("rbind", split.int)
+    if(show.num == 1){
+        sig.table <- matrix(sig.table, nrow = 1)
+    }
+    colnames(sig.table) <- c("Biodomain", "KEGG")
+
+    #plot out the significant KEGG-Biodomain intersections
+    #pdf(file.path(results.dir, "KEGG-Biodomain_intersections.pdf"), width = 9, height = 6)
+    
+    for(i in 1:show.num){
+        cat("###", paste(sig.table[i,], collapse = " AND "), "\n")
+        bd.idx <- which(names(kegg.bd.list) == sig.table[i,1])
+        k.idx <- which(names(kegg.bd.list[[bd.idx]]) == sig.table[i,2])
+        gene.names <- gene.info[match(kegg.bd.list[[bd.idx]][[k.idx]], gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+        plot_gene(gene.names, centered.gene.mat, autoplace.text = TRUE, 
+        plot.label = paste(sig.table[i,], collapse = "\nAND\n"))
+        cat("\n\n")
+    }
+    #dev.off()
+}
+```
+
+
+Mike wants a figure comparing the genotype effects on 
+the short list of AD genes that I had before from Christian 
+Behl's book.
+
+He thinks showing these side-by-side will make the paper fly 
+high. I think it will look like a mess. Let's see, shall we?
+
+
+```{r ad_short_list}
+#read in transcript results
+tx.ad.short <- as.matrix(read.delim(here("Results", paste0("age_batch_", compare.age, "_gene"), "AD_short_list_means.txt"), comment.char = "#"))
+
+#find the common gene names and IDs between proteins and transcripts
+common.ad <- intersect(rownames(tx.ad.short), colnames(centered.gene.mat))
+common.id <- gene.info[match(common.ad, gene.info[,"external_gene_name"]), "ensembl_gene_id"]
+
+#get the transcript stats for the age-specific animals
+tx.beta <- tx.ad.short[,"effect"]
+tx.p <- tx.ad.short[,"p"]
+
+#find the significant genes with an FDR <= 0.1
+sig.tx <- names(tx.p)[which(tx.p <= 0.01)]
+
+#adjust the protein data for sex
+ad.pr <- adjust(centered.gene.mat[,common.ad], dummy_covar(data.frame("sex" = sex, "age" = age)), retain.intercept = FALSE)
+age.ad.pr <- ad.pr[age.idx,]
+#calculate means across genotypes for the genes of interest in the age-spcific animals
+ad.pr.mean <- sapply(levels(genotype), function(x) colMeans(age.ad.pr[which(genotype[age.idx] == x),], na.rm = TRUE))
+#attach the effect sizes and p values from the linear models with the age-specific animals
+pr.effect <-  age.geno.effect[common.ad]
+pr.p <- age.geno.p[1,common.ad]
+ad.pr.mean <- cbind(ad.pr.mean, "effect" = pr.effect, "p" = pr.p)
+
+
+#align the transcript and protein means based on gene names
+aligned.mats <- get.xz(tx.ad.short, ad.pr.mean)
+#pull out the names of genes that made it through the alignment
+final.names <- rownames(aligned.mats[[1]]) 
+#also get the IDs
+final.id <- gene.info[match(final.names, gene.info[,"external_gene_name"]), "ensembl_gene_id"]
+
+effect.mat <- sapply(aligned.mats, function(x) x[,"effect"])
+colnames(effect.mat) <- c("Transcript", "Protein")
+p.mat <- sapply(aligned.mats, function(x) x[,"p"])
+
+sig.idx <- apply(p.mat, 2, function(x) which(x <= 0.01))
+sig.tx.names <- lapply(aligned.mats, rownames)
+for(i in 1:length(sig.tx.names)){
+    sig.flag = rep("", length(sig.tx.names[[i]]))
+    sig.flag[sig.idx[[i]]] <- "**"
+    sig.tx.names[[i]] <- paste0(sig.flag, sig.tx.names[[i]], sig.flag)
+}
+
+row.order <- order(plot.decomp(aligned.mats[[1]], plot.results = FALSE)$u[,1])
+#row.order <- order(effect.mat[1,])
+#row.order <- order(aligned.mats[[1]][,3] - aligned.mats[[2]][,1], decreasing = TRUE)
+#row.order <- order(aligned.mats[[1]][,1])
+
+global.min <- min(unlist(lapply(aligned.mats, function(x) x[,1:3])))
+global.max <- max(unlist(lapply(aligned.mats, function(x) x[,1:3])))
+
+png(file.path(results.dir, "AD_comparison.png"), width = 8, height = 6, units = "in", res = 300)
+layout.mat <- matrix(1:4, nrow = 1)
+layout(layout.mat, widths = c(0.5, 0.7,0.7,1))
+
+par(mar = c(24, 4, 4, 4))
+imageWithTextColorbar(Reduce("rbind", lapply(aligned.mats, function(x) x[,1:3])), 
+    split.at.vals = TRUE, col.scale = list(heatmap.neg.col, heatmap.pos.col), 
+    grad.dir = "ends", cex = 1, round.nearest = 0.1)
+mtext("Mean Expression/Abundance (A.U.)", side = 2, cex = 0.7, line = 2.7)
+
+par(mar = c(4,6,4,0))
+imageWithText(aligned.mats[[1]][row.order,1:3], show.text = FALSE, split.at.vals = TRUE,
+    col.scale = c(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends",
+    col.text.shift = 0.04, row.text.shift = 0.3, col.text.rotation = 0,
+    col.text.adj = 0.5, global.color.scale = TRUE, global.min = global.min,
+    global.max = global.max, row.names = sig.tx.names[[1]])
+mtext("Transcript\nAbundance", side = 3, line = 0)
+
+imageWithText(aligned.mats[[2]][row.order,1:3], show.text = FALSE, split.at.vals = TRUE,
+    col.scale = c(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends",
+    col.text.shift = 0.05, row.text.shift = 0.3, col.text.rotation = 0, 
+    col.text.adj = 0.5, global.color.scale = TRUE, global.min = global.min,
+    global.max = global.max, row.names = sig.tx.names[[2]])
+mtext("Protein\nAbundance", side = 3, line = 0)
+
+par(mar = c(4,6,4,1))
+barplot(t(effect.mat[rev(final.names),]), beside = TRUE, las = 2, horiz = TRUE, 
+    main = "Effect size of genotype", col = c("gray20", "gray80"),
+    xlab = bquote(beta))
+plot.dim <- par("usr")
+segments(x0 = 0, y0 = 0, y1 = plot.dim[4])
+legend("bottomright", fill = c("gray20", "gray80"), legend = colnames(effect.mat), cex = 0.8)
+
+dev.off()
+
+#for the paper
+global.min <- min(sapply(aligned.mats, function(x) min(x[,1:3])))
+global.max <- max(sapply(aligned.mats, function(x) max(x[,1:3])))
+row.order <- order(sapply(rownames(p.mat), function(x) which(rownames(tx.ad.short) == x)), decreasing = FALSE)
+sig.text <- rep("", nrow(p.mat))
+sig.text[which(p.mat[,2] <= 0.01)] <- "*"
+png(here("Results", "for_paper", "AD-related_proteins.png"), width = 8, height = 3, units = "in", res = 300)
+par(mar = c(6,4,4,2), bg = NA)
+imageWithText(t(aligned.mats[[2]][row.order,1:3]), show.text = FALSE, split.at.vals = TRUE,
+    col.scale = c(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends",
+    col.text.shift = 0.25, row.text.shift = 0.06, col.text.rotation = 90,
+    col.text.adj = 1, row.text.adj = 0.5, global.color.scale = TRUE, 
+    global.min = global.min, global.max = global.max, 
+    col.names = str_to_upper(rownames(aligned.mats[[2]])[row.order]))
+plot.dim <- par("usr")
+for(i in 1:length(geno.cols)){
+    draw.rectangle(min.x = plot.dim[1]-0.5, max.x = 0.4, min.y = length(geno.cols)-i+0.6, max.y = length(geno.cols)-i+1.4,
+        border.col = geno.cols[i], lwd = 3)
+}
+#text(x = 1:length(short.ad.p), y = rep(plot.dim[4]+0.1, length(short.ad.p)), labels = sig.text[row.order])
+dev.off()
+
+#plot_gene("App", centered.gene.mat, autoplace.text = TRUE)
+#plot.with.model(as.numeric(aligned.mats[[1]]), as.numeric(aligned.mats[[2]]))
+```
+
+## Overall correlations
+
+We wanted to look at whether overall higher transcript 
+levels led to higher protein levels.
+
+The plots below show that overall there is no correlation
+between transcripts and protein levels. 
+
+Greg said that this is expected in the following statement: 
+"I think mass spec is highly variable in how well it detects 
+certain peptides, and while RNA seq is better it still has PCR 
+biases in amplification that works better for some genes than 
+others. In other data sets, we've sometimes seen correlation coeffs 
+of 0.15-0.30 for genotype effects (or case vs control), but almost 
+no correlation for overall abundance."
+
+```{r cor_test, fig.width = 10, fig.height = 5}
+#use tx data that has been adjusted for technical sources of variation, but not biological sources
+tx.dir <- here("Results", paste0("age_batch_", compare.age, "_gene"))
+all.tx <- readRDS(file.path(tx.dir, "processed_data", "Batch_Adjusted_Expr.RDS"))
+tx.covar <- read.csv(file.path(tx.dir, "processed_data", "covariates_carriers.csv"))
+#adjust out all known sources of variation. We just want to test whether the transcript
+#level is associated with protein level, not whether sex or genotype affects 
+#either one. We don't need to adjust for age, because we are only looking in
+#one age group at a time.
+tx.adj.mat <- cbind(dummy_covar(data.frame("sex" = as.factor(tx.covar[,"sex_ge"]), 
+    "geno" = as.factor(tx.covar[,"ordered_geno"]))),
+    as.numeric(tx.covar[,"scaled_Ide_expression"]))
+#adj.tx <- adjust(all.tx, tx.adj.mat, retain.intercept = FALSE) #adjust and mean-center
+
+#don't adjust
+adj.tx <- all.tx
+#boxplot(adj.tx[,1:10])
+
+#also adjust proteins for everything. Ide abundance has already been regressed
+#out of centered.gene.mat
+pr.adj.mat <- dummy_covar(data.frame("sex" =  as.factor(final.mouse.table[,"sex"]),
+    "geno" = as.factor(final.mouse.table[,"genotype"])))
+
+#using age.idx doesn't really matter because the transcript data are for a single age
+#adj.pr <- adjust(centered.gene.mat[age.idx,], pr.adj.mat[age.idx,], retain.intercept = FALSE)
+
+#don't adjust
+adj.pr <- centered.gene.mat
+#adj.pr <- mean.gene.mat #unfiltered for sex-biased genes
+#boxplot(adj.pr[,1:10])
+
+pr.id <- gene.info[match(colnames(adj.pr), gene.info[,"external_gene_name"]),"ensembl_gene_id"]
+colnames(adj.pr) <- pr.id
+
+common.id <- intersect(pr.id, colnames(adj.tx))
+common.ind <- intersect(rownames(adj.pr), rownames(adj.tx))
+aligned.pr <- adj.pr[common.ind, common.id]
+aligned.tx <- adj.tx[common.ind, common.id]
+
+f.id <- intersect(rownames(tx.covar)[which(tx.covar[,"sex_ge"] == "Female")], common.ind)
+m.id <- intersect(rownames(tx.covar)[which(tx.covar[,"sex_ge"] == "Male")], common.ind)
+test.cor <- sapply(1:ncol(aligned.pr), function(x) cor(aligned.pr[,x], aligned.tx[,x], 
+    use = "pairwise.complete.obs"))
+f.test.cor <- sapply(1:ncol(aligned.pr), function(x) cor(aligned.pr[f.id,x], aligned.tx[f.id,x], 
+    use = "pairwise.complete.obs"))
+m.test.cor <- sapply(1:ncol(aligned.pr), function(x) cor(aligned.pr[m.id,x], aligned.tx[m.id,x], 
+    use = "pairwise.complete.obs"))
+
+par(mfrow = c(1,2))
+plot(density(test.cor), xlab = "Correlations", main = "Transcript-Protein Correlations", lwd = 3)
+points(density(f.test.cor), col = factor.cols["F"], type = "l", lwd = 3)
+points(density(m.test.cor), col = factor.cols["M"], type = "l", lwd = 3)
+legend("topright", legend = c("all", "M", "F"), lty = 1, lwd = 3, 
+    col = c("black", factor.cols[c("M", "F")]))
+#abline(v = mean(test.cor), col = "black", lwd = 3)
+#abline(v = mean(f.test.cor), col = factor.cols["F"], lwd = 3)
+#abline(v = mean(m.test.cor), col = factor.cols["M"], lwd = 3)
+
+abline(v = 0, col = "red")
+boxplot(list("all" = test.cor, "F" = f.test.cor, "M" = m.test.cor), 
+    ylab = "Correlation", main = "Transcript-Protein Correlations")
+abline(h = 0)
+mtext(paste(compare.age, "months"), side = 3, outer = TRUE, line = -1.5, font = 2, cex = 1.5)
+```
+
+```{r more_comparison, eval = FALSE}
+n.pc <- 10
+tx.decomp <- plot.decomp(aligned.tx, pc = n.pc, plot.results = FALSE)
+tx.pc <- tx.decomp$u
+imp.pr <- impute.knn(aligned.pr)$data
+pr.decomp <- plot.decomp(imp.pr, pc = n.pc, plot.results = FALSE)
+pr.pc <- pr.decomp$u
+
+pc.pairs <- pair.matrix(1:n.pc)
+tx.to.pr <- pr.to.tx <- rep(NA, nrow(pc.pairs))
+for(i in 1:nrow(pc.pairs)){
+    pc1 <- pc.pairs[i,1]
+    pc2 <- pc.pairs[i,2]
+    tx.to.pr[i] <- cor(tx.pc[,pc1], pr.pc[,pc2])
+    pr.to.tx[i] <- cor(pr.pc[,pc1], tx.pc[,pc2])
+}
+final.result <- cbind(pc.pairs, tx.to.pr, pr.to.tx)
+hist(c(tx.to.pr, pr.to.tx), breaks = 15)
+boxplot(list(tx.to.pr, pr.to.tx))
+top1 <- which.max(abs(tx.to.pr))
+top2 <- which.max(abs(pr.to.tx))
+
+final.result[top1,]
+final.result[top2,]
+
+tx.pc1 <- final.result[top1,1]
+pr.pc1 <- final.result[top1,2]
+par(mfrow = c(1,2))
+plot.with.model(tx.pc[,tx.pc1], pr.pc[,pr.pc1], report = "cor.test",
+    col = as.numeric(covar.table[rownames(aligned.tx),"sex_ge"]),
+    xlab = paste("Transcript PC", tx.pc1), ylab = paste("Protein PC", pr.pc1))
+plot.with.model(tx.pc[,tx.pc1], pr.pc[,pr.pc1], report = "cor.test",
+    col = as.numeric(covar.table[rownames(aligned.tx),"ordered_geno"]),
+    xlab = paste("Transcript PC", tx.pc1), ylab = paste("Protein PC", pr.pc1))
+
+
+tx.pc2 <- final.result[top2,2]
+pr.pc2 <- final.result[top2,1]
+par(mfrow = c(1,2))
+plot.with.model(tx.pc[,tx.pc2], pr.pc[,pr.pc2], report = "cor.test",
+    col = as.numeric(covar.table[rownames(aligned.tx),"sex_ge"]))
+plot.with.model(tx.pc[,tx.pc2], pr.pc[,pr.pc2], report = "cor.test",
+    col = as.numeric(covar.table[rownames(aligned.tx),"ordered_geno"]))
+
+par(mfrow = c(1,2))
+pr.models <- apply(pr.pc, 2, function(x) lm(x~covar.table[rownames(aligned.tx),"ordered_geno"]))
+pr.effect <- sapply(pr.models, function(x) coef(x)[2])
+barplot(pr.effect)
+
+tx.models <- apply(tx.pc, 2, function(x) lm(x~covar.table[rownames(aligned.tx),"ordered_geno"]))
+tx.effect <- sapply(tx.models, function(x) coef(x)[2])
+barplot(tx.effect)
+
+```
+
+We looked at the enrichments of genes with strong positive
+and strong negative correlations between transcript and protein.
+
+The high-correlation pairs are enriched for organelle-associated
+genes, and translation genes.
+
+The low-correlation pairs are enriched for synaptic genes. 
+This enrichment was predicted by pmid 30664243, citing the 
+large distance between the cell body and synaptic regions
+of neurons. 
+
+The enrichment tables are shown below.
+
+```{r enrich_cor, fig.widtdh = 7, fig.height = 7}
+#check.cor <- m.test.cor
+check.cor <- test.cor
+
+high.thresh <- get.percentile(check.cor, 99)
+low.thresh <- get.percentile(check.cor, 1)
+hist(check.cor, breaks = 100)
+abline(v = c(high.thresh, low.thresh))
+high.cor <- colnames(aligned.pr)[which(check.cor >= high.thresh)]
+low.cor <- colnames(aligned.pr)[which(check.cor <= low.thresh)]
+high.enrich <- gost(high.cor, organism = "mmusculus", source = "GO")
+low.enrich <- gost(low.cor, organism = "mmusculus", source = "GO")
+
+plot.enrichment(high.enrich, plot.label = "High Transcript-Protein Correlations",
+    num.terms = 25)
+plot.enrichment(low.enrich, plot.label = "Low Transcript-Protein Correlations",
+    num.terms = 25)
+
+```
+
+For genes that are very highly correlated with sex, we do see
+positive correlations between transcript and protein. However,
+once you get down below 40\% variance explained by sex, that
+correlation disappears.
+
+```{r high_cor_example, fig.width = 5, fig.height = 5}
+sex.col <- as.numeric(as.factor(tx.covar[common.ind,"sex_ge"]))
+gene.name <- names(sort(factor.effect.mat[,"sex"], decreasing = TRUE))[2]
+#gene.name <- "Tppp"
+#get_ortho(gene.name)
+gene.id <- gene.info[which(gene.info[,"external_gene_name"] == gene.name), "ensembl_gene_id"]
+
+#pdf("~/Desktop/sex_correlation.pdf", height = 5, width = 5)
+plot.with.model(aligned.tx[common.ind,gene.id], aligned.pr[common.ind,gene.id], 
+    report = "cor.test", main = gene.name, xlab = "Transript level", 
+    ylab = "Protein level", col = sex.col)
+#dev.off()
+```
+
+```{r sex_specific_QC, eval = FALSE}
+#There are two Y chr genes expressed in the brain: Eif2s3y and Ddx3y
+#here we check for sex-specific expression
+gene.name <- "Eif2s3y"
+gene.name <- "Eif2s3x"
+gene.name = "Ddx3y"
+gene.name = "Ddx3x"
+
+gene.id <- gene.info[which(gene.info[,"external_gene_name"] == gene.name), "ensembl_gene_id"]
+
+par(mfrow = c(1,2))
+boxplot(aligned.tx[common.ind,gene.id]~covar.table[common.ind,"sex_ge"], 
+    xlab = "", ylab = "Transcript Abundance", main = "Transcript")
+boxplot(aligned.pr[common.ind,gene.id]~covar.table[common.ind,"sex_ge"], 
+    xlab = "", ylab = "Protein Abundance", main = "Protein")
+mtext(gene.name, side = 3, outer = TRUE, font = 2, cex = 1.2, line = -1.5)
+```
+
+## Correlation quality control
+
+We are a little suspicious that our protein data might not
+be very accurate, so we are conducting some tests. Greg said
+that complement transcripts and proteins have been very highly
+correlated in their past data sets. Here we look to see if this
+is true here.
+
+
+```{r check_individ, fig.width = 12, fig.height = 9}
+
+complement.idx <- grep("complement ", gene.features[,"gene_desc"], ignore.case = TRUE)
+check.name <- gene.features[complement.idx,"gene_name"]
+comp.cor <- matrix(NA, nrow = length(check.name), ncol = 2)
+colnames(comp.cor) <- c("r", "p")
+rownames(comp.cor) <- check.name
+#pdf("~/Desktop/complement_report.pdf", width = 12, height = 9)
+par(mfrow = c(3,4))
+for(i in 1:length(check.name)){
+    gene.name <- check.name[i]
+    gene.id <- gene.info[which(gene.info[,"external_gene_name"] == gene.name), "ensembl_gene_id"]
+    if(is.na(gene.id) || length(gene.id) == 0){next()}
+    in_data <- Reduce("intersect", list(gene.id, colnames(aligned.tx), colnames(aligned.pr)))
+    if(length(in_data) == 0){next()}
+
+    comp.cor[i,] <- plot.with.model(aligned.tx[,gene.id], aligned.pr[,gene.id], report = "cor.test", 
+        main = gene.name, xlab = "Transript level", ylab = "Protein level")
+    }
+boxplot(comp.cor[,"r"], ylab = "Correlation (r)", main = "All correlatoins")
+stripchart(comp.cor[,"r"], vertical = TRUE, pch = 16, method = "jitter", 
+    add = TRUE, cex = 2)
+abline(h = 0)
+
+#dev.off()
+```
+
+## Comparison to Matrisome Module 42
+
+Previous proteomic work in the lab has shown that the protein
+signatures in the mouse models match the human condition better
+than the transcriptomics. That is, proteins that are more abundant
+in AD patients relative to controls are also more abundant in 
+mouse models with introduced risk variants. 
+
+Greg said that they see the largest signal in a module of genes
+related to the "matrisome" module from pmid: 35115731. He sent
+me the genes in this module along with some stats for each.
+
+As a measure of quality control we wanted to check how the
+Klotho proteomics stack up to that, assuming the VS allele is 
+the protective allele. We have set up our models so that the 
+order of the genotypes goes FC < WT < VS, so proteins with 
+positive effects are up in the *protective* situation, not the risk 
+situation. So we would like to see that the proteins in this module
+are less abundant in the VS animals, i.e. have negative effects in
+the linear model.
+
+The figure below shows the overall effect for the whole module.
+It is not different overall across genotypes in the 12-month old
+animals.
+
+
+```{r orthos, fig.width = 9, fig.height = 6.5}
+get_ortho <- function(gene.name, target = "mouse"){
+    gene.idx <- unlist(apply(orthos, 2, function(x) which(x == gene.name)))
+    if(length(gene.idx) == 0){
+        return(paste("Couldn't find", gene.name))
+    }else{
+        gene.line <- orthos[gene.idx,]
+    }
+
+    if(target == "mouse"){
+        result <- gene.line[,c("Mouse.Ortholog.Name", "Mouse.Ortholog.Ensembl")]
+    }else{
+        result <- gene.line[,c("Human.Gene.Name", "Human.Ensembl")]
+    }
+    names(result) <- c("name", "id")
+    return(return(result))
+}
+
+#get_ortho("PLOD3")
+
+mod42 <- read_excel(here("Data", "general", "TreatAD_scores_M42_module.xlsx")) #matrisome module
+mod42.genes <- mod42$GeneName
+mod42.mouse <- t(sapply(mod42.genes, get_ortho))
+
+#pdf("~/Desktop/Matrisome.pdf", width = 9, height = 6.5)
+mod.result <- plot_gene(mod42.mouse[,"name"], centered.gene.mat, 
+    autoplace.text = TRUE, plot.label = "Module 42", plot.label.cex = 2)
+```
+
+The plot below shows the results for the individual proteins in
+the module. This is a volcano plot showing the effect size of 
+genotype at 12 months on each protein against the -log10(p) of
+the effect. Proteins with -log10(p) greater than 1 are labeled.
+
+None of these effects are significant, however, the general
+trend of the effect is in the right direction. All of these
+proteins were more abundant in human AD patients. Here, they
+are less abundant in VS animals, which is consistent with their
+label of being protective. A few of the proteins, including Flt1
+and Bdh2 were more highly abundant in the VS animals. This is 
+not consistent with the human data.
+
+```{r mod_ind, fig.width = 5, fig.height = 5}
+included.proteins <- colnames(mod.result$expr_mat)
+mod.gene.results <- vector(mode = "list", length = length(included.proteins))
+for(i in 1:length(included.proteins)){
+    mod.gene.results[[i]] <- plot_gene(included.proteins[i], centered.gene.mat, 
+        plot.results = FALSE)
+}
+#dev.off()
+
+twelve.month.effect <- sapply(mod.gene.results, function(x) as.numeric(x$stats["geno_twelve", "linear.effect.size"]))
+twelve.month.p <- sapply(mod.gene.results, function(x) as.numeric(x$stats["geno_twelve", "linear.effect.p"]))
+#pdf("~/Desktop/Module42_Effect.pdf")
+plot(twelve.month.effect, -log10(twelve.month.p), xlim = c(-0.6, 0.6),
+    main = "Twelve-month effects on Module 42 proteins")
+pretty.big <- which(-log10(twelve.month.p) > 1)
+text(twelve.month.effect[pretty.big], -log10(twelve.month.p)[pretty.big], 
+    labels = included.proteins[pretty.big], pos = 4)
+#dev.off()
 ```

@@ -8,7 +8,7 @@
 
 go_gene_net <- function(enrichment.result, max.pval = 0.05, max.term.size = 3000,
     filter.source = NULL, plot.results = FALSE, min.vertex.size = 1, 
-    max.vertex.size = 20, color.all.categories = TRUE){
+    max.vertex.size = 20, color.all.categories = TRUE, plot.as.heatmap = FALSE){
     
     #filter by term size
 	if(!is.null(max.term.size)){
@@ -61,6 +61,17 @@ go_gene_net <- function(enrichment.result, max.pval = 0.05, max.term.size = 3000
     for(i in 1:length(u_term)){
         term_mat[i,split.gene[[i]]] <- term_mat[i,split.gene[[i]]] + 1
     }
+
+    if(plot.as.heatmap){
+        compart.df <- data.frame(as.factor(term.cat))
+        colnames(compart.df) <- "GO ontology"
+            go.col <- categorical_pal(8)[2:4]
+            names(go.col) <- levels(compart.df[,1])
+        pheatmap(term_mat, annotation_row = compart.df, 
+            annotation_colors = list("GO ontology" = go.col))
+        return(list("biadjacency_matrix" = term_mat, "GO categories" = term.cat))
+    }
+
 
     #barplot(sort(colSums(term_mat)), las = 2)
     #barplot(sort(rowSums(term_mat)), las = 2)

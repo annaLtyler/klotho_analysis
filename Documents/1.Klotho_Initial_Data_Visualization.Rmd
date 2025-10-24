@@ -44,15 +44,15 @@ library(here)
 #expression.type = "transcript"; id_col <- "ensembl_transcript_id"
 expression.type = "gene"; id_col = "ensembl_gene_id"
 
-min.term.size = 10 #minimum number of genes allowed in a term
-fdr.thresh = 0.1 #fdr for differentially expressed genes
+min.term.size <- 10 #minimum number of genes allowed in a term
+fdr.thresh <- 0.05 #fdr for differentially expressed genes
 
 args <- commandArgs(trailingOnly=T)
 subgroup <- args[2]
 
 if(is.na(subgroup)){
-  subgroup <- "all ages"
-  #subgroup <- list("age_batch" = 12)
+  #subgroup <- "all ages"
+  subgroup <- list("age_batch" = 12)
   #subgroup <- list("age_batch" = 4)
   #subgroup <- list("age_batch" = 4, "sex_ge" = "Female") #example with more than one filter
 }
@@ -77,7 +77,7 @@ remove.qc <- TRUE #if 1a_Klotho_QC.Rmd has been run, and animals were identified
 
 ordered.geno <- c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
 
-use.carrier.status <- TRUE #if true, fits models with the ordered factor FC > WT > VS
+use.carrier.status <- FALSE #if true, fits models with the ordered factor FC > WT > VS
                           #if false, fits models with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
 if(use.carrier.status){
   geno.used = c("FC, WT, VS"); carrier.text = "carriers"
@@ -92,15 +92,12 @@ if(use.carrier.status){
                             #this is giving very strange results, so I'm abandoning it for now
 group.representation = "means"
 
-#heatmap.neg.col = "purple"
-#heatmap.pos.col = "brown"
-heatmap.pos.col = brewer.pal(11, "BrBG")[6:1]
-heatmap.neg.col = brewer.pal(11, "BrBG")[6:11]
+heatmap.neg.col = "purple"
+heatmap.pos.col = "brown"
+#heatmap.pos.col = brewer.pal(11, "BrBG")[6:1]
+#heatmap.neg.col = brewer.pal(11, "BrBG")[6:11]
 
-
-rank.normalize.expression = FALSE
-
-get.enrichments = FALSE #this allows us to turn of gprofiler code when gprofiler is down or we are offline
+get.enrichments = TRUE #this allows us to turn of gprofiler code when gprofiler is down or we are offline
 ```
 
 ```{r is_final}
@@ -115,12 +112,11 @@ final.params <- TRUE
 
 if(expression.type == "transcript"){final.params = FALSE}
 if(min.term.size != 10){final.params = FALSE}
-if(fdr.thresh != 0.1){final.params = FALSE}
+if(fdr.thresh != 0.05){final.params = FALSE}
 if(length(subgroup) != 1 && subgroup[[1]] != 12){final.params = FALSE}
 if(!remove.qc){final.params = FALSE}
 if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC > WT > VS
 if(group.representation != "means"){final.params = FALSE}
-if(rank.normalize.expression){final.params = FALSE}
 
 if(final.params){
   final.text <- "This IS the final set of parameters for the paper."
@@ -161,7 +157,7 @@ geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("synapser", "pheatmap", "DESeq2", "DT", "vioplot", "RColorBrewer",
   "gprofiler2", "cluster", "pathview", "clusterProfiler", "stringr", "igraph", "wordcloud",
-  "wordcloud2")
+  "wordcloud2", "easyPubMed")
 load_libraries(needed.libraries)
 ```
 
@@ -936,15 +932,13 @@ norm.expr <- assay(vsd)
 saveRDS(norm.expr, file.path(processed.data.dir, 
   paste0("Normalized_Expression_", carrier.text, ".RDS")))
 
-#scale expression across individuals
+
+#scale expression so we can compare differences across genes
 scaled.expr <- t(apply(norm.expr, 1, scale))
 dimnames(scaled.expr) <- dimnames(norm.expr)
 saveRDS(scaled.expr, file.path(processed.data.dir, 
   paste0("Scaled_Expression_", carrier.text, ".RDS")))
 
-if(rank.normalize.expression){
-  scaled.expr <- t(apply(scaled.expr, 1, rankZ))
-}
 
 if(expression.type == "transcript"){
   tx.id <- sub.id[which(sub.id[,"gene_id"] == kl.ensembl),"transcript_id"]  
@@ -1155,9 +1149,10 @@ test_full_model <- function(expr.mat, covar.mat){
     num.factors <- length(factor.names)-1
 
     #test all main effects and interactions
-    effect.p <- matrix(NA, nrow = ncol(adj.expr), ncol = num.factors)
-    colnames(effect.p) <- factor.names[1:num.factors]
+    effect.p <- effect.beta <- matrix(NA, nrow = ncol(adj.expr), ncol = num.factors)
+    colnames(effect.p) <- colnames(effect.beta) <- factor.names[1:num.factors]
     model.r2 <- rep(NA, ncol(adj.expr))
+
     for(i in 1:ncol(adj.expr)){
       df <- cbind("expr" = adj.expr[,i], covar.mat)
       if(age.varies){
@@ -1167,12 +1162,16 @@ test_full_model <- function(expr.mat, covar.mat){
       }
       model.r2[i] <- summary(diff.test)$adj.r.squared
       effect.p[i,] <- anova(diff.test)$"Pr(>F)"[1:num.factors]
+      linear.idx <- sapply(colnames(effect.beta), 
+        function(x) which(gsub("Male", "", 
+        gsub(".L", "", names(coef(diff.test)), fixed = TRUE)) == x))
+      effect.beta[i,] <- coef(diff.test)[linear.idx]
       #coef(diff.test)
     }
-    rownames(effect.p) <- names(model.r2) <- colnames(adj.expr)
+    rownames(effect.p) <- rownames(effect.beta) <- names(model.r2) <- colnames(adj.expr)
     #par(mar = c(12,4,4,2)); boxplot(-log10(effect.p), las = 2, ylab = "-log10(p)")
     #plot.decomp(t(-log10(effect.p)), label.points = TRUE)
-    result <- list("p_values" = effect.p, "R2" = model.r2)
+    result <- list("beta" = effect.beta, "p_values" = effect.p, "R2" = model.r2)
     saveRDS(result, full.model.file)
   }else{
     result <- readRDS(full.model.file)
@@ -1188,6 +1187,8 @@ covariate along with interactions between the covariates.
 full.model.result <- test_full_model(expr.mat = scaled.expr, covar.mat = covar.mat)
 effect.p <- full.model.result$p_values
 model.r2 <- full.model.result$R2
+model.effects <- full.model.result$beta
+#dim(effect.p); length(model.r2); dim(model.effects)
 
 #take out the genes with the largest sex effect. These are all X and Y genes.
 #the transcripts have smaller effects overall
@@ -1199,6 +1200,9 @@ big.sex.genes <- gene.info[match(names(big.sex.effect), gene.info[,id_col]),]
 ide.effect <- which(-log10(effect.p[,"scaled_Ide_expression"]) > 10)
 
 effect.p <- effect.p[-c(big.sex.effect, ide.effect),]
+model.r2 <- model.r2[-c(big.sex.effect, ide.effect)]
+model.effects <- model.effects[-c(big.sex.effect, ide.effect),]
+#dim(effect.p); length(model.r2); dim(model.effects)
 ```
 
 we removed the genes with the sex effects greater than `r sex.effect.threshold`.
@@ -1269,7 +1273,7 @@ nominally significant for each main effect or interaction.
 ```{r enrich, fig.width = 7, fig.height = 7}
 if(get.enrichments){
   enrich <- lapply(sig.factor, function(x) gost(names(x), organism = "mmusculus", 
-    sources = c("GO", "KEGG", "CORUM", "HP", "REACTOME")))
+    sources = c("GO", "KEGG")))
   plot.enrichment.group(enrich, max.term.size = 3000, transformation = sqrt, max.char = 100)
 }
 ```
@@ -1377,6 +1381,7 @@ This is with an fdr value of `r fdr.thresh`.
 
 ```{r sig_expr, fig.width = 10, fig.height = 4}
 sig.geno.idx <- which(effect.fdr[,"ordered_geno"] <= fdr.thresh)
+#length(sig.geno.idx)
 
 sig.expr <- scaled.expr[names(sig.geno.idx),]
 
@@ -1389,18 +1394,33 @@ diff.expr <- lapply(allele.idx, function(x) sig.expr[,x])
 mean.sig.expr <- sapply(diff.expr, rowMeans)
 colnames(mean.sig.expr) <- alleles
 
-expr.clust <- pam(mean.sig.expr, k = 2)
-col.order <- order(expr.clust$clustering)
-annot.col <- data.frame(as.factor(expr.clust$clustering))
+#expr.clust <- pam(mean.sig.expr, k = 2)
+#col.order <- order(expr.clust$clustering)
+cluster.decomp <- plot.decomp(mean.sig.expr, plot.results = FALSE)
+clustering <- rep(1, nrow(mean.sig.expr))
+clustering[which(cluster.decomp$u[,1] < 0)] <- 2
+col.order <- order(cluster.decomp$u[,1], decreasing = TRUE)
+
+annot.col <- data.frame(as.factor(clustering))
 colnames(annot.col) <- "cluster"
+rownames(annot.col) <- rownames(mean.sig.expr)
 pheatmap(t(mean.sig.expr[col.order,alleles]), show_colnames = FALSE, cluster_cols = FALSE, 
   cluster_rows = FALSE, annotation_col = annot.col)
 
 gene.names <- gene.info[match(rownames(annot.col), 
   gene.info[,id_col]), "external_gene_name"]
-write.table(cbind(gene.names, mean.sig.expr, annot.col)[order(annot.col[,1]),], 
+
+gene.stat.table <- cbind(rownames(mean.sig.expr), gene.names, 
+  model.effects[sig.geno.idx,"ordered_geno"], effect.p[sig.geno.idx,"ordered_geno"], 
+  factor.fdr[sig.geno.idx,"ordered_geno"],
+  mean.sig.expr, annot.col)[order(annot.col[,1]),]
+colnames(gene.stat.table) <- c("geneID", "geneName", "genotype_beta",
+  "genotype_p", "genotype_fdr", colnames(mean.sig.expr), "cluster")
+
+write.table(gene.stat.table, 
   file.path(results.dir, paste0("DEG_clusters_", carrier.text, ".txt")), 
   sep = "\t", quote = FALSE)
+
 ```
 
 If we are looking at all genotypes separately, the following code compares
@@ -1409,7 +1429,6 @@ That is, we group the WT/VS and the VS/VS together as "VS carriers" and the
 WT/FC and FC/FC together as "FC carriers" and compare these two groups to 
 the WT/WT animals.
 
-The 
 
 ```{r dominance, warning = FALSE, fig.width = 10, fig.height = 5}
 
@@ -1484,8 +1503,9 @@ if(!use.carrier.status){
 }
 ```
 
-```{r deg_fig}
-cluster.id <- expr.clust$clustering
+```{r deg_fig_paper}
+cluster.id <- clustering
+
 if(final.params){
   
   if(use.carrier.status){
@@ -1513,6 +1533,7 @@ if(final.params){
   c1.mid <- mean(which(cluster.id[col.order] == 1))
   c2.mid <- mean(which(cluster.id[col.order] == 2))
   label.y <- (plot.dim[4]+(plot.height*label.y))
+  #group.summ
   text(x = c1.mid, y = label.y, labels = "Neuron and Synapse")
   text(x = c2.mid, y = label.y, labels = "Mitochondria and Ribosome")
 
@@ -1529,9 +1550,9 @@ if(final.params){
 
   #add scale bar
   par(mar = c(2,4,4,1))
-  imageWithTextColorbar(mean.sig.expr, split.at.vals = TRUE, 
+  imageWithTextColorbar(scaled.mat, split.at.vals = TRUE, 
   col.scale = list(heatmap.neg.col, heatmap.pos.col), cex = 1, 
-  grad.dir = "ends", bar.lwd = 3)
+  grad.dir = "ends", bar.lwd = 3, round.nearest = 0.1)
   dev.off()
 }
 ```
@@ -1543,9 +1564,11 @@ The enrichments of the groups are shown below.
 if(get.enrichments){
   group.genes <- lapply(1:2, function(x) rownames(annot.col)[which(annot.col[,1] == x)])
   group.enrich = lapply(group.genes, function(x) gost(x, organism = "mmusculus",
-    sources = c("GO", "KEGG", "REACOME", "CORUM", "HP", "WP")))
+    sources = c("GO", "KEGG")))
   names(group.enrich) <- c(1,2)
   plot.enrichment.group(group.enrich, max.term.size = 3000, n.terms = 15)
+  group.summ <- sapply(lapply(group.enrich, function(x) summarize_enrichment(x, 
+    num.words = 3, max.term.size = 3000)), function(y) paste(y, collapse = ", "))
 }
 ```
 
@@ -1560,6 +1583,56 @@ if(get.enrichments){
     dev.off()
   }
 }
+```
+
+The following plot shows the mean gene expression across genotypes
+along with automatically generated enrichment summaries. These 
+are for keeping track of which cluster has which enrichment. 
+
+```{r deg_fig_report, fig.width = 10, fig.height = 2.5}
+cluster.id <- clustering
+
+scaled.mat <- t(apply(mean.sig.expr[col.order,alleles], 1, scale))
+dimnames(scaled.mat) <- dimnames(mean.sig.expr[,alleles])
+
+if(use.carrier.status){
+    y.nudge = 0.15; x.nudge.left = 0.04; x.nudge.right = 0.03; row.text.shift = 0.045; label.y = 0.15
+  }else{
+    #only run by hand
+    y.nudge = 0.06; x.nudge.left = 0.09; x.nudge.right = 0.03; row.text.shift = 0.07; label.y = 0.12
+  }
+
+layout.mat <- matrix(c(1,2), nrow = 1)
+layout(layout.mat, widths = c(1, 0.2))
+par(mar = c(2,4,4,1), xpd = NA)
+imageWithText(t(scaled.mat), show.text = FALSE, split.at.vals = TRUE,
+  col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends",
+  col.names = NULL, row.text.shift = row.text.shift, row.text.adj = 0.5)
+plot.dim <- par("usr")
+plot.height <- plot.dim[4] - plot.dim[3]
+plot.width <- plot.dim[2] - plot.dim[1]
+c1.mid <- mean(which(cluster.id[col.order] == 1))
+c2.mid <- mean(which(cluster.id[col.order] == 2))
+label.y <- (plot.dim[4]+(plot.height*label.y))
+text(x = c1.mid, y = label.y, labels = group.summ[1])
+text(x = c2.mid, y = label.y, labels = group.summ[2])
+
+#add colored labels for the genotypes
+y.vals <- 1:length(alleles)
+y.shift <- plot.height*y.nudge
+label.xmin <- plot.dim[1] - (plot.width*x.nudge.left)
+label.xmax <- plot.dim[1] + (plot.width*x.nudge.right)
+for(i in 1:length(y.vals)){
+  draw.rectangle(label.xmin, label.xmax, (y.vals[i] - y.shift), (y.vals[i] + y.shift),
+    border = geno.cols[match(rev(alleles)[i], names(geno.cols))], 
+    lwd = 3)
+}
+
+#add scale bar
+par(mar = c(2,4,4,1))
+imageWithTextColorbar(scaled.mat, split.at.vals = TRUE, 
+col.scale = list(heatmap.neg.col, heatmap.pos.col), cex = 1, 
+grad.dir = "ends", bar.lwd = 3, round.nearest = 0.1)
 ```
 
 The following correlation matrix heat map shows that the 
@@ -1590,7 +1663,7 @@ of genes that are differentially expressed across Klotho genotypes.
 ```{r enrich_genotype, fig.width = 7, fig.height = 7}
 if(get.enrichments){
   sig.enrich <- gost(rownames(mean.sig.expr), organism = "mmusculus", 
-    sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP", "HPA"))
+    sources = c("GO", "KEGG"))
   plot.enrichment(sig.enrich, plot.label = "DEG by Klotho genotype", num.terms = 30,
     max.term.size = 3000)
 }
@@ -1873,8 +1946,8 @@ cluster.id <- expr.clust$clustering
   c1.mid <- mean(c1.idx)
   c2.mid <- mean(c2.idx)
   label.y <- (plot.dim[4]+(plot.height*0.09))
-  text(x = c1.mid, y = label.y, labels = "Mitochondria and Ribosome")
-  text(x = c2.mid, y = label.y, labels = "Neuron and Synapse")
+  text(x = c1.mid, y = label.y, labels = "Neuron and Synapse")
+  text(x = c2.mid, y = label.y, labels = "Mitochondria and Ribosome")
 
   #add colored labels for the genotypes
   y.vals <- 1:length(ordered.geno)
@@ -2205,7 +2278,6 @@ The following heat maps show the mean expression of genes
 across each biodomain. Each has been clustered by medoid
 clustering into the best number of clusters (always 2).
 
-
 If we are looking at gene expression, the two variants seem 
 to have opposing expression relative to the WT. If we are 
 looking at transcripts, the genotypes don't look different
@@ -2229,7 +2301,7 @@ if(!file.exists(mean.bd.val.file)){
         tx_label = mouse.bd.genes[[bd]][x,"external_gene_name"], 
         plot.results = FALSE)[[1]])
 
-    plot_individual_genes(mouse.bd.genes[[bd]][,1])
+    #plot_individual_genes(mouse.bd.genes[[bd]][,1])
 
     has.vals <- which(sapply(bd.vals, length) > 0)
     bd.mean <- t(sapply(bd.vals[has.vals], function(x) sapply(x[[1]], mean)))
@@ -2585,18 +2657,22 @@ term.idx <- which(names(mean.kegg.vals) == term.name)
 #pheatmap(mean.kegg.vals[[term.idx]], main = term.name, show_rownames = FALSE, cluster_cols = FALSE)
 #mean.kegg.vals[[term.idx]]
 
+if(length(sig.path) > 1){
+  top.decomp <- plot.decomp(mean.mean[sig.path,], plot.results = FALSE)
+  row.order <- order(top.decomp$u[,1])
 
-top.decomp <- plot.decomp(mean.mean[sig.path,], plot.results = FALSE)
-row.order <- order(top.decomp$u[,1])
-layout(matrix(c(1,2), nrow = 1), widths = c(1, 0.2))
-par(mar = c(4,16,4,2))
-imageWithText(mean.mean[sig.path[rev(row.order)],], show.text = FALSE, split.at.vals = TRUE,
-  col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", col.text.rotation = 0,
-  col.text.adj = 0.5, col.text.shift = 0.1, row.text.shift = 0.3, 
-  main = "Top KEGG pathways")
-par(mar = c(20,2,4,2))
-imageWithTextColorbar(mean.mean[sig.path[row.order],], split.at.vals = TRUE,
-  col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1)
+  layout(matrix(c(1,2), nrow = 1), widths = c(1, 0.2))
+  par(mar = c(4,16,4,2))
+  imageWithText(mean.mean[sig.path[rev(row.order)],], show.text = FALSE, split.at.vals = TRUE,
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", col.text.rotation = 0,
+    col.text.adj = 0.5, col.text.shift = 0.1, row.text.shift = 0.3, 
+    main = "Top KEGG pathways")
+  par(mar = c(20,2,4,2))
+  imageWithTextColorbar(mean.mean[sig.path[row.order],], split.at.vals = TRUE,
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1)
+}else{
+  barplot(mean.mean[sig.path,], main = names(sig.path))
+}
 
 ```
 
