@@ -55,6 +55,8 @@ select_by = "R2" #decide whether to select pathway intersections by R2 threshold
 
 fdr.thresh = 0.05 #FDR threshold for all significance cutoffs
 intersection.fdr.thresh = 0.001 #there are so many significant intersections, it might help make this cutoff more stringent
+paper.stats <- list("fdr.thresh" = fdr.thresh, "intersection.fdr.thresh" = intersection.fdr.thresh) #initialize an object for keeping track of stats that go in the paper
+
 
 #group.representation <- "eigengene" #decide whether a group of genes will be represented by 
                                    #their mean expression or the first PC of their expression
@@ -78,6 +80,13 @@ heatmap.pos.col = "brown"
 kegg.col <- "#bababa"
 biodomain.col <- "#b2abd2"
 dot.col <- "#dd1c77"
+
+offline = TRUE #if TRUE, no requests are sent to gprofiler
+if(!offline){
+    plot.enrich <- TRUE
+}else{
+    plot.enrich <- FALSE
+}
 ```
 
 
@@ -262,6 +271,8 @@ adj_expr <- adjust(t(pared.expr), dummy.covar, retain.intercept = FALSE)
 if(rank.normalize){
     adj_expr <- apply(adj_expr, 2, rankZ)
 }
+write.table(adj_expr, file.path(processed.data.dir, "Final_Adjusted_Expr.txt"),
+    quote = FALSE, sep = "\t")
 
 #plot(test_adj_expr, adj_expr);abline(h = 0) #adding Ide expression doesn't change things too much, but it does change some things
 #test.dist <- test_adj_expr - adj_expr
@@ -352,7 +363,7 @@ non_nested_mean_vals <- function(non_nested_gene_list, expr.mat, group.represent
 #organization lets you toggle between having the rows of each
 #matrix be the outer level or the inner level
 nested_mean_vals <- function(nested_gene_list, expr.mat, organization = c("outer", "inner"),
-    group.representation = group.representation){
+    group.representation = "means"){
 
     organization <- organization[1]
 
@@ -389,16 +400,18 @@ nested_mean_vals <- function(nested_gene_list, expr.mat, organization = c("outer
     return(mean.gene.list)
 }
 
-
+#label.nudge is a percent of the plot height, negative values nudge down,
+#and positive values nudge up. The baseline is the ymin of the plot.
 test_effect <- function(values, plot.factor, return.text = FALSE,
     plot.results = FALSE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
     cex.lab = 1, plot.label = "", ylab = "Expression (A.U.)", autoflip.stat.y = FALSE,
     autoplace.text = FALSE, x.samples = 5, y.samples = 20, text.window.x = 2,
-    text.window.y = 4, ylim = NULL){
+    text.window.y = 4, ylim = NULL, label.nudge = -0.05){
     
     model <- lm(values~plot.factor)
     #summary(model)
 
+    n <- sapply(levels(plot.factor), function(x) length(which(plot.factor == x)))
     r2 <- summary(model)$adj.r.squared
     p <- threshold_p(anova(model)$"Pr(>F)"[1], sig.dig = 2, return.text = return.text)
     linear.effect.size <- coefficients(summary(model))["plot.factor.L","Estimate"]
@@ -412,7 +425,15 @@ test_effect <- function(values, plot.factor, return.text = FALSE,
             }
             box.cols <- sapply(levels(plot.factor), function(x) geno.cols[which(names(geno.cols) == x)])
             vioplot(values~plot.factor, col = box.cols, xlab = "", main = plot.label, 
-                ylab = "", cex.names = cex.lab, ylim = ylim)
+                ylab = "", ylim = ylim, xaxt = "n", tick = FALSE)
+            plot.dim <- par("usr")
+            plot.height <- plot.dim[4] - plot.dim[3]
+            label.y <- plot.dim[3] + (plot.height*label.nudge)
+            par(xpd = NA)
+            text(x = 1:length(levels(plot.factor)), y = rep(label.y, length(levels(plot.factor))), 
+                labels = paste0(levels(plot.factor), "\n(", n, ")"), cex = cex.lab)
+            par(xpd = TRUE)
+
             mtext(ylab, side = 2, cex = cex.lab, line = 2)
             stripchart(values~plot.factor, vertical = TRUE, pch = 16, method = "jitter",
                 add = TRUE, col = dot.col)
@@ -437,23 +458,25 @@ test_effect <- function(values, plot.factor, return.text = FALSE,
                 }
             }
             text.y <- segment_region(stat.y, stat.y - stat.y.spread, 3, "ends")
-            r2.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[1])
-            p.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[2])
-            effect.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[3])
+            effect.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[1])
+            r2.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[2])
+            p.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[3])
+
             text(text.x, r2.y, bquote(italic(R)^2==.(signif(r2, 2))), adj = 0)
             text(text.x, p.y, labels = text.p, adj = 0)
             text(text.x, effect.y, labels = bquote(beta==.(signif(linear.effect.size, 2))), adj = 0)
         }
 
-    result <- list("r2" = r2, "model.p" = p, 
-        "linear.effect.size" = linear.effect.size, "linear.effect.p" = linear.effect.p)
+    result <- c("r2" = signif(r2, 2), "model.p" = threshold_p(p), 
+        "linear.effect.size" = signif(linear.effect.size, 2), 
+        "linear.effect.p" = signif(linear.effect.p, 2), "n" = n)
     invisible(result)
 }
 
 plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
     row.names = rownames(mean.bd.k.mat), label.margin = 12, 
     order.by = c("PC", "top.rank", "means", "genotype", "none"),
-    path.stats = c("R2", "effect.size"), 
+    path.stats = c("R2", "effect.size"), label.nudge = -0.05, cex.lab = 1,
     plot.results = TRUE, global.min = NULL, global.max = NULL, 
     stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, plot.enrich = FALSE){
 
@@ -512,18 +535,18 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
             #calcuate overall effect of genotype
             sub.decomp <- plot.decomp(t(sub.mat), cols = ordered.table[,3], plot.result = FALSE)
             model.result <- test_effect(sub.decomp$u[,1], test.factor)
-            pc.r2 <- model.result$r2
-            pc.p <- threshold_p(model.result$model.p, return.text = TRUE)
-            pc.effect <- model.result$linear.effect.size
+            pc.r2 <- model.result["r2"]
+            pc.p <- threshold_p(model.result["model.p"], return.text = TRUE)
+            pc.effect <- model.result["linear.effect.size"]
         }else{
             order.by = "top.rank"
         }
         
         #calculate r2, linear effect size, and p for each row of the matrix
-        test <- apply(sub.mat, 1, function(x) if(!all(is.na(x))){test_effect(x, test.factor)}else{NA})    
-        ind.r2 <- sapply(test, function(x) x$r2)
-        ind.p <- sapply(test, function(x) x$model.p)
-        ind.effect <- sapply(test, function(x) x$linear.effect.size)
+        test <- t(apply(sub.mat, 1, function(x) if(!all(is.na(x))){test_effect(x, test.factor)}else{NA}))
+        ind.r2 <- test[,"r2",drop=FALSE]
+        ind.p <- test[,"model.p",drop=FALSE]
+        ind.effect <- test[,"linear.effect.size",drop=FALSE]
         
         #define bar values, individual order, path order, plot labels, 
         #and statistics based on the order.by argument
@@ -532,8 +555,8 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
             path.order <- order(ind.r2)
             max.idx <- which.max(ind.r2)
             bar.vals <- sub.mat[max.idx,]
-            plot.r2 <- ind.r2[rownames(sub.mat)[max.idx]]
-            plot.p <- threshold_p(ind.p[rownames(sub.mat)[max.idx]], return.text = TRUE, sig.dig = 2)
+            plot.r2 <- ind.r2[rownames(sub.mat)[max.idx],"r2"]
+            plot.p <- threshold_p(ind.p[rownames(sub.mat)[max.idx],"model.p"], return.text = TRUE, sig.dig = 2)
             bar.label <- rownames(sub.mat)[max.idx]
         }
         if(order.by == "PC"){
@@ -549,8 +572,8 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
             path.order <- order(ind.effect)
             bar.vals <- colMeans(sub.mat, na.rm = TRUE)
             top.model <- test_effect(bar.vals, test.factor)
-            plot.r2 <- top.model$r2
-            plot.p <- threshold_p(top.model$model.p, return.text = TRUE)
+            plot.r2 <- top.model["r2"]
+            plot.p <- threshold_p(top.model["model.p"], return.text = TRUE)
             bar.label = "Expression Means"
         }
         if(order.by == "genotype"){
@@ -576,8 +599,8 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
                 bar.vals <- colMeans(sub.mat)
                 bar.label = "Mean Expression"
                 top.model <- test_effect(mean.val, test.factor)
-                plot.r2 <- top.model$r2
-                plot.p <- threshold_p(top.model$model.p)
+                plot.r2 <- top.model["r2"]
+                plot.p <- threshold_p(top.model["model.p"])
             }
         }
 
@@ -698,8 +721,8 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
             }
             vioplot.results <- test_effect(row.vals, ordered.factor, plot.result = TRUE, 
                 autoflip.stat.y = TRUE, plot.label = plot.label, 
-                stat.x = stat.x, stat.y = stat.y, 
-                stat.y.spread = stat.y.spread)
+                stat.x = stat.x, stat.y = stat.y, label.nudge = label.nudge,
+                stat.y.spread = stat.y.spread, cex.lab = cex.lab)
 
             #pane 7 is a legend for the genotype colors
             plot.new()
@@ -740,7 +763,8 @@ gene_vioplot <- function(gene.name, plot.label = "",
     ylab = "Expression (A.U.)", stat.x = 0.1, 
     stat.y = 0.9, stat.y.spread = 0.15, cex.lab = 1,
     autoflip.stat.y = FALSE, plot.results = TRUE,
-    individuals = NULL, ylim = NULL, return.stats = TRUE){
+    individuals = NULL, ylim = NULL, return.stats = TRUE,
+    label.nudge = -0.05){
 
     if(is.null(individuals)){
         ind.idx <- 1:nrow(adj_expr)
@@ -755,7 +779,7 @@ gene_vioplot <- function(gene.name, plot.label = "",
         plot.result = plot.results, stat.x = stat.x, stat.y = stat.y,
         autoflip.stat.y = autoflip.stat.y, plot.label = gene.name,
         stat.y.spread = stat.y.spread, ylab = ylab, cex.lab = cex.lab,
-        ylim = ylim)
+        ylim = ylim, label.nudge = label.nudge)
 
     if(return.stats){
         invisible(gene.stats)
@@ -771,7 +795,7 @@ gene_vioplot <- function(gene.name, plot.label = "",
 #needs to be specified.
 term_vioplot <- function(outer.term, inner.term = NULL, mean.term.vals, 
     stat.x = 0.1, stat.y = 0.2, stat.y.spread = 0.15, cex.lab = 1, 
-    autoflip.stat.y = FALSE){
+    autoflip.stat.y = FALSE, label.nudge = -0.05, return.stats = FALSE){
     
     if(is.null(inner.term)){
         term.idx <- which(rownames(mean.term.vals) == outer.term)
@@ -789,11 +813,16 @@ term_vioplot <- function(outer.term, inner.term = NULL, mean.term.vals,
         #term.expr <- mean.term.vals[[outer.idx]][inner.idx,]
         plot.label <- paste(outer.term, inner.term, sep = " : ")
     }
-    test_effect(unlist(term.expr), test.factor[unlist(geno.idx)], 
+    test.stats <- test_effect(unlist(term.expr), test.factor[unlist(geno.idx)], 
         plot.label = plot.label, stat.y = stat.y, stat.x = stat.x, 
-        cex.lab = cex.lab, stat.y.spread = stat.y.spread, plot.results = TRUE)
+        cex.lab = cex.lab, stat.y.spread = stat.y.spread, plot.results = TRUE,
+        label.nudge = label.nudge)
 
-    invisible(term.expr)
+    if(return.stats){
+        invisible(test.stats)
+    }else{
+        invisible(term.expr)
+    }
 }
 
 #this function looks at the gene expression correlations 
@@ -858,11 +887,11 @@ writes the stats in.
 if(final.params){
     fig.plots <- c("Kl", "App", "Apoe", "Grin2b")
     stat.y = rep(0.2, 4)
-    stat.x <- c(0.1, 0.1, 0.75, 0.1)
+    stat.x <- c(0.1, 0.1, 0.7, 0.1)
     pdf(here("Results", "for_paper", "AD-related_expression_individual.pdf"), width = 4.5, height = 5) #dimensions sort of match that of glutamate module figure
     for(i in 1:length(fig.plots)){
        gene_vioplot(fig.plots[i], stat.y = stat.y[i], stat.x = stat.x[i], 
-        cex.lab = 1.5, ylim = c(-2.8, 2.5))
+        cex.lab = 1.5, ylim = c(-2.8, 2.5), label.nudge = -0.1)
     }
     dev.off()
 }
@@ -879,7 +908,7 @@ mean.bd.vals <- non_nested_mean_vals(non_nested_gene_list = bd.list,
 
 bd.result <- plot_mean_bd_k(mean.bd.k.mat = mean.bd.vals, 
     covar.mat = covar.table, plot.results = TRUE, order.by = "PC",
-    path.stats = "R2", stat.x = 0.8, stat.y = 0.2)
+    path.stats = "R2", stat.x = 0.1, stat.y = 0.9, label.nudge = -0.08)
 ```
 
 ```{r eval = FALSE}
@@ -892,9 +921,6 @@ dev.off()
 all.effect <- sapply(test, function(x) x$overall.r2)
 par(mar = c(4,12,4,2))
 barplot(sort(all.effect), las = 2, horiz = TRUE)
-
-
-
 ```
 
 ```{r biodomain_r2, fig.width = 8, fig.height = 6}
@@ -961,16 +987,22 @@ carrier.idx <- list("FC" = carrier.idx[[1]], "WT" = wt.idx, "VS" = carrier.idx[[
 names(carrier.idx) <- c("FC", "WT", "VS")
 
 #pdf("~/Desktop/biodomains.pdf", width = 7, height = 6)
+bd.stat.mat <- matrix(NA, nrow = length(bd.list), ncol = 7)
+rownames(bd.stat.mat) <- names(bd.list)
 for(bd in 1:length(bd.list)){
     cat("####", names(bd.list)[bd], "\n")
-    test_effect(mean.bd.vals[bd,], test.factor, 
+    bd.stats <- test_effect(mean.bd.vals[bd,], test.factor, 
         plot.results = TRUE, plot.label = names(bd.list)[bd],
         autoflip.stat.y = TRUE) 
-
+    bd.stat.mat[bd,] <- bd.stats
     cat("\n\n")
 }
+colnames(bd.stat.mat) <- names(bd.stats)
+if(final.params){
+    paper.stats$bd.stats <- bd.stat.mat
+}
 #dev.off()
-
+#saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
 ```
 
 
@@ -990,8 +1022,12 @@ sbd.result <- lapply(mean.sbd.vals, function(x) if(length(x) > 0){plot_mean_bd_k
 sbd.r2 <- lapply(sbd.result, function(x) if(length(x) > 1){x$row.r2}else{NA})
 names(sbd.r2) <- names(sub.bd.list)
 
+sbd.effect <- lapply(sbd.result, function(x) if(length(x) > 1){x$row.effect}else{NA})
+names(sbd.effect) <- names(sub.bd.list)
+#sbd.effect$"Mitochondrial Metabolism"
 
-adjp <- p.adjust(unlist(lapply(sbd.result, function(x) if(length(x) > 1){x$row.p}else{NA})), method = "fdr")
+sbd.p <- lapply(sbd.result, function(x) if(length(x) > 1){x$row.p}else{NA})
+adjp <- p.adjust(unlist(sbd.p), method = "fdr")
 minr2 <- min(unlist(sbd.r2)[which(adjp <= fdr.thresh)])
 
 #path.order <- order(sapply(sbd.r2, function(x) if(length(x) > 0){mean(x, na.rm = TRUE)})) #by biodomain mean
@@ -1002,6 +1038,7 @@ boxplot(sbd.r2[path.order], las = 2, horizontal = TRUE,
 abline(v = seq(0, 0.3, 0.1), lty = 2, col = "darkgray")
 points(x = bd.result$row.r2[path.order], y = 1:length(path.order), col = "blue",
     pch = 16)
+stripchart(sbd.r2[path.order], vertical = FALSE, add = TRUE, col = mix_colors(dot.col, "white", 0.5), pch = 16)
 #abline(v = minr2, col = "red", lty = 2) #this line is really low. it looks suspicious. 
                                         #The p values seem pretty inflated, which isn't
                                #bad, it just looks weird.
@@ -1036,7 +1073,7 @@ for(bd in 1:length(sbd.r2)){
         par(mar = c(4,30,2,2))
         r2.vals <- sbd.r2[[bd]]
         r2.vals[which(r2.vals < 0)] <- 0
-        barplot(sort(r2.vals), horiz = TRUE, las = 2, xlab = "Adjusted R2",
+        barplot(sort(r2.vals[,1]), horiz = TRUE, las = 2, xlab = "Adjusted R2",
             main = names(sbd.r2)[bd], xlim = c(0, max.r2))
         abline(v = seq(0, max.r2, 0.1), lty = 2, col = "darkgray")
         cat("\n\n")
@@ -1050,7 +1087,7 @@ for(bd in 1:length(sbd.r2)){
 The plot below shows the top subdomains overall
 
 ```{r top_sbd_r2, fig.width = 10, fig.height = 8}
-all.sub.r2 <- unlist(sbd.r2)
+all.sub.r2 <- unlist(lapply(sbd.r2, function(x) if(length(x) > 1){x[,1]}else{NA}))
 #hist(all.sub.r2, breaks = 25)
 big.r2 <- which(all.sub.r2 >= 0.15)
 
@@ -1068,21 +1105,34 @@ The plots below show how well each subdomain separates the genotypes
 ```{r ind_sbd, results = "asis", plot.width = 7, plot.height = 5}
 
 #pdf("~/Desktop/subdomains.pdf", width = 7, height = 5)
+sbd.stats <- vector(mode = "list", length = length(sub.bd.list))
+names(sbd.stats) <- names(sub.bd.list)
 for(bd in 1:length(sub.bd.list)){
     cat("####", names(sub.bd.list)[bd], "{.tabset .tabset-fade .tabset-pills}\n")
+    sbd.stat.mat <- matrix(NA, nrow = length(sub.bd.list[[bd]]), ncol = 7)
+    rownames(sbd.stat.mat) <- names(sub.bd.list[[bd]])
+    
     if(length(sub.bd.list[[bd]]) > 0){  
         for(s in 1:length(sub.bd.list[[bd]])){
             cat("#####", names(sub.bd.list[[bd]])[s], "\n")  
-            geno.vals <- lapply(geno.idx, function(x) mean.sbd.vals[[bd]][s,x])
-            geno.order <- order(sapply(geno.vals, mean))
-            test_effect(unlist(geno.vals), test.factor, 
-                plot.results = TRUE, stat.y = 0.9, plot.label = names(sub.bd.list)[bd],
-                autoflip.stat.y = TRUE)
+                        
+            sbd.stat <- test_effect(mean.sbd.vals[[bd]][s,], test.factor, plot.results = TRUE,
+                stat.y = stat.y[i], autoflip.stat.y = TRUE, 
+                plot.label = paste0(names(sub.bd.list)[bd], "\n", names(sub.bd.list[[bd]])[s]),
+                stat.y.spread = 0.2)
+
+            sbd.stat.mat[s,] <- sbd.stat
             cat("\n\n")
         }
+        colnames(sbd.stat.mat) <- names(sbd.stat)
     }
+    sbd.stats[[bd]] <- sbd.stat.mat
     cat("\n\n")
 }
+if(final.params){
+    paper.stats$sbd.stats <- sbd.stats
+}
+saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
 #dev.off()
 ```
 
@@ -1100,9 +1150,9 @@ for(i in 1:length(to.plot)){
     for(j in 1:length(to.plot[[i]])){
         sbd.idx <- which(names(sub.bd.list[[bd.idx]]) == to.plot[[i]][j])
         sbd.vals <- mean.sbd.vals[[bd.idx]][sbd.idx,]
-        stats <- test_effect(sbd.vals, test.factor, plot.results = TRUE,
+        stats <- test_effect(values = sbd.vals, plot.factor = test.factor, plot.results = TRUE,
             stat.y = stat.y[i], autoflip.stat.y = TRUE, plot.label = to.plot[[i]][j],
-            stat.y.spread = 0.2)
+            stat.y.spread = 0.2, label.nudge = -0.1)
     }
 }
 dev.off()
@@ -1267,6 +1317,7 @@ Because there are so many KEGG pathways, the bar plot only
 shows the top 20 results.
 
 ```{r kegg, fig.width = 7, fig.height = 9}
+max.show <- 20
 
 mean.k.vals <- non_nested_mean_vals(kegg.list, expr.mat = adj_expr, 
     group.representation = group.representation)
@@ -1275,29 +1326,38 @@ k.result <- plot_mean_bd_k(mean.bd.k.mat = mean.k.vals,
     covar.mat = covar.table, plot.results = FALSE)
 
 k.adj.p <- p.adjust(k.result$row.p, "fdr")
+names(k.adj.p) <- rownames(k.result$row.p)
 sig.k <- which(k.adj.p < fdr.thresh)
 #length(sig.k)
 
+kegg.show <- order(k.adj.p[sig.k], decreasing = FALSE)[1:min(c(length(sig.k), max.show))]
 par(mar = c(4,25,2,2))
-barplot(sort(k.result$row.r2[sig.k]), horiz = TRUE, las = 2, xlab = "Adjusted R2",
+barplot(sort(k.result$row.r2[sig.k[kegg.show], "r2"]), horiz = TRUE, las = 2, xlab = "Adjusted R2",
     main = "KEGG pathways")
+
+paper.stats$num.kegg <- length(kegg.list)
+paper.stats$num.sig.kegg <- length(sig.k)
+saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
 ```
 
 
-```{r sig_kegg_overview}
+```{r sig_kegg_overview, fig.width = 12, fig.height = 8}
 
-k.order <- order(k.result$row.r2[sig.k], decreasing = TRUE)
-ordered.k.p <- k.adj.p[sig.k[k.order]]
-k.mean.mat <- matrix(NA, nrow = length(sig.k), ncol = length(geno.cols))
+#png(here("Results", "for_paper", "Supp_Fig_KEGG_Overview.png"), width = 12, height = 8, units = "in", res = 300)
+#par(bg = NA)
+
+k.order <- order(k.result$row.r2[sig.k[kegg.show]], decreasing = TRUE)
+ordered.k.p <- k.adj.p[sig.k[kegg.show[k.order]]]
+k.mean.mat <- matrix(NA, nrow = length(kegg.show), ncol = length(geno.cols))
 colnames(k.mean.mat) <- names(geno.cols)
 rownames(k.mean.mat) <- names(ordered.k.p)
-for(k in 1:length(sig.k)){
+for(k in 1:length(kegg.show)){
     geno.vals <- lapply(geno.idx, function(x) mean.k.vals[names(ordered.k.p)[k],x])
     k.mean.mat[k,] <- sapply(geno.vals, mean)
 }
 
 k.mean.decomp <- plot.decomp(k.mean.mat, plot.results = FALSE)
-pc.order <- order(k.mean.decomp$u[,1])
+pc.order <- order(k.mean.decomp$u[,1], decreasing = TRUE)
 
 cat.cols <- read.delim(here("Data", "general", "kegg_colors.txt"), comment.char = "!", sep = "\t")
 kegg.cat <- read.delim(here("Data", "general", "kegg_categories.txt"), comment.char = "#", sep = "\t")
@@ -1305,92 +1365,58 @@ kegg.cat <- read.delim(here("Data", "general", "kegg_categories.txt"), comment.c
 #png(here("Results", "for_paper", "KEGG_overview.png"), width = 8.5, height = 5, units = "in", res = 300)
 #quartz(width = 8, height = 5)
 
-layout(matrix(c(1,2,3,1,2,4), nrow = 2, byrow = TRUE), widths = c(1.2, 0.3, 0.5))
-par(mar = c(4,26,2,0), bg = NA)
+#layout(matrix(c(1,2,3,1,2,4), nrow = 2, byrow = TRUE), widths = c(1.2, 0.3, 0.5))
+layout(matrix(c(1,2,3,1,2,4,1,2,5), nrow = 3, byrow = TRUE), widths = c(1.2, 0.3, 0.5))
+par(mar = c(4,30,2,0), bg = NA)
 imageWithText(signif(k.mean.mat[pc.order,ordered.geno], 2), split.at.vals = TRUE, 
-    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", col.text.shift = 0.03,
-    row.text.shift = 0.15, show.text = FALSE, row.text.cex = 1.2)
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", col.text.shift = 0.05,
+    row.text.shift = 0.22, show.text = TRUE, row.text.cex = 1.2, cex = 1, col.text.rotation = 0,
+    col.text.adj = 0.5)
 
-#color KEGG pathways by category
-plot.dim <- par("usr")
-plot.width <- plot.dim[2] - plot.dim[1]
-max.x <- plot.dim[1]
-rect.height <- 0.5
 
-#squish the rectangle width - we want short rectangles longer
-#and long rectangles shorter by just a bit
-path.len <- sapply(kegg.cat[,1], nchar)
-len.scale <- 1/scale.between.vals(path.len, 0.7, 1.1)
-min.x <- (max.x - (path.len/plot.width)*len.scale)
-
-#draw on rectangles
-highlight.examples <- FALSE
-if(highlight.examples){
-    for(i in 1:nrow(kegg.cat)){
-        path.name <- kegg.cat[i,1]
-        path.cat <- kegg.cat[i,2]
-        path.col <- add_alpha(cat.cols[which(cat.cols[,1] == path.cat),2], 0.5)
-        path.rgb <- col2rgb(path.col)
-        path.idx <- plot.dim[4] - which(rownames(k.mean.mat)[pc.order] == path.name)
-        
-        #draw.rectangle(min.x[i], max.x, path.idx-rect.height, path.idx+rect.height, 
-        #    fill = rgb(path.rgb[1,1]/256, path.rgb[2,1]/256, path.rgb[3,1]/256, alpha = 0.5), 
-        #    border = NA)
-
-        draw.rectangle(min.x[i], max.x, path.idx-rect.height, path.idx+rect.height, 
-            fill = path.col, border = NA)
-
-    }
-}
-
-#add -log10(p) bars alongside heat map
+#add R2 bars alongside heat map
 par(mar = c(4,0,2,0))
-barplot(rev(-log10(k.result$row.p[sig.k[k.order[pc.order]]])), horiz = TRUE, 
-    names = NA, xlab = substitute(paste("-log"[10], "(p)")))
+barplot(rev(k.result$row.r2[sig.k[kegg.show[k.order[pc.order]]]]), horiz = TRUE, 
+    names = NA, xlab = bquote(italic(R)^2))
 plot.dim <- par("usr")
 segments(x0 = -log10(0.1/length(k.result$row.p)), y0 = plot.dim[3], 
     y1 = plot.dim[4], col = "red", lty = 2)
 
-if(highlight.examples){
-    #add a legend for the categories
-    par(mar = c(4,0,2,0))
-    cat.len <- nchar(cat.cols[,1])
-    scale.factor <- scale.between.vals(cat.len, 0.97, 1.03)
-    cat.order <- order(cat.len, decreasing = TRUE)
-    plot.new()
-    plot.window(xlim = c(0, 1), ylim = c(0, 1))
-    y.pos <- segment_region(0.65, 0.35, length(cat.len), "ends")
-    x.max <- rev(0.5 + 2/(cat.len[cat.order]*scale.factor[cat.order]))
-    x.min <- rev(0.5 - 2/(cat.len[cat.order]*scale.factor[cat.order]))
-    for(i in 1:length(cat.len)){
-        draw.rectangle(x.min[i], x.max[i], y.pos[i]-0.05, y.pos[i]+0.05, 
-            fill = add_alpha(cat.cols[cat.order[i],2], 0.5), border = NA)
-        text(x = 0.5, y = y.pos[i], labels = cat.cols[cat.order[i],1], cex = 0.7)
-    }
-}else{
-    plot.new()
-    plot.window(xlim = c(0,1), ylim = c(0,1))
+
+#add top examples
+par(mar = c(4, 4, 2, 2))
+example.path <- c("Ribosome", "Nicotine addiction")
+stat.y <- c(0.9, 0.3)
+for(i in 1:length(example.path)){    
+    model <- test_effect(mean.k.vals[example.path[i],], test.factor,
+        plot.result = TRUE, autoflip.stat.y = FALSE, stat.y = stat.y[i], 
+        plot.label = example.path[i], stat.y.spread = 0.2,
+        label.nudge = -0.08)
 }
 
 
 #add a color bar for the heat map
-par(mar = c(4,6,2,7)) 
+par(mar = c(4,8,2,9)) 
 imageWithTextColorbar(signif(k.mean.mat, 2), split.at.vals = TRUE, 
-    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1.2)
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", 
+    cex = 1.2, round.nearest = 0.5)
 plot.dim <- par("usr")
 plot.width <- plot.dim[2] - plot.dim[1]
 text(x = (plot.dim[2]+(plot.width*0.4)), y = mean(plot.dim[3:4]), 
     labels = "Expression (A.U.)", srt = 270, cex = 1.2)
+
 #dev.off()
 ```
 
 ### KEGG plots {.tabset .tabset-fade .tabset-pills}
 The plots below show how well each significant KEGG 
-pathway separates the genotypes.
+pathway separates the genotypes. If there were more 
+than `r max.show` significant pathways, only the top 
+`r max.show` are shown.
 
 ```{r ind_kegg, results = "asis", plot.width = 10, plot.height = 5}
 #pdf("~/Desktop/kegg.pdf", width = 7, height = 5)
-kegg.mean.mat <- matrix(NA, nrow = length(ordered.k.p), ncol = length(geno.cols))
+kegg.mean.mat <- matrix(NA, nrow = length(kegg.show), ncol = length(geno.cols))
 rownames(kegg.mean.mat) <- names(ordered.k.p)
 colnames(kegg.mean.mat) <- names(geno.cols)
 for(k in 1:length(ordered.k.p)){
@@ -1417,37 +1443,125 @@ for(k in 1:length(ordered.k.p)){
 example.path <- c("Ribosome", "Proteasome")
 pdf(here("Results", "for_paper", "KEGG_expression_examples.pdf"), width = 4, height = 4)
 for(i in 1:length(example.path)){    
-    geno.vals <- lapply(geno.idx, function(x) mean.k.vals[example.path[i],x])
-    #geno.order <- order(sapply(geno.vals, mean))
     model <- test_effect(mean.k.vals[example.path[i],], test.factor,
         plot.result = TRUE, autoflip.stat.y = TRUE, 
         plot.label = example.path[i], stat.y.spread = 0.2)
-
 }
 dev.off()
-
-
 ```
 
-### KEGG overview
+### More KEGG examples
 
+We might want to highlight particular types of KEGG pathways,
+such as neurodegenerative pathways for the paper. Here we 
+select subsets of pathways by hand and plot them.
 
-The plot below gives an overview of the expression of the top KEGG pathways.
+```{r top_kegg_overview, fig.width = 11, fig.height = 6}
 
-```{r top_kegg_overview, fig.width = 11, fig.height = 9}
-mean.decomp <- plot.decomp(t(kegg.mean.mat), label.points = TRUE, plot.results = FALSE)
-row.order <- order(mean.decomp$v[,1])
-#png("~/Desktop/kegg_mean.png", width = 11, height = 7, units = "in", res = 300)
+example.paths <- c("Prion disease", "Parkinson disease", "Huntington disease", 
+    "Amyotrophic lateral sclerosis", "Alzheimer disease")
+
+example.mean.mat <- matrix(NA, nrow = length(example.paths), ncol = length(geno.cols))
+rownames(example.mean.mat) <- example.paths
+colnames(example.mean.mat) <- names(geno.cols)
+example.stats <- matrix(NA, nrow = length(example.paths), ncol = 7)
+rownames(example.stats) <- example.paths
+for(k in 1:length(example.paths)){
+    geno.vals <- lapply(geno.idx, function(x) mean.k.vals[example.paths[k],x])
+    stats <- test_effect(mean.k.vals[example.paths[k],], test.factor,
+        plot.result = FALSE, autoflip.stat.y = TRUE, plot.label = example.paths[k])
+    example.stats[k,] <- stats
+    example.mean.mat[k,] <- sapply(geno.vals, mean)
+}
+colnames(example.stats) <- names(stats)
+
+mean.decomp <- plot.decomp(t(example.mean.mat), label.points = TRUE, plot.results = FALSE)
+row.order <- order(mean.decomp$v[,1], decreasing = FALSE)
+
+#make a table with the mean expression values and stats
+#use imageWithText to add colors to the mean expression
+#values.
+
+png(here("Results", "for_paper", "neurodegeneration.png"), width = 11, height = 6, units = "in", res = 300)
+par(bg = NA)
 layout.mat <- matrix(c(1,2), nrow = 1)
-layout(layout.mat, widths = c(1, 0.2))
-par(mar = c(4,25,2,2))
-imageWithText(signif(kegg.mean.mat[row.order,ordered.geno], 2), split.at.vals = TRUE, 
-    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", col.text.shift = 0.03,
-    row.text.shift = 0.15)
-par(mar = c(20,4,2,4)) 
-imageWithTextColorbar(signif(kegg.mean.mat[row.order,ordered.geno], 2), split.at.vals = TRUE, 
-    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1)
-#dev.off()
+layout(layout.mat, widths = c(0.25, 1))
+#color bar
+par(mar = c(10,6,2,2)) 
+imageWithTextColorbar(signif(example.mean.mat[row.order,ordered.geno], 2), split.at.vals = TRUE, 
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1, 
+    round.nearest = 0.3)
+mtext("Expression (A.U.)", side = 2, line = 1.5)
+
+example.table <- cbind(signif(example.mean.mat[row.order,ordered.geno], 2), example.stats[row.order,c(1,3,4)])
+colnames(example.table)[4:6] <- c("R2", "beta", "p")
+
+class.mat <- matrix(NA, nrow = nrow(example.table), ncol = ncol(example.table))
+class.mat[which(example.table[,1:3] < 0)] <- 1
+class.mat[which(example.table[,1:3] > 0)] <- 2
+
+#heat map - I can't get the class mat to work. It looks almost right,
+#but the colors are getting a little messed up, so I'm going to try to
+#plot the stats and means separately
+par(mar = c(4,18,6,1))
+imageWithText(mat = example.table, split.at.vals = TRUE, split.points = 0, 
+    col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", 
+    col.text.shift = -1.15, row.text.shift = 0.13, col.text.rotation = 0, 
+    col.text.adj = 0.5, cex = 1.2, col.text.cex = 1.5, global.color.scale = TRUE,
+    global.min = -0.3, global.max = 0.3,
+    row.text.cex = 1.5, na.col = "white", class.mat = class.mat)
+
+#draw some boundaries
+plot.dim <- par("usr")
+mid.pt <- plot.dim[2]*0.545
+horiz.y <- segment_region(plot.dim[3], plot.dim[4], 6, "ends")
+#these are a little off
+horiz.y[3] <- horiz.y[3]+0.05
+horiz.y[4] <- horiz.y[4]+0.1
+draw.rectangle(min.x = plot.dim[1], max.x = mid.pt, 
+    min.y = plot.dim[3], max.y = plot.dim[4], 
+    border.col = "black", fill = NULL, lwd = 3)
+segments(x0 = rep(mid.pt, length(horiz.y)), x1 = rep(plot.dim[2], length(horiz.y)),
+    y0 = horiz.y)
+vert.x <- segment_region(mid.pt, plot.dim[2], 4, "ends")
+segments(x0 = vert.x,
+    y0 = rep(plot.dim[3], length(vert.x)), y1 = rep(plot.dim[4], length(vert.x)))
+
+#label the mean expression section
+text(x = mean(c(plot.dim[1], mid.pt)), y = 0.3, labels = "Mean Expression (A.U.)", cex = 1.2)
+#and the stats section
+text(x = mean(c(plot.dim[2], mid.pt)), y = 0.3, labels = "Model Stats", cex = 1.2)
+
+dev.off()
+```
+
+We also mention that oxidative phosphorylation and reactive 
+oxygen species results corroborated those from the biodomain
+analysis.
+
+```{r kegg_match, fig.height = 4, fig.width = 8}
+
+example.paths <- c("Oxidative phosphorylation", "Chemical carcinogenesis - reactive oxygen species")
+
+example.mean.mat <- matrix(NA, nrow = length(example.paths), ncol = length(geno.cols))
+rownames(example.mean.mat) <- example.paths
+colnames(example.mean.mat) <- names(geno.cols)
+example.stats <- matrix(NA, nrow = length(example.paths), ncol = 7)
+rownames(example.stats) <- example.paths
+
+pdf(here("Results", "for_paper", "kegg_match_bd.pdf"), width = 8, height = 4.5)
+par(mfrow = c(1,2))
+for(k in 1:length(example.paths)){
+    geno.vals <- lapply(geno.idx, function(x) mean.k.vals[example.paths[k],x])
+    stats <- test_effect(mean.k.vals[example.paths[k],], test.factor,
+        plot.result = TRUE, autoflip.stat.y = TRUE, label.nudge = -0.08,
+        plot.label = gsub("-", "\n", example.paths[k]), stat.y.spread = 0.2)
+    example.stats[k,] <- stats
+    example.mean.mat[k,] <- sapply(geno.vals, mean)
+}
+colnames(example.stats) <- names(stats)
+dev.off()
+
 ```
 
 ```{r intersect_vals}
@@ -1508,6 +1622,26 @@ sub.val.result <- plot_mean_bd_k(mean.bd.k.mat = sub.vals,
     stat.x = 0.1, stat.y = 0.9, path.stats = "R2", stat.y.spread = 0.2)
 #dev.off()
 #barplot(cl.width, col = geno.cols)
+
+#make an output supplementary data file for the intersection stats.
+unordered.result <- plot_mean_bd_k(mean.bd.k.mat = sub.vals, 
+    covar.mat = covar.table, row.names = NULL, order.by = "none", 
+    plot.results = FALSE, path.stats = "R2")
+
+intersection.table <- Reduce("cbind", unordered.result[3:5])
+split.int <- strsplit(rownames(intersection.table), " : ")
+kegg.name <- sapply(split.int, function(x) x[1])
+bd.name <- sapply(split.int, function(x) x[2])
+intersection.table <- cbind(kegg.name, bd.name, intersection.table)
+colnames(intersection.table) <- c("KEGG pathway", "Bidomain", "beta", "R2", "p")
+gene.table <- unlist(kegg.bd.list, recursive = FALSE)
+gene.text <- sapply(gene.table, function(x) paste0(x, collapse = ","))
+full.table <- cbind(intersection.table, "genes" = gene.text)
+write_table_with_header(full.table, here("Results", "for_paper", "Supplemental_File_Intersection_Stats.txt"),
+    header = "Table of all intersection results for intersections with at least 10 genes. 
+    Each row provides the names of the KEGG pathway and biodomain creating the intersection, 
+    the statistics from the linear model explaining mean gene expression with Kl haplotype, 
+    and the genes in the intersection separated by commas.")
 ```
 
 The plot below shows that this separation is statistically 
@@ -1537,7 +1671,7 @@ rnd.p <- rep(NA, 1000)
 for(p in 1:1000){
     rnd.sample <- sample(1:ncol(sub.vals))
     test.pc  <- test_effect(sample(ind.vals), test.factor)
-    rnd.p[p] <- test.pc$model.p
+    rnd.p[p] <- test.pc["model.p"]
 }
 
 qqunif.plot(rnd.p)
@@ -1582,7 +1716,7 @@ edge.weights <- sub.val.result$row.effect; edge.label = bquote(beta) #use genoty
 if(select_by == "R2"){
     #high.thresh <- get.percentile(sub.val.result$row.r2, 98)
     #sig.idx <- which(sub.val.result$row.r2 >= high.thresh)
-    sig.idx <- which(p.adjust(sub.val.result$row.p, "fdr") <= fdr.thresh)
+    sig.idx <- which(p.adjust(sub.val.result$row.p, "fdr") <= intersection.fdr.thresh)
     #length(sig.idx)
 }
 if(select_by == "PC"){
@@ -1632,9 +1766,15 @@ abline(v = 0)
 if(final.params){
     pdf(here("Results", "for_paper", "Pathway_Intersections.pdf"), width = 5, height = 4)
     par(mar = c(4,6,4,2))
-    plot(sub.val.result$decomp$v[,1], sub.val.result$row.r2, 
+    plot(sub.val.result$row.effect, sub.val.result$row.r2, 
         col = pt.col, pch = 16, xlab = edge.label, ylab = bquote(italic(R)^2),
         main = "Significant Pathway Intersections", cex.lab = 1.5)
+    abline(v = 0)
+
+    plot(sub.val.result$row.effect, -log10(sub.val.result$row.p), 
+        col = pt.col, pch = 16, xlab = edge.label, ylab = bquote(log[10]~"("~italic(p)~")"),
+        main = "Significant Pathway Intersections", cex.lab = 1.5)
+
     abline(v = 0)
     dev.off()
 }
@@ -1685,7 +1825,7 @@ if(final.params){
         grad.dir = "ends", col.text.shift = 0.09, row.text.cex = 0.7, 
         row.text.shift = 0.21, col.text.adj = 0.5, col.text.rotation = 0)
     par(mar = c(4,1,2,2))
-    effect.idx <- rev(match(rownames(geno.means[smaller.set,]), names(edge.weights)))
+    effect.idx <- rev(match(rownames(geno.means[smaller.set,]), rownames(edge.weights)))
     barplot(edge.weights[effect.idx], horiz = TRUE, cex.axis = 0.5, names = NA)
     mtext(edge.label, side = 1, line = 2.5)
     plot.dim <- par("usr")
@@ -1814,11 +1954,21 @@ plot(full.net, vertex.color = V(full.net)$vertex.color,
 ```
 
 ```{r biadjacency}
-#intersection.fdr.thresh = 0.05;plot.width = 25
-#intersection.fdr.thresh = 0.01;plot.width = 18
-intersection.fdr.thresh = 0.001;plot.width = 12
 
-intersect.sig.idx <- which(p.adjust(sub.val.result$row.p, "fdr") <= intersection.fdr.thresh)
+if(intersection.fdr.thresh == 0.001){
+    plot.width = 12
+}
+if(intersection.fdr.thresh == 0.01){
+    plot.width = 18
+}
+if(intersection.fdr.thresh == 0.05){
+    plot.width = 25
+}
+intersect.adj.p <- p.adjust(sub.val.result$row.p, "fdr")
+names(intersect.adj.p) <- rownames(sub.val.result$row.p)
+intersect.sig.idx <- which(intersect.adj.p <= intersection.fdr.thresh)
+paper.stats$num.sig.intersections <- length(intersect.sig.idx)
+saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
 
 full.bimat <- build_biadjacency(edge.names = rownames(sub.vals)[intersect.sig.idx], e.weights = edge.weights[intersect.sig.idx])
 cl.bimat <- build_biadjacency(edge.names = rownames(sub.vals)[intersect.sig.idx], e.weights = sub.val.result$decomp$v[intersect.sig.idx,1]) #use PC vals to cluster
@@ -2190,7 +2340,8 @@ plot_individual_genes <- function(intersection.name = NULL, gene.list = NULL,
     plot.type = c("individual", "means", "boxes"), plot.label = "",
     label.margin = 4, order.by = c("PC", "top.rank", "means", "genotype", "none"), 
     path.stats = c("R2", "effect.size"), show.text = TRUE, legend.x = NULL, 
-    legend.y = NULL, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15,
+    legend.y = NULL, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
+    label.nudge =  -0.05, cex.lab = 1,
     return.full.result = FALSE, plot.enrich = FALSE){
 
     order.by = order.by[1]
@@ -2241,7 +2392,8 @@ plot_individual_genes <- function(intersection.name = NULL, gene.list = NULL,
         full.result <- plot_mean_bd_k(mean.bd.k.mat = t(term.expr[,gene.order,drop=FALSE]), 
             covar.mat = covar.table, plot.label = plot.label, path.stats = path.stats,
             label.margin = label.margin, order.by = order.by, stat.y.spread = stat.y.spread,
-            stat.x = stat.x, stat.y = stat.y, plot.enrich = plot.enrich)
+            stat.x = stat.x, stat.y = stat.y, plot.enrich = plot.enrich, label.nudge = label.nudge,
+            cex.lab = cex.lab)
     }
 
     if(plot.type == "means"){
@@ -2314,6 +2466,9 @@ term.name <- "Nicotine addiction : APP Metabolism"
 #term.name <- "Ribosome : Mitochondrial Metabolism" #up
 #term.name <- "Oxidative phosphorylation : Mitochondrial Metabolism" #up
 term.name <- "Ribosome : Synapse"
+#term.name <- "Ribosome : Immune Response"
+#term.name <- "Type II diabetes mellitus : Immune Response"
+term.name <- "Insulin secretion : Immune Response"
 
 app.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == "App"), "ensembl_gene_id"]
 
@@ -2338,6 +2493,7 @@ for(i in 1:length(order.type)){
 #test.pc <- plot.decomp(test.mat)$u[,1]
 #plot.with.model(test.means, test.pc)
 ```
+
 
 ```{r int_dir}
 intersection.dir <- file.path(results.dir, "Intersection_Plots")
@@ -2408,7 +2564,7 @@ dev.off()
 #on the sign of the PC, but you can tell from the plots whether 
 #VS is up or down
 
-plot_merged_list <- function(search.term, path.type = c("Positive", "Negative")){
+plot_merged_list <- function(search.term, path.type = c("Positive", "Negative"), plot.enrich = FALSE){
 
     if(path.type == "Positive"){
         app.idx <- grep(search.term, rownames(sub.vals)[pos.sig]); name.list <- rownames(sub.vals)[pos.sig]
@@ -2428,12 +2584,14 @@ plot_merged_list <- function(search.term, path.type = c("Positive", "Negative"))
     app.result <- plot_individual_genes(gene.list = app.genes, 
         plot.label = paste(search.term, "genes in", path.type, "Pathways"))
 
-    app.enrich <- gost(app.genes, organism = "mmusculus", 
-        sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP"))
-
-    #quartz()
-    plot.enrichment(app.enrich, num.terms = 30, 
-        plot.label = paste("Enrichment of", search.term, "genes in", path.type, "Pathways"))
+    if(plot.enrich){
+        app.enrich <- gost(app.genes, organism = "mmusculus", 
+            sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP"))
+            
+        #quartz()
+        plot.enrichment(app.enrich, num.terms = 30, 
+            plot.label = paste("Enrichment of", search.term, "genes in", path.type, "Pathways"))
+    }
 }
 
 plot_merged_list("Synapse", "Positive"); #cell adhesion
@@ -2441,11 +2599,13 @@ plot_merged_list("Synapse", "Negative"); #ribosome, translation at synapse
 
 
 test.genes <- plot_individual_genes(intersection.nam = "Ras signaling pathway : APP Metabolism")
-enrich <- gost(test.genes, organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "CORM", "HP"))
 
-par(mar = c(4,20, 2,2))
-plot.enrichment(enrich, num.terms = 30, max.char = 100)
-#cat(test.genes, sep = "\n")
+if(!offline){
+    enrich <- gost(test.genes, organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "CORM", "HP"))
+    par(mar = c(4,20, 2,2))
+    plot.enrichment(enrich, num.terms = 30, max.char = 100)
+    #cat(test.genes, sep = "\n")
+    }
 ```
 
 I think a lot of these terms have similar genes in them.
@@ -2552,6 +2712,7 @@ pathways.
 ```{r connectors, fig.width = 5, fig.height = 5}
 
 bd.names <- c("APP Metabolism", "Synapse"); kegg.names = c("Nicotine addiction")
+#bd.names <- c("Synapse"); kegg.names = c("Ribosome")
 #bd.names <- c("Mitochondrial Metabolism"); kegg.names = c("Parkinson disease", "Amyotrophic lateral sclerosis", "Prion disease", "Huntington disease")
 #bd.names <- c("Mitochondrial Metabolism"); kegg.names = c("Glutamatergic synapse", "Serotonergic synapse")
 #bd.names <- names(bd.list); kegg.names = c("Ribosome")
@@ -2573,7 +2734,7 @@ plotVenn(pair.genes)
 #int.genes <- Reduce("intersect", pair.genes)
 #int.genes <- Reduce("union", pair.genes)
 #length(int.genes)
-#plot_individual_genes(gene.list = int.genes, order.by = "means", plot.enrich = TRUE)
+#plot_individual_genes(gene.list = int.genes, order.by = "means", plot.enrich = plot.enrich)
 #int.names <- mouse.genes[match(int.genes, mouse.genes[,"ensembl_gene_id"]), "external_gene_name"]
 #enrich <- gost(int.names, organism = "mmusculus", sources = c("GO", "KEGG"), evcodes = TRUE)
 #pdf("~/Desktop/term_net.pdf", width = 12, height = 12)
@@ -2589,8 +2750,11 @@ int.genes <- Reduce("intersect", pair.genes)
 png(here("Results", "for_paper", "APP_Nicotine_Intersection_for_heat.png"), width = 8, height = 4, units = "in", res = 300)
 plot_individual_genes(gene.list = int.genes, order.by = "means", stat.y.spread = 0.18)
 dev.off()
+#png(here("Results", "for_paper", "Ribosome_synapse_intersection_for_viol.png"), width = 11, height = 5.5, units = "in", res = 300)
 png(here("Results", "for_paper", "APP_Nicotine_Intersection_for_viol.png"), width = 11, height = 5.5, units = "in", res = 300)
-plot_individual_genes(gene.list = int.genes, order.by = "means", stat.y = 0.8, stat.x = 0.05, stat.y.spread = 0.18)
+par(bg = NA)
+plot_individual_genes(gene.list = int.genes, order.by = "means", stat.y = 0.8, stat.x = 0.05, stat.y.spread = 0.18, 
+    label.nudge = -0.1, cex.lab = 1.2)
 dev.off()
 }
 ```
@@ -2604,9 +2768,11 @@ dev.off()
 connector.genes <- Reduce("intersect", pair.genes)
 #cat(connector.genes, sep = "\n")
 
-#get gene-GO associations
-enrich <- gost(connector.genes, organism = "mmusculus", evcodes = TRUE)
-plot.enrichment(enrich, num.terms = 30)
+if(!offline){
+    #get gene-GO associations
+    enrich <- gost(connector.genes, organism = "mmusculus", evcodes = TRUE)
+    plot.enrichment(enrich, num.terms = 30)
+}
 
 
 #mousemine GO network
@@ -2657,10 +2823,11 @@ connector.result <- plot_individual_genes(gene.list = connector.genes,
 The enrichments of the intersectional genes are shown below.
 
 ```{r connector_enrichment, fig.widht = 7, fig.height = 7}
-connector.enrich <- gost(connector.genes, organism = "mmusculus", 
-    sources = c("GO", "KEGG", "REACTOME", "HP", "CORUM"))
-plot.enrichment(connector.enrich, num.terms = 30, max.term.size = 3000)
-#cat(connector.genes, sep = "\n")
+if(!offline){
+    connector.enrich <- gost(connector.genes, organism = "mmusculus", sources = c("GO", "KEGG"))
+    plot.enrichment(connector.enrich, num.terms = 30, max.term.size = 3000)
+    #cat(connector.genes, sep = "\n")
+}
 ```
 
 The plots below show the distributions of the individual gene's
@@ -2669,7 +2836,7 @@ expression.
 ```{r individual_genes, fig.width = 9, fig.height = 9}
 #plot_individual_genes(gene.list = connector.genes, plot.type = "boxes", plot.label = "", legend.x = 36, legend.y = 4)
 #plot_individual_genes(gene.list = connector.genes, plot.type = "means", plot.label = "")
-connector.names <- names(connector.result$row.r2)
+connector.names <- rownames(connector.result$row.r2)
 connector.order <- order(connector.result$decomp$v[,1])
 
 #pdf("~/Desktop/connector_levels.pdf", width = 9, height = 9)
@@ -2855,15 +3022,21 @@ k_bd_illustration <- function(BD_label = "Apoptosis", KEGG_label = "MAPK\nsignal
 #here we plot violin plots of specific terms we are interested in.
 
 pdf(here("Results", "for_paper", "Intersection_examples.pdf"), width = 5, height = 5)
-term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "Apoptosis", 
+mapk.apoptosis.stats <- term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "Apoptosis", 
     mean.term.vals = mean.bd.k.vals, stat.x = 0.05, stat.y = 0.2, 
-    stat.y.spread = 0.12, autoflip.stat.y = FALSE, cex.lab = 1.5)
+    stat.y.spread = 0.12, autoflip.stat.y = FALSE, cex.lab = 1.2,
+    label.nudge = -0.08, return.stats = TRUE)
 
-term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "DNA Repair", 
+mapk.dna.stats <- term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "DNA Repair", 
     mean.term.vals = mean.bd.k.vals, stat.x = 0.26, stat.y = 0.15, 
-    autoflip.stat.y = FALSE, stat.y.spread = 0.12, cex.lab = 1.5)
+    autoflip.stat.y = FALSE, stat.y.spread = 0.12, cex.lab = 1.2,
+    label.nudge = -0.08, return.stats = TRUE)
 dev.off()
 
+paper.stats$mapk.apoptosis <- mapk.apoptosis.stats
+paper.stats$mapk.dna.repair <- mapk.dna.stats
+
+saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
 
 pdf(here("Results", "for_paper", "Intersection_illustration.pdf"), width = 4, height = 4)
 k_bd_illustration("Apoptosis", "MAPK\nsignaling")
@@ -3654,6 +3827,7 @@ net.edges <- as_edgelist(dir.net)
 #gene1 <- net.edges[rnd.idx,1]; gene2 <- net.edges[rnd.idx,2]
 #gene1 <- "Zfp729a"; gene2 <- "Zfp266"
 #gene1 <- "App"; gene2 <- "Pym1"
+#gene1 <- "Trem2"; gene2 <- "Tyrobp"
 gene1 <- "Mapt"; gene2 <- "Med16"
 ```
 
@@ -3999,24 +4173,26 @@ The following plots show the enrichments for the hubs that
 are Klotho activators and those that are suppressors.
 
 ```{r hub_enrich, fig.width = 15, fig.height = 7}
-enhancer.enrich <- gost(hub.names[high.kl.effect], organism = "mmusculus")
-suppressor.enrich <- gost(hub.names[low.kl.effect], organism = "mmusculus")
-#quartz(width = 15, height = 7)
-par(mfrow = c(1,2))
-plot.enrichment(enhancer.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Enhancers")
-plot.enrichment(suppressor.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Suppressors")
+if(!offline){
+    enhancer.enrich <- gost(hub.names[high.kl.effect], organism = "mmusculus")
+    suppressor.enrich <- gost(hub.names[low.kl.effect], organism = "mmusculus")
+    #quartz(width = 15, height = 7)
+    par(mfrow = c(1,2))
+    plot.enrichment(enhancer.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Enhancers")
+    plot.enrichment(suppressor.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Suppressors")
 
-#the groups of connected genes have many overlapping genes 
-#and are both enriched for ribosomal and synapse genes.
-#suppressor.connected <- lapply(hub.names[low.kl.effect], function(x) names(direct_connect(dir.net, x)))
-#enhancer.connected <- lapply(hub.names[high.kl.effect], function(x) names(direct_connect(dir.net, x)))
+    #the groups of connected genes have many overlapping genes 
+    #and are both enriched for ribosomal and synapse genes.
+    #suppressor.connected <- lapply(hub.names[low.kl.effect], function(x) names(direct_connect(dir.net, x)))
+    #enhancer.connected <- lapply(hub.names[high.kl.effect], function(x) names(direct_connect(dir.net, x)))
 
-#suppressed.enrich <- gost(unique(unlist(suppressor.connected)), organism = 'mmusculus')
-#enhanced.enrich <- gost(unique(unlist(enhancer.connected)), organism = 'mmusculus')
+    #suppressed.enrich <- gost(unique(unlist(suppressor.connected)), organism = 'mmusculus')
+    #enhanced.enrich <- gost(unique(unlist(enhancer.connected)), organism = 'mmusculus')
 
-#par(mfrow = c(1,2))
-#plot.enrichment(suppressed.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Suppressor Connected")
-#plot.enrichment(enhanced.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Enhancer Connected")
+    #par(mfrow = c(1,2))
+    #plot.enrichment(suppressed.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Suppressor Connected")
+    #plot.enrichment(enhanced.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho Enhancer Connected")
+}
 ```
 
 ## Varying correlations
@@ -4060,10 +4236,13 @@ interactions between them are shown below.
 ```{r pos_neg_enrich, fig.width = 7, fig.height = 7}
 pos.vs <- unique(as.vector(elist[pos.weight.idx,]))
 neg.vs <- unique(as.vector(elist[neg.weight.idx,]))
-pos.net.enrich <- gost(pos.vs, organism = "mmusculus")
-neg.net.enrich <- gost(neg.vs, organism = "mmusculus")
-plot.enrichment(pos.net.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Positive Interactions")
-plot.enrichment(neg.net.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Negative Interactions")
+
+if(!offline){
+    pos.net.enrich <- gost(pos.vs, organism = "mmusculus")
+    neg.net.enrich <- gost(neg.vs, organism = "mmusculus")
+    plot.enrichment(pos.net.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Positive Interactions")
+    plot.enrichment(neg.net.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Negative Interactions")
+}
 
 pos.vs.id <- mouse.genes[match(pos.vs, mouse.genes[ ,"external_gene_name"]), "ensembl_gene_id"]
 neg.vs.id <- mouse.genes[match(neg.vs, mouse.genes[ ,"external_gene_name"]), "ensembl_gene_id"]
@@ -4166,7 +4345,7 @@ for(i in 1:length(hub.names)){
     hub.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == hub.names[i]),"ensembl_gene_id"]
     #png(paste0("~/Desktop/hub_neighborhoods/", hub.names[i], ".png"), width = 11, height = 7, units = "in", res = 300)
     gene.stats <- plot_individual_genes(gene.list = c(hub.id, connected.id[[i]]), 
-        plot.label = paste("genes connected to", hub.names[i]), plot.enrich = TRUE,
+        plot.label = paste("genes connected to", hub.names[i]), plot.enrich = plot.enrich,
         return.full.result = TRUE)
     #test <- gost(c(hub.id, connected.id[[i]]), organism = "mmusculus")
     #plot.enrichment(test)
@@ -4177,7 +4356,7 @@ cat("#### All connected genes")
 all.connected <- unique(unlist(connected.id))
 #png(paste0("~/Desktop/all_connected.png"), width = 11, height = 7, units = "in", res = 300)
 plot_individual_genes(gene.list = all.connected, 
-    plot.label = "genes connected to all genes", plot.enrich = TRUE)
+    plot.label = "genes connected to all genes", plot.enrich = plot.enrich)
 cat("\n\n")
 #dev.off()
 ```
@@ -4226,9 +4405,12 @@ differential expression: synapse and ribosome.
 
 ```{r large_enrich, fig.width = 7, fig.height = 7}
 large.comp <- largest_component(dir.net)
-large.enrich <- gost(V(large.comp)$name, organism = "mmusculus")
-plot.enrichment(large.enrich, num.terms = 30, max.term.size = 3000,
-    plot.label = "Connected Component Enrichment")
+
+if(!offline){
+    large.enrich <- gost(V(large.comp)$name, organism = "mmusculus")
+    plot.enrichment(large.enrich, num.terms = 30, max.term.size = 3000,
+        plot.label = "Connected Component Enrichment")
+}
 ```
 
 Below we explore this large connected component more.
@@ -4267,7 +4449,7 @@ in the large connected component.
 #png("~/Desktop/large_expression.png", width = 11, height = 7, units = "in", res = 300)
 large.id <- mouse.genes[match(large.name, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
 large.stats <- plot_individual_genes(gene.list = large.id, order.by = "PC", 
-    plot.label = "Large Connected Component", return.full.result = TRUE, plot.enrich = TRUE)
+    plot.label = "Large Connected Component", return.full.result = TRUE, plot.enrich = plot.enrich)
 #dev.off()
 ```
 
@@ -4418,12 +4600,13 @@ which.high.effect <- sapply(plot.response, function(x) which.max(apply(x, 2, fun
 high.kl.effect <- which(which.high.effect == 2)
 low.kl.effect <- which(which.high.effect == 1)
 
-high.enrich <- gost(hub.names[high.kl.effect], organism = "mmusculus")
-low.enrich <- gost(hub.names[low.kl.effect], organism = "mmusculus")
-plot.enrichment(high.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho effect at high expression")
-#quartz()
-plot.enrichment(low.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho effect at low expression")
-
+if(!offline){
+    high.enrich <- gost(hub.names[high.kl.effect], organism = "mmusculus")
+    low.enrich <- gost(hub.names[low.kl.effect], organism = "mmusculus")
+    plot.enrichment(high.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho effect at high expression")
+    #quartz()
+    plot.enrichment(low.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Klotho effect at low expression")
+}
 
 #pdf("~/Desktop/hub_Klotho_response_low.pdf", width = 15, height = 12)
 par(mfrow = c(4,5))
@@ -4448,45 +4631,46 @@ down.with.kl <- which(low.expr < 0)
 #cat(names(up.with.kl), sep = "\n")
 #cat(names(down.with.kl), sep = "\n")
 
-#up.enrich <- gost(names(up.with.kl), organism = "mmusculus")
-#down.enrich <- gost(names(down.with.kl), organism = "mmusculus")
 
-up.enrich <- gost(names(up.with.kl), organism = "mmusculus", evcodes = TRUE, sources = "GO")
-down.enrich <- gost(names(down.with.kl), organism = "mmusculus", evcodes = TRUE, sources = "GO")
+if(!offline){
+    #up.enrich <- gost(names(up.with.kl), organism = "mmusculus")
+    #down.enrich <- gost(names(down.with.kl), organism = "mmusculus")
+    up.enrich <- gost(names(up.with.kl), organism = "mmusculus", evcodes = TRUE, sources = "GO")
+    down.enrich <- gost(names(down.with.kl), organism = "mmusculus", evcodes = TRUE, sources = "GO")
 
-go.parts <- c("GO:CC", "GO:MF", "GO:BP")
+    go.parts <- c("GO:CC", "GO:MF", "GO:BP")
 
-pdf(file.path(results.dir, paste0("GO_gene_net_", carrier.text, ".pdf")), width = 30, height = 20)
-    up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000,
-        plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
-        mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
-    
-    down.net <- go_gene_net(down.enrich, plot.results = TRUE, 
-        max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
-        mtext("Down in Klotho", side = 3, outer = TRUE, line = -2.5) 
-dev.off()
-
-for(i in 1:length(go.parts)){
-    pdf(file.path(results.dir, paste0(gsub(":", "_", go.parts[i]), "_net.pdf")), width = 15, height = 10)
-    up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000, filter.source = go.parts[i],
-        plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
-        mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
-    
-    down.net <- go_gene_net(enrichment.result = down.enrich, plot.results = TRUE, 
-        filter.source = go.parts[i],
-        max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
-        mtext("Down in Klotho", side = 3, outer = TRUE, line = -2.5) 
+    pdf(file.path(results.dir, paste0("GO_gene_net_", carrier.text, ".pdf")), width = 30, height = 20)
+        up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000,
+            plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
+            mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
+        
+        down.net <- go_gene_net(down.enrich, plot.results = TRUE, 
+            max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
+            mtext("Down in Klotho", side = 3, outer = TRUE, line = -2.5) 
     dev.off()
+
+    for(i in 1:length(go.parts)){
+        pdf(file.path(results.dir, paste0(gsub(":", "_", go.parts[i]), "_net.pdf")), width = 15, height = 10)
+        up.net <- go_gene_net(enrichment.result = up.enrich, max.term.size = 3000, filter.source = go.parts[i],
+            plot.results = TRUE, min.vertex.size = 2, max.vertex.size = 8)
+            mtext("Up in Klotho", side = 3, outer = TRUE, line = -2.5)    
+        
+        down.net <- go_gene_net(enrichment.result = down.enrich, plot.results = TRUE, 
+            filter.source = go.parts[i],
+            max.term.size = 3000, min.vertex.size = 2, max.vertex.size = 8)
+            mtext("Down in Klotho", side = 3, outer = TRUE, line = -2.5) 
+        dev.off()
+    }
+
+    plot.enrichment(up.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
+    par(mfrow = c(1,2))
+    plot.enrichment.wordcloud(up.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
+
+    plot.enrichment(down.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Downregulated by VS in low Srsf5 Conditions")
+    par(mfrow = c(1,2))
+    plot.enrichment.wordcloud(down.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
 }
-
-plot.enrichment(up.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
-par(mfrow = c(1,2))
-plot.enrichment.wordcloud(up.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
-
-plot.enrichment(down.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Downregulated by VS in low Srsf5 Conditions")
-par(mfrow = c(1,2))
-plot.enrichment.wordcloud(down.enrich, num.terms = 30, max.term.size = 3000, plot.label = "Upregulated by VS in low Srsf5 Conditions")
-
 
 conn.homologs <- orthos[match(u_conn, orthos[,"Mouse.Ortholog.Name"]), "Human.Gene.Name"]
 agora.list <- read.csv(here("Data", "Human", "agora-gene-list.csv"), comment.char = "#")
@@ -4651,8 +4835,11 @@ term.name <- "ECM-receptor interaction : Synapse"
 term.name <- "Ras signaling pathway : APP Metabolism"
 
 int.genes <- plot_individual_genes(intersection.name = term.name)
-int.enrich <- gost(int.genes, organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "HP", "CORUM"))
-plot.enrichment(int.enrich, max.term.size = 3000, num.terms = 30, plot.label = term.name)
+
+if(!offline){
+    int.enrich <- gost(int.genes, organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "HP", "CORUM"))
+    plot.enrichment(int.enrich, max.term.size = 3000, num.terms = 30, plot.label = term.name)
+}
 
 ```
 
@@ -4797,9 +4984,11 @@ plot_individual_genes(gene.list = names(sig.gene))
 deg <- read.delim(file.path(results.dir, "DEG_clusters_carriers.txt"))
 plotVenn(list("DEx" = names(sig.gene), "DEG" = rownames(deg)))
 
-enrich <- gost(names(sig.gene), organism = "mmusculus", source = "GO")
-plot.enrichment(enrich, plot.label = "Enrichment of genes with differential exon usage", 
-    max.term.size = 3000, num.terms = 30, max.char = 100)
+if(!offline){
+    enrich <- gost(names(sig.gene), organism = "mmusculus", source = "GO")
+    plot.enrichment(enrich, plot.label = "Enrichment of genes with differential exon usage", 
+        max.term.size = 3000, num.terms = 30, max.char = 100)
+}
 ```
 
 ```{r protein_comparison, eval = FALSE}
@@ -4843,8 +5032,9 @@ imageWithText(ad.tx.mean[row.order,], show.text = FALSE, split.at.vals = TRUE,
     col.text.adj = 0.5)
 
 short.ad.stats <- lapply(rownames(ad.tx.mean), function(x) gene_vioplot(x, return.stats = TRUE, plot.results = FALSE))
-short.ad.effect <- sapply(short.ad.stats, function(x) x$linear.effect.size)
-short.ad.p <- sapply(short.ad.stats, function(x) x$linear.effect.p)
+short.ad.effect <- sapply(short.ad.stats, function(x) x["linear.effect.size"])
+short.ad.p <- sapply(short.ad.stats, function(x) x["linear.effect.p"])
+short.ad.r2 <- sapply(short.ad.stats, function(x) x["r2"])
 
 stat.table <- cbind(ad.tx.mean, "effect" = short.ad.effect, "p" = short.ad.p)
 
@@ -4855,7 +5045,10 @@ write_table_with_header(stat.table[row.order,], row.names = TRUE,
 
 if(final.params){
     sig.text <- rep("", length(short.ad.p))
-    sig.text[which(short.ad.p <= 0.01)] <- "*"
+    #sig.text[which(short.ad.p <= 0.01)] <- "*"
+    sig.text[which(short.ad.r2 >= minr2)] <- "*"
+    label.font <- rep(1, length(short.ad.p))
+    label.font[which(short.ad.r2 >= minr2)] <- 2
     png(here("Results", "for_paper", "AD-related_expression_matrix.png"), width = 8, height = 3, units = "in", res = 300)
     par(mar = c(6,4,4,2), bg = NA)
     imageWithText(t(ad.tx.mean[row.order,]), show.text = FALSE, split.at.vals = TRUE,
@@ -4867,7 +5060,8 @@ if(final.params){
         draw.rectangle(min.x = plot.dim[1]-0.8, max.x = 0.2, min.y = length(geno.cols)-i+0.6, max.y = length(geno.cols)-i+1.4,
             border.col = geno.cols[i], lwd = 3)
     }
-    text(x = 1:length(short.ad.p), y = rep(plot.dim[4]+0.1, length(short.ad.p)), labels = sig.text[row.order])
+    
+    text(x = 1:length(short.ad.p), y = rep(plot.dim[4]+0.1, length(short.ad.p)), labels = sig.text[row.order], cex = 1.2)
     dev.off()
 }
 ```
@@ -4895,7 +5089,80 @@ get_ortho <- function(gene.name, target = "mouse"){
 gene.name <- "RPS6KB1" #"S6k1"
 gene.name <- "Irs1"
 gene.name <- "Fis1"
-gene.id <- get_ortho(gene.name)
+gene.name <- c("Trem2", "Tyrobp")
+gene.name <- c("Ppp1r3c", "Aldh1l1", "Plcd4", "Mlc1", "Cbs") #astrocytes from pmid 37803069
+gene.name <- c("Trem2", "Ccl4", "Csf1r", "Cd14", "Tyrobp") #microglia from pmid 37803069
+gene.name <- c("Olig1", "Mag", "Cldn11", "Ugt8a", "Mbp") #oligodendrocytes from pmid 37803069
+gene.name <- c("Tubb5", "Reln", "Vip", "Syt1", "Pcsk1") #nueurons from pmid 37803069
+gene.name <- c("Tek", "Emcn", "Cdh5", "Ptprb")
+gene.id <- t(sapply(gene.name, get_ortho))
+#gene.id <- get_ortho(gene.name)
 #gene.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene.name), "ensembl_gene_id"]
-plot_individual_genes(gene.list = gene.id[,"id"], order.by = "means")
+plot_individual_genes(gene.list = unlist(gene.id[,"id"]), order.by = "means")
+
+png("~/Desktop/amyloid_beta_formation.png", width = 12, height = 7, units = "in", res = 300)
+plot_individual_genes(gene.list = sub.bd.list$"APP Metabolism"$"amyloid-beta formation", order.by = "means")
+dev.off()
+```
+
+It was interesting that the RNA spliceosome was the top-ranked
+overal biodomain, but didn't show up in the biodomain-kegg 
+intersectional analysis. Here we look at the effects of each
+of the spliceosome intersections to investigate why this is.
+
+```{r spliceosome, fig.width = 12, fig.height = 7}
+spliceosome.list <- kegg.bd.list$"RNA Spliceosome"
+splice.results <- vector(mode = "list", length = length(spliceosome.list))
+names(splice.results) <- names(spliceosome.list)
+#pdf("~/Desktop/spliceosome.pdf", width = 12, height = 7)
+for(i in 1:length(spliceosome.list)){
+    splice.results[[i]] <- plot_individual_genes(gene.list = spliceosome.list[[i]], 
+        order.by = "means", return.full.result = TRUE, plot.label = names(spliceosome.list)[i])
+}
+#dev.off()
+```
+
+We collected the stats from these test and show the volcano plot below.
+
+```{r splice_results}
+splice.effect <- sapply(splice.results, function(x) x$vioplot_results["linear.effect.size"])
+splice.p <- sapply(splice.results, function(x) x$vioplot_results["linear.effect.p"])
+splice.r2 <- sapply(splice.results, function(x) x$vioplot_results["r2"])
+xmax <- 0.9
+xmin <- -0.4
+
+plot(splice.effect, -log10(splice.p), xlim = c(xmin, xmax), pch = 16)
+text(splice.effect, -log10(splice.p), labels = names(splice.effect), pos = 4)
+abline(v = 0)
+
+plot(splice.effect, splice.r2, xlim = c(xmin, xmax), pch = 16)
+text(splice.effect, splice.r2, labels = names(splice.effect), pos = 4)
+
+splice.idx <- grep("RNA Spliceosome", names(intersect.adj.p))
+intersect.adj.p[splice.idx]
+```
+
+The most significantly differentially expressed intersections for RNA Spliceosome
+were with the KEGG pathway were "RNA degradation", and "Spliceosome." These both
+looked different, but didn't quite make the p value cutoff for significance in our
+intersectional analysis. We show these below for a a supplementary figure.
+
+```{r supp_spliceosome}
+png(here("Results", "for_paper", "Spliceosome_degradation_for_viol.png"), width = 11, height = 5.5, units = "in", res = 300)
+par(bg = NA)
+spliceosome.degradation.result <- plot_individual_genes(intersection.name = "RNA degradation : RNA Spliceosome", 
+    plot.type = "individual", order.by = "means", stat.x = 0.03, return.full.result = TRUE,
+    stat.y = 0.9, label.nudge = -0.1, cex.lab = 1.2, stat.y.spread = 0.2)
+dev.off()
+
+png(here("Results", "for_paper", "Spliceosome_spliceosome_for_viol.png"), width = 11, height = 5.5, units = "in", res = 300)
+par(bg = NA)
+spliceosome.spliceosome.result <- plot_individual_genes(intersection.name = "Spliceosome : RNA Spliceosome", 
+    plot.type = "individual", order.by = "means", stat.x = 0.03, return.full.result = TRUE,
+    stat.y = 0.9, label.nudge = -0.1, cex.lab = 1.2, stat.y.spread = 0.2)
+dev.off()
+
+paper.stats$spliceosome.degradation = spliceosome.degradation.result$vioplot_results
+paper.stats$spliceosome.spliceosome = spliceosome.spliceosome.result$vioplot_results
+saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
 ```

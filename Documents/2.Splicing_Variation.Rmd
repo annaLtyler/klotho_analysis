@@ -68,7 +68,7 @@ general.data.dir <- here("Data", "general")
 
 carrier.text <- "carriers" #this is always set to carriers to maximize n in each group
 
-#test by genotoype
+#test by genotype
 test.factor = "genotype"; ref.geno <- "FC"; alt.geno <- "VS"
 
 #or by high and low expression levels of a gene
@@ -309,26 +309,6 @@ padj <- getAdjustedPValues(stageRObj, order = TRUE, onlySignificantGenes = FALSE
 #head(padj)
 ```
 
-```{r effect_size, eval = FALSE}
-# Extract fitted proportions
-gene.name <- "Stxbp5"
-gene.id <- which(tx.gene.info[,"external_gene_name"])
-ref.id <- rownames(plotting.df)[which(plotting.df$ordered_geno == ref.geno)]
-alt.id <- rownames(plotting.df)[which(plotting.df$ordered_geno == alt.geno)]
-props <- proportions(d)
-u_gene <- unique(props[,"gene_id"])
-for(i in 1:length(u_gene)){
-  gene.idx <- which(props[,"gene_id"] == u_gene[i])
-  tr.ref.props <- props[gene.idx,ref.id]
-  tr.alt.props <- props[gene.idx,alt.id]
-  z.ref.prop <- apply(tr.ref.props, 1, scale)
-  z.alt.prop <- apply(tr.alt.props, 1, scale)
-  ref.mean <- rowMeans(tr.ref.props)  
-  alt.mean <- rowMeans(tr.alt.props)  
-  barplot(rbind(ref.mean, alt.mean), beside = TRUE)
-  plot.grouped.boxes(list("ref" = z.ref.prop, "alt" = z.alt.prop), type = "matrix")
-}
-```
 
 
 ```{r select_sig}
@@ -353,6 +333,9 @@ u_gene <- unique(padj[,"geneID"])
 gene.idx <- match(u_gene, padj[,"geneID"])
 qqunif.plot(padj[gene.idx,"gene"], plot.label = "Adjusted p values of genes")
 abline(h = -log10(alpha))
+
+paper.stats <- list("alpha" = alpha, "num.sig" = length(sig.genes))
+saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_exon_usage.RDS"))
 ```
 
 ## Enrichments
@@ -369,7 +352,13 @@ related to synaptic genes.
 sig.enrich <- gost(sig.genes, organism = "mmusculus", sources = c("GO", "KEGG", "REACTOME", "CORUM", "HP"))
 plot.enrichment(sig.enrich, plot.label = "Enrichment of alternatively spliced genes",
   num.terms = 30, max.term.size = 3000)
+
+#library(stringr);library(wordcloud)
+#par(mfrow = c(1,2))
+#plot.enrichment.wordcloud(sig.enrich, plot.label = "Enrichment of alternatively spliced genes", num.terms = 30, max.term.size = 3000)
 ```
+
+
 
 We also plotted out GO term networks showing how the significant
 genes related to different GO categories (cellular compartment, 
@@ -437,7 +426,7 @@ if(length(n.examples) > 0){
 ```
 
 ```{r spec_gene, eval = FALSE}
-gene.name = "Synj1"
+gene.name = "Grin2b"
 
 pdf(paste0("~/Desktop/", gene.name, ".pdf"), width = 7, height = 7)
 gene.id <- tx.info[match(gene.name, tx.info[,"external_gene_name"]), "ensembl_gene_id"]
@@ -594,8 +583,7 @@ conn.id <- tx.info[match(srsf5.conn, tx.info[,"external_gene_name"]), "ensembl_g
 conn.p <- padj[match(conn.id, padj[,"geneID"]), "gene"]
 names(conn.p) <- srsf5.conn
 barplot(-log10(conn.p), 
-  main = "-log10(p) for differential exon usage\nof genes connected to Srsf5",
-  ylim = c(0, -log10(0.01)))
+  main = "-log10(p) for differential exon usage\nof genes connected to Srsf5")
 abline(h = -log10(0.05), lty = 2)
 ```
 

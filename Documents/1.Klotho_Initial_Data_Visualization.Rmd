@@ -46,13 +46,16 @@ expression.type = "gene"; id_col = "ensembl_gene_id"
 
 min.term.size <- 10 #minimum number of genes allowed in a term
 fdr.thresh <- 0.05 #fdr for differentially expressed genes
+paper.stats <- list("fdr.thresh" = fdr.thresh, "min.term.size" = min.term.size) #initialize an object for keeping track of stats that go in the paper
+klotho.stats <- list() #this object is for the effects of each factor on Klotho expression. We run these in the full group
+                            #so it needs to be saved separately from the stats only run in the 12-month group
 
 args <- commandArgs(trailingOnly=T)
 subgroup <- args[2]
 
 if(is.na(subgroup)){
-  #subgroup <- "all ages"
-  subgroup <- list("age_batch" = 12)
+  subgroup <- "all ages"
+  #subgroup <- list("age_batch" = 12)
   #subgroup <- list("age_batch" = 4)
   #subgroup <- list("age_batch" = 4, "sex_ge" = "Female") #example with more than one filter
 }
@@ -77,7 +80,7 @@ remove.qc <- TRUE #if 1a_Klotho_QC.Rmd has been run, and animals were identified
 
 ordered.geno <- c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
 
-use.carrier.status <- FALSE #if true, fits models with the ordered factor FC > WT > VS
+use.carrier.status <- TRUE #if true, fits models with the ordered factor FC > WT > VS
                           #if false, fits models with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
 if(use.carrier.status){
   geno.used = c("FC, WT, VS"); carrier.text = "carriers"
@@ -157,7 +160,7 @@ geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("synapser", "pheatmap", "DESeq2", "DT", "vioplot", "RColorBrewer",
   "gprofiler2", "cluster", "pathview", "clusterProfiler", "stringr", "igraph", "wordcloud",
-  "wordcloud2", "easyPubMed")
+  "wordcloud2", "easyPubMed", "tm")
 load_libraries(needed.libraries)
 ```
 
@@ -954,95 +957,62 @@ if(expression.type == "transcript"){
   ylab = "Kl transcript 2", main = "Correlation of Kl transcripts")
 }
 
-plot_tx_with_factor <- function(expr.mat, covar.table, tx_name, factor_name, 
-  ylab = "Count", tx_label = "Transcript", pt_col = "#c51b8a", cex.labels = 1){
-    
-    #make a dummy matrix to adjust expression 
-    factor.idx <- which(colnames(covar.table) == factor_name)
-    is_numeric <- which(sapply(1:ncol(covar.table), function(x) length(levels(covar.table[,x]))) == 0)
-
-    #dummy_covar will convert anything that is a factor to a dummy
-    dummy.mat <- dummy_covar(covar.table[,-c(factor.idx)])
-    #tack on any numeric covariates
-    if(length(is_numeric) > 0){
-      dummy.mat <- as.matrix(cbind(dummy.mat, covar.mat[,is_numeric,drop=FALSE]))
-    }
-
-
-  for(i in 1:length(tx_name)){
-
-    if(is.factor(covar.mat[,factor_name])){
-      model <- lm(expr.mat[tx_name[i],]~covar.table[,factor_name])
-      model.p <- signif(anova(model)$"Pr(>F)"[1], 2)
-      vioplot(expr.mat[tx_name[i],]~covar.table[,factor_name], xlab = "", 
-        main = paste(tx_label[i], "\np =", model.p), col = "lightgray",
-        cex.names = cex.labels, cex.axis = cex.labels, ylab = "")
-      mtext(ylab, side = 2, line = 2.5, cex = cex.labels)
-      stripchart(expr.mat[tx_name[i],]~covar.table[,factor_name], 
-        col = pt_col, vertical = TRUE, pch = 16, method = "jitter", add = TRUE)
-    }
-    if(is.numeric(covar.mat[,factor_name])){
-      model <- lm(expr.mat[tx_name[i],]~as.numeric(covar.table[,factor_name]))
-      model.p <- signif(anova(model)$"Pr(>F)"[1], 2)
-      vioplot(expr.mat[tx_name[i],]~as.numeric(covar.table[,factor_name]), xlab = "", 
-        main = paste(tx_label[i], "\np =", model.p), col = "lightgray",
-        cex.names = cex.labels, cex.axis = cex.labels, ylab = "")
-      mtext(ylab, side = 2, line = 2.5, cex = cex.labels)
-      stripchart(expr.mat[tx_name[i],]~as.numeric(covar.table[,factor_name]), 
-        col = pt_col, vertical = TRUE, pch = 16, method = "jitter", add = TRUE)
-    }
-  }
-}
 ```
 
 ### Genotype
 
 ```{r klotho_genotype, fig.width = 8, fig.height = 8}
+
 plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
   tx_name = tx.id, tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
   ylab = "Expression (A.U.)", order.by.mean = FALSE)
 
-if(final.params){
+age.varies <- length(unique(covar.mat[,"age_batch"])) > 1
+
+if(age.varies && use.carrier.status){ #report Klotho stats in paper for whole group
   pdf(here("Results", "for_paper", 
     paste0("Klotho_expression_by_genotype_", basename(results.dir), "_months.pdf")), 
-    width = 4, height = 6)
+    width = 5.5, height = 5)
     par(bg = NA)
-  plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
-    tx_name = tx.id, "ordered_geno", 
+  geno.stats <- plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
+    tx_name = tx.id, "ordered_geno", group.cols = geno.cols, 
     tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
-    ylab = "Expression (A.U.)", order.by.mean = FALSE)
+    ylab = "Expression (A.U.)", order.by.mean = FALSE, cex.labels = 1.5,
+    cex.axis = 1.2, 
+    label.shift = -0.7, stat.x = 0.1, stat.y = 0.25, stat.y.spread = 0.18)
   dev.off()
+
+  klotho.stats$geno_effect_on_Kl <- geno.stats
 }
 ```
-
 
 ### Sex
 
 ```{r klotho_sex, fig.width = 8, fig.height = 4}
 par(mfrow =  c(1,2))
 plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
-  tx_name = tx.id, factor_name = "sex_ge", 
-  tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
-  ylab = "Expression (A.U.)")
+  tx_name = tx.id, factor_name = "sex_ge", tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
+  ylab = "Expression (A.U.)", stat.x = 0.02, stat.y = 0.2, autoflip.stat.y = FALSE)
 
-if(final.params){
+if(age.varies && use.carrier.status){ #report Klotho stats in paper for whole group
   pdf(here("Results", "for_paper", 
     paste0("Klotho_expression_by_sex_", basename(results.dir), "_months.pdf")), 
     width = 5, height = 5)
     par(bg = NA)
-  plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
-    tx_name = tx.id, factor_name = "sex_ge", 
-    tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
-    ylab = "Expression (A.U.)", cex.labels = 1.5)
+  sex.stats <- plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
+    tx_name = tx.id, factor_name = "sex_ge", tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
+    ylab = "Expression (A.U.)", cex.labels = 1.5, cex.axis = 1.2, stat.x = 0.35, stat.y = 0.2)
   dev.off()
+
+  #should we report sex effects for group overall, or just 12-month old mice?
+  klotho.stats$sex_effect_on_Kl <- sex.stats
 }
 ```
 
 ### Age
 
 ```{r klotho_age, fig.width = 8, fig.height = 4}
-age.varies <- length(unique(covar.mat[,"age_batch"])) > 1
-if(age.varies > 0){
+if(age.varies){
   par(mfrow = c(1,2))
   plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
     tx.id, "age_batch", paste0("Kl Transcript", 1:length(tx.id)), 
@@ -1051,17 +1021,22 @@ if(age.varies > 0){
   plot.text("Age does not vary in this population")
 }
 
-if(age.varies > 0 && use.carrier.status){
+if(age.varies && use.carrier.status){
+  #this is only run if we are looking at all ages, so we need to write 
+  #out the results separately
+
   pdf(here("Results", "for_paper", 
-    paste0("Klotho_expression_by_sex_", basename(results.dir), "_months.pdf")), 
+    paste0("Klotho_expression_by_age_", basename(results.dir), "_months.pdf")), 
     width = 5, height = 5)
     par(bg = NA)
-  age.varies <- which(colnames(covar.mat) == "age_batch")
-  plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
+  age.stats <- plot_tx_with_factor(expr.mat = scaled.expr, covar.table = covar.mat, 
     tx_name = tx.id, factor_name = "age_batch",
-    tx_label = paste0("Kl Transcript", 1:length(tx.id)), 
-    ylab = "Expression (A.U.)", cex.label = 1.5)
+    tx_label = paste0("Kl Transcript", 1:length(tx.id)), cex.axis = 1.2,
+    ylab = "Expression (A.U.)", cex.label = 1.5, stat.x = 0.37, stat.y = 0.2)
   dev.off()
+
+  klotho.stats$age_effect_on_Kl <- age.stats
+  saveRDS(klotho.stats, here("Results", "for_paper", "paper_stats_Klotho_effects.RDS"))
 }
 ```
 
@@ -1262,9 +1237,9 @@ num.sig <- sapply(sig.factor, length)
 par(mar = c(12, 4, 4, 2))
 barplot_with_num(num.sig, las = 2, ylab = "Count")
 
-if(final.params){
-  saveRDS(num.sig, here("Results", "for_paper", paste0("num_de_", basename(results.dir), ".RDS")))
-}
+#run with each age group. The results are written to the paper
+#results directory so we can collect them easily
+saveRDS(num.sig, here("Results", "for_paper", paste0("num_de_", basename(results.dir), ".RDS")))
 ```
 
 The following heat map shows enrichments for genes that were
@@ -1341,9 +1316,12 @@ if(length(sex.geno.col) > 0){
 #all parameter iterations are written out to compare later
 #for the paper, so these are written regardless of whether
 #final.params is TRUE or FALSE
+
 de.files <- get.files(here("Results", "for_paper"), want = c("num_de", "RDS"), full.names = TRUE)
 factor.labels <- c("sex_ge" = "sex", "ordered_geno" = "Klotho genotype", "age_batch" = "age")
 
+#run this workflow for age = 4 months, age = 12 months, and age = all 
+#to generate all files for the table in the paper.
 if(length(de.files) > 1){
   num.de <- lapply(de.files, readRDS)
   names(num.de) <- gsub(".RDS", "", gsub("num_de_", "", basename(de.files)))
@@ -1362,15 +1340,39 @@ if(length(de.files) > 1){
     colnames(count.table) <- gsub(names(factor.labels)[i], factor.labels[i], colnames(count.table))
   }
 
-  write.table(count.table, here("Results", "for_paper", "num_de_table.txt"), 
+  #remove the Ide columns. We don't care about those
+  ide.col <- grep("Ide", colnames(count.table))
+  #convert "genotype" to "haplotype" to match paper convention
+  colnames(count.table) <- gsub("genotype", "haplotype", colnames(count.table))
+  #convert Klotho to Kl
+  colnames(count.table) <- gsub("Klotho", "Kl", colnames(count.table))
+  #change "group" to "cohort"
+  colnames(count.table)[1] <- "Cohort"
+  #change rownames to be more readable
+  count.table[,1] <- c("12 months", "4 months", "All")
+  #reorder rows to be 4, 12, all
+  write.table(count.table[c(2,1,3),-ide.col], here("Results", "for_paper", "num_de_table.txt"), 
     row.names = FALSE, na = "--", quote = FALSE, sep = "\t")
 
   #cd to ~/Documents/git_repositories/LaTeX-Table-Generator
   #run python3 table_generator.py
+  #path to file: /Users/atyler/Documents/Projects/Klotho/klotho_analysis/Results/for_paper/num_de_table.txt
+  #output name: de_table
   #move the result from Outputs to the for_paper directory
+  #mv Outputs/de_table.tex /Users/atyler/Documents/Projects/Klotho/klotho_analysis/Results/for_paper/
   #open the file and paste the table into the manuscript document
   #paste the result into LaTeXit to test if needed.
+  #add row and column separators and make all row and column labels bold
+
+  #add stats to our paper stats object
+  paper.stats$deg_12 <- as.numeric(count.table["age_batch_12_gene","Kl haplotype"])
+  paper.stats$deg_4 <- as.numeric(count.table["age_batch_4_gene","Kl haplotype"])
 }
+
+#write out paper stats
+#this directory has a symbolic link to the paper directory, so we can 
+#pull from it directly.
+saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_DEG.RDS"))
 ```
 
 ## DEG by genotype
@@ -1421,6 +1423,11 @@ write.table(gene.stat.table,
   file.path(results.dir, paste0("DEG_clusters_", carrier.text, ".txt")), 
   sep = "\t", quote = FALSE)
 
+
+if(final.params){
+  write_table_with_header(gene.stat.table, file.path(here("Results", "for_paper", "Fig_2B_Data.txt")),
+    header = "Differentially expressed genes in 12-month old mice with varying Kl haplotypes. Differential expression statistics are reported for each gene along with mean expression values for each haplotype and the cluster assigned to each gene. These data correspond to 2B.")
+}
 ```
 
 If we are looking at all genotypes separately, the following code compares

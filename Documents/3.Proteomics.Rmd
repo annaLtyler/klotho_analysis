@@ -1201,6 +1201,8 @@ test <- sapply(1:nrow(a), function(b) text(x = num.sig[b,]+150, y = a[b,],
 
 write.table(num.sig, here("Results", "for_paper", "num_dap_table.txt"),
 quote = FALSE, sep = "\t")
+
+
 ```
 
 ## Enrichments

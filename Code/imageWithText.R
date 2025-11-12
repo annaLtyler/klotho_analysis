@@ -58,9 +58,8 @@ gridlines = FALSE){
 		}
 		class.mat[which(is.na(mat))] <- NA
 		
-
+		#If there is no class 1, subtract 1 until there is a class 1
 		if(is.null(color.dist) && !global.color.scale){
-			#If there is no class 1, subtract 1 until there is a class 1
 			while(min(class.mat, na.rm = TRUE) > 1){class.mat <- class.mat - 1}
 		}
 		
@@ -70,6 +69,24 @@ gridlines = FALSE){
 			classes <- sort(unique(dist.class))
 		}
 		num.classes <- length(classes)
+
+		#if the classes listed are not consecutive, fix this
+		if(num.classes != max(classes)){
+			ref.class.mat <- cbind(1:num.classes, classes)
+			fixed.class.mat <- class.mat
+			for(i in 1:num.classes){
+				correct.class <- ref.class.mat[i,1]
+				old.class <- ref.class.mat[i,2]
+				fixed.class.mat[which(class.mat == old.class)] <- correct.class
+			}
+			class.mat <- fixed.class.mat
+		}
+		#recalculate classes
+		if(is.null(color.dist)){
+			classes <- sort(unique(as.vector(class.mat)))
+		}else{
+			classes <- sort(unique(dist.class))
+		}
 
 		if(num.classes == 1 && !global.color.scale){
 			class.mat <- matrix(1, nrow(mat), ncol(mat))
@@ -109,15 +126,12 @@ gridlines = FALSE){
 			dir.list[[1]] <- 1:max.col
 			dir.list[[2]] <- max.col:1
 			}
-			
-			
+						
 		if(grad.dir == "ends"){
 			if(length(dir.list) != 2){stop("I can only color the ends if there are exactly two classes")}
 			dir.list[[1]] <- max.col:1
 			dir.list[[2]] <- 1:max.col
 			}
-
-
 
 		#============================================================================
 		#internal functions
@@ -173,6 +187,8 @@ gridlines = FALSE){
 					min.cl <- class.list[classes[cl]]
 					max.cl <- class.list[(classes[cl]+1)]
 				}else{
+					#base the color on what is represented in the class. This 
+					#is a problem, though, if 
 					if(length(which(class.mat == classes[cl])) > 0 && !all(is.na(mat[which(class.mat == classes[cl])]))){
 						min.cl <- min(mat[which(class.mat == classes[cl])], na.rm = TRUE)
 						max.cl <- max(mat[which(class.mat == classes[cl])], na.rm = TRUE)
@@ -203,7 +219,7 @@ gridlines = FALSE){
 						ColorLevels <- custom.color.fun(class.dist)
 						#}
 						#plot(ColorLevels, 1:length(ColorLevels))
-						}
+					}
 	
 					#plot(ColorLevels)
 
@@ -246,6 +262,7 @@ gridlines = FALSE){
 			ColorRamp <- pheatmap:::scale_colours(mat, col=pal, breaks=bks, na_col = na.col)
 		}else{
 			ColorRamp = fill.color.ramp(mat, class.mat, global.color.scale)
+			ColorRamp[which(is.na(ColorRamp))] <- na.col
 		}
 		 	
 
@@ -304,5 +321,7 @@ gridlines = FALSE){
 			row.text.x <- min(x.coord) - (plot.range*(row.text.shift)) #positive numbers move out of plotting area
 			text(row.text.x, y.coord[,1], labels = rev(row.names), adj = row.text.adj, cex = row.text.cex, srt = row.text.rotation)
 			}
+
+	invisible(col)
 
 	}

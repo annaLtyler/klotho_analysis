@@ -36,16 +36,16 @@ if(is.null(subgroup)){
   results.dir <- here("Results", "all")
 }else{
   subgroup.results <- paste(sapply(1:length(subgroup), 
-    function(x) paste(names(subgroup)[x], subgroup[[x]], sep = "_")), 
+    function(x) paste(names(subgroup)[x], subgroup[[x]], "gene", sep = "_")), 
     collapse = "_")
   results.dir <- here("Results", subgroup.results)
 }
 
 #comparison.type = "Hom" #compares homozygous FC/FC to VS/VS
 #comparison.type = "Het" #compares homozygous WT/FC to WT/VS
-comparison.type = "Carrier" #compares all carriers of VS to carriers of FC alleles
+comparison.type = "Carriers" #compares all carriers of VS to carriers of FC alleles
 
-geno.cols <- c("VS" = "#2b8cbe", "FC" = "#31a354")
+geno.cols <- c("FC" = "#31a354", "WT" = "darkgray", "VS" = "#2b8cbe")
 
 general.data.dir <- here("Data", "general")
 ```
@@ -62,7 +62,7 @@ general.processed.data.dir <- here("Results", "Processed_Data")
 ```
 
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
-needed.libraries <- c("pheatmap", "readxl")
+needed.libraries <- c("pheatmap", "readxl", "knitr")
 load_libraries(needed.libraries)
 ```
 
@@ -71,8 +71,12 @@ load_libraries(needed.libraries)
 mouse.gene.table <- read.table(file.path(general.data.dir, "mouse_gene_info.txt"), sep = "\t", header = TRUE)
 brain_clusters <- read_xlsx(here("Data", "Mouse", "cl.df_CCN202307220.xlsx"), 
     col_names = TRUE, sheet = 1)
-adj.expr <- readRDS(file.path(results.dir, 
-    paste0("Adjusted_Expression_Separated_by_Group_", comparison.type, ".RDS")))
+adj.expr <- readRDS(file.path(results.dir, "processed_data",
+    paste0("Scaled_Expression_", comparison.type, ".RDS")))
+
+mouse.covar.table <- read.csv(file.path(results.dir, "processed_data", "covariates_carriers.csv"))
+hap <- ordered(mouse.covar.table[,"ordered_geno"], levels = c("FC", "WT", "VS"))
+hap.idx <- lapply(levels(hap), function(x) which(hap == x))
 ```
 
 
@@ -85,36 +89,102 @@ and we can go up hierarchically as we go.
 col.headers = c("cluster.markers.combo", "merfish.markers.combo", 
     "cluster.TF.markers.combo", "cluster.markers.combo (within subclass)")
 col.idx <- match(col.headers, colnames(brain_clusters))
-cluster_expr <- vector(mode = "list", length = nrow(brain_clusters))
-names(cluster_expr) <- brain_clusters$cl
+cluster_expr <- matrix(NA, nrow = nrow(brain_clusters), ncol = ncol(adj.expr))
+rownames(cluster_expr) <- brain_clusters$cl
+colnames(cluster_expr) <- colnames(adj.expr)
 for(i in 1:nrow(brain_clusters)){
     cluster_genes <- unique(unlist(strsplit(unlist(brain_clusters[i, col.idx]), ",")))
     gene_id <- mouse.gene.table[match(cluster_genes, mouse.gene.table[,"external_gene_name"]), "ensembl_gene_id"]
-    gene.idx <- lapply(adj.expr, function(x) which(names(colnames(x)) %in% gene_id))
-    group_expr <- lapply(1:length(gene.idx), function(x) adj.expr[[x]][,gene.idx[[x]]])
-    names(group_expr) <- names(adj.expr)
-    cluster_expr[[i]] <- group_expr
-    #boxplot(cluster_expr[[i]])
+    common.id <- intersect(rownames(adj.expr), gene_id)
+    gene_group_expr <- adj.expr[common.id,]
+    mean_group_expr <- colMeans(gene_group_expr)
+    cluster_expr[i,] <- mean_group_expr
+    #plot(mean_group_expr~hap)
 }
 
-cluster_test <- lapply(cluster_expr, function(x) t.test(x[[1]], x[[2]]))
-cluster_table <- t(sapply(cluster_test, function(x) c(x$estimate, x$p.value)))
+cluster_test <- apply(cluster_expr, 1, function(x) lm(x~hap))
+cluster_table <- t(sapply(cluster_test, function(x) c(coef(summary(x))["hap.L", "Estimate"], coef(summary(x))["hap.L", "Pr(>|t|)"])))
 #head(cluster_table)
-colnames(cluster_table) <- c(names(adj.expr), "p_value")
-#plot(cluster_table[,1:2])
+colnames(cluster_table) <- c("estimate", "p_value")
+```
 
+The following volcano plot shows the distributions of effect sizes
+and p values for the cluster types.
+
+```{r cluster_volcano}
+plot(cluster_table[,1], -log10(cluster_table[,2]), xlab = "effect", ylab = "-log10(p)")
+adj.p <- p.adjust(cluster_table[,2], method = "fdr")
+sig.idx <- which(adj.p <= 0.01)
+#length(sig.idx)
+sig.cl <- brain_clusters[sig.idx,]
 ```
 
 The following plot shows the number of cell types per class.
 
 ```{r subtypes, fig.width = 5, fig.height = 7}
-classes <- as.vector(brain_clusters$class_label)
-supertypes <- as.vector(brain_clusters$supertype_label)
-u_class <- unique(classes)
+num.type <- apply(brain_clusters, 2, function(x) length(unique(x)))
 
-par(mar = c(4,12,2,2))
-barplot(sort(sapply(u_class, function(x) length((which(classes == x))))), las = 2, 
-    horiz = TRUE, xlab = "Number of cell types")
+pdf("~/Desktop/types.pdf", width = 10, height = 20)
+par(mar = c(4, 18, 4, 2))
+barplot(sort(num.type), las = 2, horiz = TRUE)
+dev.off()
+
+
+
+id_labels <- as.vector(brain_clusters$cluster_id_label) #unique ID for each row
+#use.class <- "subclass_label" #significant cluster type: L4/5 IT CTX Glut
+use.class <- "class_id_label" #several significant clusters: IT-ET Glut, TH Glut, OPC-Oligo
+#use.class <- "nt_type_label" #nothing significant
+#use.class <- "CTX.neighborhood_label" #one significant: L4_5_6_IT_Car3
+
+
+col.num <- which(colnames(brain_clusters) == use.class)
+all.class <- unlist(brain_clusters[,col.num])
+u_class <- unique(all.class)
+
+#cluster the IDs into classes
+class.list <- lapply(u_class, function(x) id_labels[which(all.class == x)])
+names(class.list) <- u_class
+
+logp <- -log10(cluster_table[,2])
+names(logp) <- id_labels
+sorted.logp <- sort(logp, decreasing = TRUE)
+
+enrich.class <- fgsea::fgseaMultilevel(pathways = class.list, 
+  stats = sorted.logp, minSize=15, maxSize=600, gseaParam = 1, scoreType = "pos")
+
+sig.idx <- which(enrich.class$padj <= 0.1)
+table.order <- order(enrich.class$padj, decreasing = FALSE)
+#kable(enrich.class[head(table.order),])
+sig.table <- enrich.class[sig.idx,]
+kable(sig.table)
+
+class.nes <- enrich.class$NES
+names(class.nes) <- enrich.class$pathway
+
+#par(mar = c(4,12,2,2))
+#barplot(sort(class.nes), las = 2, horiz = TRUE)
+```
+
+The following plot shows expression by group of the genes
+specific to each significant class.
+
+```{r sig_expr, fig.width = 9, fig.height = 3}
+
+par(mfrow = c(1,3))
+for(i in 1:nrow(sig.table)){
+    class.id <- as.character(sig.table[i,"pathway"])
+    class.idx <- which(all.class == class.id)
+    genes.in.class <- unique(unlist(strsplit(unlist(brain_clusters[class.idx, col.idx]), ",")))
+    gene_id <- mouse.gene.table[match(genes.in.class, mouse.gene.table[,"external_gene_name"]), "ensembl_gene_id"]
+    common.id <- intersect(rownames(adj.expr), gene_id)
+    gene_group_expr <- adj.expr[common.id,]
+    mean_group_expr <- colMeans(gene_group_expr)
+    vioplot(mean_group_expr~hap, col = geno.cols, main = class.id)
+    stripchart(mean_group_expr~hap, col = "#c51b8a", add = TRUE, vertical = TRUE, method = "jitter", pch = 16)
+    abline(h = 0)
+}
+
 ```
 
 The following plots show expression differences for different
