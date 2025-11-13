@@ -5103,6 +5103,12 @@ plot_individual_genes(gene.list = unlist(gene.id[,"id"]), order.by = "means")
 png("~/Desktop/amyloid_beta_formation.png", width = 12, height = 7, units = "in", res = 300)
 plot_individual_genes(gene.list = sub.bd.list$"APP Metabolism"$"amyloid-beta formation", order.by = "means")
 dev.off()
+
+pdf(here("Results", "for_paper", "App_Apoe.pdf"), width = 10, height = 4.5)
+par(mfrow = c(1,2))
+gene_vioplot("App", stat.y = 0.25, stat.y.spread = 0.18, label.nudge = -0.08)
+gene_vioplot("Apoe", label.nudge = -0.08, stat.y = 0.9, stat.x = 0.22)
+dev.off()
 ```
 
 It was interesting that the RNA spliceosome was the top-ranked
@@ -5165,4 +5171,18 @@ dev.off()
 paper.stats$spliceosome.degradation = spliceosome.degradation.result$vioplot_results
 paper.stats$spliceosome.spliceosome = spliceosome.spliceosome.result$vioplot_results
 saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
+```
+
+```{r apoe, eval = FALSE}
+#there is an Apoe expression outlier
+test <- gene_vioplot("Apoe", return.stats = FALSE)
+outlier.id <- names(which(test$FC > 1))
+hist(adj_expr[outlier.id,])
+
+#this animal is not an outlier overall
+pt.col <- rep("black", nrow(adj_expr))
+pt.col[which(rownames(adj_expr) == outlier.id)] <- "red"
+plot.decomp(adj_expr, cols = pt.col)
+
+
 ```

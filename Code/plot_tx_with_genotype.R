@@ -4,7 +4,7 @@
 plot_tx_with_genotype <- function(expr.mat, covar.table, tx_name, 
   ylab = "Count", tx_label = "Transcript", pt_col = "#c51b8a",
   plot.results = TRUE, cex.labels = 1, label.shift = -0.5,
-  order.by.mean = TRUE, stat.x = 0.5, stat.y = -2, stat.y.spread = 0.15,
+  order.by.mean = FALSE, stat.x = 0.5, stat.y = -2, stat.y.spread = 0.15,
   autoplace.text = FALSE){
 
   not.genotype <- setdiff(1:ncol(covar.table), grep("geno", colnames(covar.table)))

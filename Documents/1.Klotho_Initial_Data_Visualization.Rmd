@@ -54,8 +54,8 @@ args <- commandArgs(trailingOnly=T)
 subgroup <- args[2]
 
 if(is.na(subgroup)){
-  subgroup <- "all ages"
-  #subgroup <- list("age_batch" = 12)
+  #subgroup <- "all ages"
+  subgroup <- list("age_batch" = 12)
   #subgroup <- list("age_batch" = 4)
   #subgroup <- list("age_batch" = 4, "sex_ge" = "Female") #example with more than one filter
 }
@@ -116,7 +116,7 @@ final.params <- TRUE
 if(expression.type == "transcript"){final.params = FALSE}
 if(min.term.size != 10){final.params = FALSE}
 if(fdr.thresh != 0.05){final.params = FALSE}
-if(length(subgroup) != 1 && subgroup[[1]] != 12){final.params = FALSE}
+if(length(subgroup) != 1 || subgroup[[1]] != 12){final.params = FALSE}
 if(!remove.qc){final.params = FALSE}
 if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC > WT > VS
 if(group.representation != "means"){final.params = FALSE}
@@ -605,8 +605,9 @@ possibility, we added Ide expression as a covariate.
 #variant in B6 animals that affects Ide expression.
 gene.id <- gene.info[which(gene.info[,"external_gene_name"] == "Ide"), id_col]
 gene.idx <- which(rownames(sub.count) %in% gene.id[1]) #use the first transcript. This is the only one expressed at reasonably high levels
-gene.counts <- sub.count[gene.idx,]
-#boxplot(log(t(gene.counts+1)))
+#gene.counts <- sub.count[gene.idx,]
+gene.counts <- assay(vsd)[gene.id,]
+#boxplot(as.numeric(gene.counts))
 scaled.counts <- scale(gene.counts)
 ordered.scaled <- scaled.counts[match(rownames(scaled.counts), rownames(info))]
 #hist(ordered.scaled, breaks = 25)
@@ -936,8 +937,10 @@ saveRDS(norm.expr, file.path(processed.data.dir,
   paste0("Normalized_Expression_", carrier.text, ".RDS")))
 
 
+
 #scale expression so we can compare differences across genes
 scaled.expr <- t(apply(norm.expr, 1, scale))
+#scaled.expr <- norm.expr
 dimnames(scaled.expr) <- dimnames(norm.expr)
 saveRDS(scaled.expr, file.path(processed.data.dir, 
   paste0("Scaled_Expression_", carrier.text, ".RDS")))
@@ -1069,9 +1072,7 @@ for(tx in 1:length(test.genes)){
   }
 
   if(length(tx.present) > 0){
-    transcript.levels <- scaled.expr[tx.present,]
-
-    plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
+      plot_tx_with_genotype(expr.mat = scaled.expr, covar.table = covar.mat, 
       tx_name = tx.present, 
       tx_label = paste(names(test.genes)[tx], "transcript", 1:length(tx.present)), 
       ylab = "Expression (A.U.)")
@@ -1080,6 +1081,7 @@ for(tx in 1:length(test.genes)){
   }
   cat("\n\n")
 }
+stop()
 ```
 
 
