@@ -206,12 +206,13 @@ ad.genes <- read.delim(file.path(results.dir, "AD_genes.txt"), comment.char = "#
 ## Ide
 
 A newly discovered variant in B6 mice affects expression of the
-gene insulin degrading enzyme (Ide) encoded on chromosome 19 at
-37 Mb. This gene has been associated with AD before, and we want
+gene insulin degrading enzyme (\textit{Ide}) encoded on chromosome 
+19 at 37 Mb. This gene has been associated with AD before, and we wanted
 to make sure that variation we see in this experiment is not related
-to untracked variation in Ide. Here we look at Ide expression in our
-mouse population, identify any correlated genes, and add Ide expression
-as a covariate, if specified, in case it is having an effect on our results.
+to untracked variation in \textit{Ide}. Here we look at \textit{Ide} 
+expression in our mouse population, identify any correlated genes, and 
+add \textit{Ide} expression as a covariate, if specified, in case it is 
+having an effect on our results.
 
 The histogram below shows scale Ide expression in out population. 
 There is a clear bimodal distribution. 
@@ -5049,19 +5050,24 @@ if(final.params){
     sig.text[which(short.ad.r2 >= minr2)] <- "*"
     label.font <- rep(1, length(short.ad.p))
     label.font[which(short.ad.r2 >= minr2)] <- 2
+    label.text <- rownames(ad.tx.mean)
+    
     png(here("Results", "for_paper", "AD-related_expression_matrix.png"), width = 8, height = 3, units = "in", res = 300)
     par(mar = c(6,4,4,2), bg = NA)
     imageWithText(t(ad.tx.mean[row.order,]), show.text = FALSE, split.at.vals = TRUE,
         col.scale = c(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends",
         col.text.shift = 0.25, row.text.shift = 0.055, col.text.rotation = 90,
-        col.text.adj = 1, row.text.adj = 0.5)
+        col.text.adj = 1, row.text.adj = 0.5, col.names = rep("", nrow(ad.tx.mean)))
     plot.dim <- par("usr")
     for(i in 1:length(geno.cols)){
         draw.rectangle(min.x = plot.dim[1]-0.8, max.x = 0.2, min.y = length(geno.cols)-i+0.6, max.y = length(geno.cols)-i+1.4,
             border.col = geno.cols[i], lwd = 3)
     }
-    
-    text(x = 1:length(short.ad.p), y = rep(plot.dim[4]+0.1, length(short.ad.p)), labels = sig.text[row.order], cex = 1.2)
+    #add stars    
+    text(x = 1:length(short.ad.p), y = rep(plot.dim[4]+0.1, length(short.ad.p)), labels = sig.text[row.order], cex = 1.5)
+    #add gene labels with bold names for significant
+    text(x = 1:length(short.ad.p), y = rep(plot.dim[3]-0.1, length(short.ad.p)), labels = label.text[row.order], 
+        font = label.font[row.order], srt = 90, adj = 1)
     dev.off()
 }
 ```
@@ -5175,6 +5181,7 @@ saveRDS(paper.stats, here("Results", "for_paper", "paper_stats_BD_results.RDS"))
 
 ```{r apoe, eval = FALSE}
 #there is an Apoe expression outlier
+apoe.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == "Apoe"),"ensembl_gene_id"]
 test <- gene_vioplot("Apoe", return.stats = FALSE)
 outlier.id <- names(which(test$FC > 1))
 hist(adj_expr[outlier.id,])
@@ -5184,5 +5191,12 @@ pt.col <- rep("black", nrow(adj_expr))
 pt.col[which(rownames(adj_expr) == outlier.id)] <- "red"
 plot.decomp(adj_expr, cols = pt.col)
 
+count.data <- read.delim(file.path(mouse.data.dir, "rsem.merged.gene_counts.tsv"))
+apoe.idx <- which(count.data[,"gene_id"] == apoe.id)
+apoe.counts <- unlist(count.data[apoe.idx,3:ncol(count.data)])
+boxplot(apoe.counts)
+boxplot(log2(apoe.counts))
 
+which(apoe.counts < 10000)
+which(apoe.counts > 50000)
 ```

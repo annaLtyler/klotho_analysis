@@ -605,8 +605,8 @@ possibility, we added Ide expression as a covariate.
 #variant in B6 animals that affects Ide expression.
 gene.id <- gene.info[which(gene.info[,"external_gene_name"] == "Ide"), id_col]
 gene.idx <- which(rownames(sub.count) %in% gene.id[1]) #use the first transcript. This is the only one expressed at reasonably high levels
-#gene.counts <- sub.count[gene.idx,]
-gene.counts <- assay(vsd)[gene.id,]
+gene.counts <- sub.count[gene.idx,]
+#gene.counts <- assay(vsd)[gene.id,]
 #boxplot(as.numeric(gene.counts))
 scaled.counts <- scale(gene.counts)
 ordered.scaled <- scaled.counts[match(rownames(scaled.counts), rownames(info))]
@@ -1081,7 +1081,6 @@ for(tx in 1:length(test.genes)){
   }
   cat("\n\n")
 }
-stop()
 ```
 
 
