@@ -19,7 +19,6 @@ and depends on output from that workflow.
 
 ```{r param}
 rm(list = ls())
-
 library(here)
 
 args <- commandArgs(trailingOnly=T)
@@ -152,7 +151,8 @@ if(use.carrier.status){
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("pheatmap", "vioplot", "RColorBrewer", "tm",
   "gprofiler2", "cluster", "pathview", "stringr", "igraph", "wordcloud", 
-  "wordcloud2", "baffle", "parallel", "foreach", "doParallel", "VennDiagram")
+  "wordcloud2", "baffle", "parallel", "foreach", "doParallel", 
+  "VennDiagram", "corto")
 load_libraries(needed.libraries)
 ```
 
@@ -403,8 +403,9 @@ nested_mean_vals <- function(nested_gene_list, expr.mat, organization = c("outer
 
 #label.nudge is a percent of the plot height, negative values nudge down,
 #and positive values nudge up. The baseline is the ymin of the plot.
-test_effect <- function(values, plot.factor, return.text = FALSE,
-    plot.results = FALSE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
+test_effect <- function(values, plot.factor, return.text = FALSE, sci.not = FALSE,
+    sci.thresh = 0.001, p.x.nudge = 0.05, p.y.nudge = 0.01, plot.results = FALSE, 
+    stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
     cex.lab = 1, plot.label = "", ylab = "Expression (A.U.)", autoflip.stat.y = FALSE,
     autoplace.text = FALSE, x.samples = 5, y.samples = 20, text.window.x = 2,
     text.window.y = 4, ylim = NULL, label.nudge = -0.05){
@@ -414,16 +415,13 @@ test_effect <- function(values, plot.factor, return.text = FALSE,
 
     n <- sapply(levels(plot.factor), function(x) length(which(plot.factor == x)))
     r2 <- summary(model)$adj.r.squared
-    p <- threshold_p(anova(model)$"Pr(>F)"[1], sig.dig = 2, return.text = return.text)
+    p <- threshold_p(anova(model)$"Pr(>F)"[1], sig.dig = 2, return.text = FALSE) #a numeric p value
     linear.effect.size <- coefficients(summary(model))["plot.factor.L","Estimate"]
     linear.effect.p <- coefficients(summary(model))["plot.factor.L","Pr(>|t|)"]
     
         if(plot.results){
-            if(return.text){
-                text.p <- p
-            }else{
-                text.p <- threshold_p(p, return.text = TRUE)
-            }
+            text.p <- threshold_p(p, return.text = TRUE, sci.not = sci.not, sci.thresh = sci.thresh)
+           
             box.cols <- sapply(levels(plot.factor), function(x) geno.cols[which(names(geno.cols) == x)])
             vioplot(values~plot.factor, col = box.cols, xlab = "", main = plot.label, 
                 ylab = "", ylim = ylim, xaxt = "n", tick = FALSE)
@@ -462,10 +460,23 @@ test_effect <- function(values, plot.factor, return.text = FALSE,
             effect.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[1])
             r2.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[2])
             p.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[3])
+            #I can't figure out how to get the p value text to all print on the same line, 
+            #so I'm adding a nudge factor to a second x value.
+            p.x <- c(text.x, fractional_pos(plot.dim[1], plot.dim[2], (stat.x+p.x.nudge)))
+            p.y <- c(p.y, fractional_pos(plot.dim[3], plot.dim[4], text.y[3]+p.y.nudge))
 
-            text(text.x, r2.y, bquote(italic(R)^2==.(signif(r2, 2))), adj = 0)
-            text(text.x, p.y, labels = text.p, adj = 0)
             text(text.x, effect.y, labels = bquote(beta==.(signif(linear.effect.size, 2))), adj = 0)
+            text(text.x, r2.y, bquote(italic(R)^2==.(signif(r2, 2))), adj = 0)
+            
+            if(class(text.p) == "call"){
+                text(p.x[1], p.y[1], labels = text.p, adj = 0)
+            }else{
+                for(i in 1:2){
+                    text(p.x[i], p.y[i], labels = text.p[i], adj = 0)
+                }
+                    #sapply(1:length(text.p), function(x) text(p.x[x], p.y, labels = text.p[x], adj = 0))
+            }
+
         }
 
     result <- c("r2" = signif(r2, 2), "model.p" = threshold_p(p), 
@@ -479,7 +490,8 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
     order.by = c("PC", "top.rank", "means", "genotype", "none"),
     path.stats = c("R2", "effect.size"), label.nudge = -0.05, cex.lab = 1,
     plot.results = TRUE, global.min = NULL, global.max = NULL, 
-    stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, plot.enrich = FALSE){
+    stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, plot.enrich = FALSE,
+    sci.not = FALSE, sci.thresh = 0.001, p.x.nudge = 0.05, p.y.nudge = 0.01){
 
     order.by <- order.by[1]
     sub.decomp <- NULL
@@ -537,7 +549,7 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
             sub.decomp <- plot.decomp(t(sub.mat), cols = ordered.table[,3], plot.result = FALSE)
             model.result <- test_effect(sub.decomp$u[,1], test.factor)
             pc.r2 <- model.result["r2"]
-            pc.p <- threshold_p(model.result["model.p"], return.text = TRUE)
+            pc.p <- threshold_p(model.result["model.p"], return.text = TRUE, sci.not = sci.not, sci.thresh = sci.thresh)
             pc.effect <- model.result["linear.effect.size"]
         }else{
             order.by = "top.rank"
@@ -557,7 +569,7 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
             max.idx <- which.max(ind.r2)
             bar.vals <- sub.mat[max.idx,]
             plot.r2 <- ind.r2[rownames(sub.mat)[max.idx],"r2"]
-            plot.p <- threshold_p(ind.p[rownames(sub.mat)[max.idx],"model.p"], return.text = TRUE, sig.dig = 2)
+            plot.p <- threshold_p(ind.p[rownames(sub.mat)[max.idx],"model.p"], return.text = TRUE, sig.dig = 2, sci.not = sci.not, sci.thresh = sci.thresh)
             bar.label <- rownames(sub.mat)[max.idx]
         }
         if(order.by == "PC"){
@@ -574,7 +586,7 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
             bar.vals <- colMeans(sub.mat, na.rm = TRUE)
             top.model <- test_effect(bar.vals, test.factor)
             plot.r2 <- top.model["r2"]
-            plot.p <- threshold_p(top.model["model.p"], return.text = TRUE)
+            plot.p <- threshold_p(top.model["model.p"], return.text = TRUE, sci.not = sci.not, sci.thresh = sci.thresh)
             bar.label = "Expression Means"
         }
         if(order.by == "genotype"){
@@ -640,7 +652,17 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
                 r2.y <- fractional_pos(plot.dim[3], plot.dim[4], stat.y)
                 p.y <- fractional_pos(plot.dim[3], plot.dim[4], (stat.y-stat.y.spread))
                 text(text.x, r2.y, bquote(italic(R)^2==.(signif(plot.r2, 2))), adj = 0)
-                text(text.x, p.y, labels = plot.p, adj = 0)
+                
+                p.x <- c(text.x, fractional_pos(plot.dim[1], plot.dim[2], (stat.x+p.x.nudge)))
+                p.y <- c(p.y, fractional_pos(plot.dim[3], plot.dim[4], (stat.y-stat.y.spread+p.y.nudge)))
+                
+                if(class(plot.p) == "call"){
+                    text(p.x[1], p.y[1], labels = plot.p, adj = 0)
+                }else{
+                    for(i in 1:2){
+                        text(p.x[i], p.y[i], labels = plot.p[i], adj = 0)
+                    }
+                }
             }
 
             #pane 3 is a decomposition
@@ -721,7 +743,8 @@ plot_mean_bd_k <- function(mean.bd.k.mat, covar.mat, plot.label = "",
                 plot.label <- "Expression Means"
             }
             vioplot.results <- test_effect(row.vals, ordered.factor, plot.result = TRUE, 
-                autoflip.stat.y = TRUE, plot.label = plot.label, 
+                autoflip.stat.y = TRUE, plot.label = plot.label, return.text = TRUE,
+                sci.not = TRUE, sci.thresh = 0.001, p.x.nudge = p.x.nudge, p.y.nudge = p.y.nudge,
                 stat.x = stat.x, stat.y = stat.y, label.nudge = label.nudge,
                 stat.y.spread = stat.y.spread, cex.lab = cex.lab)
 
@@ -765,7 +788,8 @@ gene_vioplot <- function(gene.name, plot.label = "",
     stat.y = 0.9, stat.y.spread = 0.15, cex.lab = 1,
     autoflip.stat.y = FALSE, plot.results = TRUE,
     individuals = NULL, ylim = NULL, return.stats = TRUE,
-    label.nudge = -0.05){
+    label.nudge = -0.05, sci.not = TRUE, sci.thresh = 0.001,
+    p.x.nudge = 0.05, p.y.nudge = 0.01){
 
     if(is.null(individuals)){
         ind.idx <- 1:nrow(adj_expr)
@@ -776,11 +800,12 @@ gene_vioplot <- function(gene.name, plot.label = "",
     gene.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == gene.name),"ensembl_gene_id"]
     geno.expr <- lapply(geno.idx, function(x) adj_expr[x,gene.id])
     
-    gene.stats <- test_effect(adj_expr[ind.idx,gene.id], test.factor[ind.idx], 
-        plot.result = plot.results, stat.x = stat.x, stat.y = stat.y,
+    gene.stats <- test_effect(values = adj_expr[ind.idx,gene.id], plot.factor = test.factor[ind.idx], 
+        plot.result = plot.results, stat.x = stat.x, stat.y = stat.y, return.text = TRUE,
         autoflip.stat.y = autoflip.stat.y, plot.label = gene.name,
         stat.y.spread = stat.y.spread, ylab = ylab, cex.lab = cex.lab,
-        ylim = ylim, label.nudge = label.nudge)
+        ylim = ylim, label.nudge = label.nudge, sci.not = sci.not, sci.thresh = sci.thresh, 
+        p.x.nudge = p.x.nudge, p.y.nudge = p.y.nudge)
 
     if(return.stats){
         invisible(gene.stats)
@@ -796,7 +821,8 @@ gene_vioplot <- function(gene.name, plot.label = "",
 #needs to be specified.
 term_vioplot <- function(outer.term, inner.term = NULL, mean.term.vals, 
     stat.x = 0.1, stat.y = 0.2, stat.y.spread = 0.15, cex.lab = 1, 
-    autoflip.stat.y = FALSE, label.nudge = -0.05, return.stats = FALSE){
+    autoflip.stat.y = FALSE, label.nudge = -0.05, return.stats = FALSE,
+    sci.not = TRUE, sci.thresh = 0.001, p.x.nudge = 0.08, p.y.nudge = 0.05){
     
     if(is.null(inner.term)){
         term.idx <- which(rownames(mean.term.vals) == outer.term)
@@ -814,10 +840,12 @@ term_vioplot <- function(outer.term, inner.term = NULL, mean.term.vals,
         #term.expr <- mean.term.vals[[outer.idx]][inner.idx,]
         plot.label <- paste(outer.term, inner.term, sep = " : ")
     }
-    test.stats <- test_effect(unlist(term.expr), test.factor[unlist(geno.idx)], 
+    test.stats <- test_effect(values = unlist(term.expr), 
+        plot.factor = test.factor[unlist(geno.idx)], 
         plot.label = plot.label, stat.y = stat.y, stat.x = stat.x, 
         cex.lab = cex.lab, stat.y.spread = stat.y.spread, plot.results = TRUE,
-        label.nudge = label.nudge)
+        label.nudge = label.nudge, sci.not = sci.not, sci.thresh = sci.thresh, 
+        p.x.nudge = p.x.nudge, p.y.nudge = p.y.nudge)
 
     if(return.stats){
         invisible(test.stats)
@@ -888,11 +916,12 @@ writes the stats in.
 if(final.params){
     fig.plots <- c("Kl", "App", "Apoe", "Grin2b")
     stat.y = rep(0.2, 4)
-    stat.x <- c(0.1, 0.1, 0.7, 0.1)
+    stat.x <- c(0.1, 0.1, 0.67, 0.1)
     pdf(here("Results", "for_paper", "AD-related_expression_individual.pdf"), width = 4.5, height = 5) #dimensions sort of match that of glutamate module figure
     for(i in 1:length(fig.plots)){
-       gene_vioplot(fig.plots[i], stat.y = stat.y[i], stat.x = stat.x[i], 
-        cex.lab = 1.5, ylim = c(-2.8, 2.5), label.nudge = -0.1)
+       gene_vioplot(fig.plots[i], stat.y = stat.y[i], stat.x = stat.x[i],
+        cex.lab = 1.5, ylim = c(-2.8, 2.5), label.nudge = -0.1, sci.not = TRUE,
+        p.x.nudge = 0.08)
     }
     dev.off()
 }
@@ -1153,7 +1182,8 @@ for(i in 1:length(to.plot)){
         sbd.vals <- mean.sbd.vals[[bd.idx]][sbd.idx,]
         stats <- test_effect(values = sbd.vals, plot.factor = test.factor, plot.results = TRUE,
             stat.y = stat.y[i], autoflip.stat.y = TRUE, plot.label = to.plot[[i]][j],
-            stat.y.spread = 0.2, label.nudge = -0.1)
+            stat.y.spread = 0.2, label.nudge = -0.1, sci.not = TRUE, stat.x = 0.05,
+            p.x.nudge = 0.09)
     }
 }
 dev.off()
@@ -1446,7 +1476,8 @@ pdf(here("Results", "for_paper", "KEGG_expression_examples.pdf"), width = 4, hei
 for(i in 1:length(example.path)){    
     model <- test_effect(mean.k.vals[example.path[i],], test.factor,
         plot.result = TRUE, autoflip.stat.y = TRUE, 
-        plot.label = example.path[i], stat.y.spread = 0.2)
+        plot.label = example.path[i], stat.y.spread = 0.2, sci.not = TRUE,
+        p.x.nudge = 0.1)
 }
 dev.off()
 ```
@@ -1482,8 +1513,8 @@ row.order <- order(mean.decomp$v[,1], decreasing = FALSE)
 #make a table with the mean expression values and stats
 #use imageWithText to add colors to the mean expression
 #values.
-
 png(here("Results", "for_paper", "neurodegeneration.png"), width = 11, height = 6, units = "in", res = 300)
+#quartz(width = 11, height = 6)
 par(bg = NA)
 layout.mat <- matrix(c(1,2), nrow = 1)
 layout(layout.mat, widths = c(0.25, 1))
@@ -1505,33 +1536,40 @@ class.mat[which(example.table[,1:3] > 0)] <- 2
 #but the colors are getting a little messed up, so I'm going to try to
 #plot the stats and means separately
 par(mar = c(4,18,6,1))
-imageWithText(mat = example.table, split.at.vals = TRUE, split.points = 0, 
+coord <- imageWithTextScinot(mat = example.table, split.at.vals = TRUE, split.points = 0, 
     col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", 
     col.text.shift = -1.15, row.text.shift = 0.13, col.text.rotation = 0, 
     col.text.adj = 0.5, cex = 1.2, col.text.cex = 1.5, global.color.scale = TRUE,
-    global.min = -0.3, global.max = 0.3,
-    row.text.cex = 1.5, na.col = "white", class.mat = class.mat)
+    global.min = -0.3, global.max = 0.3, row.text.cex = 1.5, na.col = "white", 
+    class.mat = class.mat, col.widths = c(rep(1, 5), 1.5),
+    col.names = c("FC", "WT", "VS", bquote(italic(R)^2), bquote(beta), bquote(italic(p))))
 
 #draw some boundaries
-plot.dim <- par("usr")
-mid.pt <- plot.dim[2]*0.545
-horiz.y <- segment_region(plot.dim[3], plot.dim[4], 6, "ends")
-#these are a little off
-horiz.y[3] <- horiz.y[3]+0.05
-horiz.y[4] <- horiz.y[4]+0.1
-draw.rectangle(min.x = plot.dim[1], max.x = mid.pt, 
-    min.y = plot.dim[3], max.y = plot.dim[4], 
+min.x <- min(coord$x)-0.48
+max.x <- max(coord$x)+0.57
+mid.x <- coord$x[1,3]+0.45
+min.y <- min(coord$y) - 0.48
+max.y <- max(coord$y) + 0.4
+
+vert.x <- coord$x[1,] #points at which text is placed
+col.width <- coord$col.width
+half.width <- col.width/2
+
+horiz.y <- segment_region(min.y, max.y, 6, "ends")
+draw.rectangle(min.x = min.x, max.x = mid.x, 
+    min.y = horiz.y[1], max.y = tail(horiz.y, 1), 
     border.col = "black", fill = NULL, lwd = 3)
-segments(x0 = rep(mid.pt, length(horiz.y)), x1 = rep(plot.dim[2], length(horiz.y)),
-    y0 = horiz.y)
-vert.x <- segment_region(mid.pt, plot.dim[2], 4, "ends")
-segments(x0 = vert.x,
-    y0 = rep(plot.dim[3], length(vert.x)), y1 = rep(plot.dim[4], length(vert.x)))
+    
+#draw horizontal lines to separate rows of stats
+segments(x0 = rep(mid.x, length(horiz.y)), x1 = rep(max(vert.x+half.width), length(horiz.y)), y0 = horiz.y)
+
+#draw vertical lines to separate columns of stats
+segments(x0 = vert.x+half.width, y0 = rep(max.y, length(vert.x)), y1 = rep(min.y, length(vert.x)))
 
 #label the mean expression section
-text(x = mean(c(plot.dim[1], mid.pt)), y = 0.3, labels = "Mean Expression (A.U.)", cex = 1.2)
+text(x = mean(c(plot.dim[1], mid.x)), y = 0.3, labels = "Mean Expression (A.U.)", cex = 1.2)
 #and the stats section
-text(x = mean(c(plot.dim[2], mid.pt)), y = 0.3, labels = "Model Stats", cex = 1.2)
+text(x = mean(c(plot.dim[2], mid.x)), y = 0.3, labels = "Model Stats", cex = 1.2)
 
 dev.off()
 ```
@@ -1542,7 +1580,7 @@ analysis.
 
 ```{r kegg_match, fig.height = 4, fig.width = 8}
 
-example.paths <- c("Oxidative phosphorylation", "Chemical carcinogenesis - reactive oxygen species")
+example.paths <- c("Glutamatergic synapse", "Oxidative phosphorylation")
 
 example.mean.mat <- matrix(NA, nrow = length(example.paths), ncol = length(geno.cols))
 rownames(example.mean.mat) <- example.paths
@@ -1550,13 +1588,17 @@ colnames(example.mean.mat) <- names(geno.cols)
 example.stats <- matrix(NA, nrow = length(example.paths), ncol = 7)
 rownames(example.stats) <- example.paths
 
+stat.y <- c(0.3, 0.9)
+
 pdf(here("Results", "for_paper", "kegg_match_bd.pdf"), width = 8, height = 4.5)
 par(mfrow = c(1,2))
 for(k in 1:length(example.paths)){
     geno.vals <- lapply(geno.idx, function(x) mean.k.vals[example.paths[k],x])
     stats <- test_effect(mean.k.vals[example.paths[k],], test.factor,
-        plot.result = TRUE, autoflip.stat.y = TRUE, label.nudge = -0.08,
-        plot.label = gsub("-", "\n", example.paths[k]), stat.y.spread = 0.2)
+        plot.result = TRUE, autoflip.stat.y = FALSE, stat.y = stat.y[k],
+        label.nudge = -0.08,
+        plot.label = gsub("-", "\n", example.paths[k]), stat.y.spread = 0.2,
+        sci.not = TRUE, p.x.nudge = 0.11)
     example.stats[k,] <- stats
     example.mean.mat[k,] <- sapply(geno.vals, mean)
 }
@@ -1655,7 +1697,7 @@ test.pc  <- test_effect(ind.vals, test.factor, plot.result = TRUE, autoflip.stat
 
 if(final.params){
     pdf(here("Results", "for_paper", "Intersection_PC.pdf"), width = 5, height = 5)
-    test_effect(ind.vals, test.factor, plot.result = TRUE, autoflip.stat.y = TRUE)
+    test_effect(ind.vals, test.factor, plot.result = TRUE, autoflip.stat.y = TRUE, sci.not = TRUE)
     dev.off()
 }
 ```
@@ -2342,7 +2384,8 @@ plot_individual_genes <- function(intersection.name = NULL, gene.list = NULL,
     label.margin = 4, order.by = c("PC", "top.rank", "means", "genotype", "none"), 
     path.stats = c("R2", "effect.size"), show.text = TRUE, legend.x = NULL, 
     legend.y = NULL, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
-    label.nudge =  -0.05, cex.lab = 1,
+    label.nudge =  -0.05, cex.lab = 1, sci.not = TRUE, sci.thresh = 0.001,
+    p.x.nudge = 0.05, p.y.nudge = 0.01,
     return.full.result = FALSE, plot.enrich = FALSE){
 
     order.by = order.by[1]
@@ -2394,7 +2437,8 @@ plot_individual_genes <- function(intersection.name = NULL, gene.list = NULL,
             covar.mat = covar.table, plot.label = plot.label, path.stats = path.stats,
             label.margin = label.margin, order.by = order.by, stat.y.spread = stat.y.spread,
             stat.x = stat.x, stat.y = stat.y, plot.enrich = plot.enrich, label.nudge = label.nudge,
-            cex.lab = cex.lab)
+            cex.lab = cex.lab, sci.not = sci.not, sci.thresh = sci.thresh,
+            p.x.nudge = p.x.nudge, p.y.nudge = p.y.nudge)
     }
 
     if(plot.type == "means"){
@@ -2473,18 +2517,22 @@ term.name <- "Insulin secretion : Immune Response"
 
 app.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == "App"), "ensembl_gene_id"]
 
-order.type  <- c("PC", "means", "genotype", "top.rank")
-x <- c(0.8, 0.8, 0.05, 0.8)
-for(i in 1:length(order.type)){
-    png(paste0("~/Desktop/", "ordered_by_", order.type[i], ".png"), width = 10, height = 6, units = "in", res = 300)
-    par(bg = NA)
-    int.genes <- plot_individual_genes(intersection.name = term.name, 
-        plot.type = "individual", order.by = order.type[i], stat.x = 0.03, 
-        stat.y = 0.8)
+term.names <- c("Nicotine addiction : APP Metabolism", "Ribosome : Synapse")
 
-    int.genes <- plot_individual_genes(gene.list = c(int.genes, app.id), 
-        plot.type = "individual", order.by = order.type[i], stat.x = 0.03, 
-        stat.y = 0.8)    
+
+x <- 0.8
+for(i in 1:length(term.names)){
+    png(here("Results", "for_paper", paste0("Intersection_", gsub(" ", "_", gsub(" : ", "-", term.names[i], fixed = TRUE)), ".png")), 
+        width = 11, height = 5.5, units = "in", res = 300)
+    par(bg = NA)
+    int.genes <- plot_individual_genes(intersection.name = term.names[i], 
+        plot.type = "individual", order.by = "means", stat.x = 0.03, 
+        stat.y = 0.8, sci.not = TRUE, stat.y.spread = 0.18, p.x.nudge = 0.1,
+        label.nudge = -0.08)
+
+    #int.genes <- plot_individual_genes(gene.list = c(int.genes, app.id), 
+    #    plot.type = "individual", order.by = "means", stat.x = 0.03, 
+    #    stat.y = 0.8)    
     dev.off()
 }
 #enrich <- gost(int.genes, organism = "mmusculus")
@@ -2749,13 +2797,16 @@ plotVenn(pair.genes)
 if(final.params){
 int.genes <- Reduce("intersect", pair.genes)
 png(here("Results", "for_paper", "APP_Nicotine_Intersection_for_heat.png"), width = 8, height = 4, units = "in", res = 300)
-plot_individual_genes(gene.list = int.genes, order.by = "means", stat.y.spread = 0.18)
+par(bg = NA)
+plot_individual_genes(gene.list = int.genes, order.by = "means", stat.y.spread = 0.18,
+    p.x.nudge = 0.065, p.y.nudge = 0.02)
 dev.off()
 #png(here("Results", "for_paper", "Ribosome_synapse_intersection_for_viol.png"), width = 11, height = 5.5, units = "in", res = 300)
 png(here("Results", "for_paper", "APP_Nicotine_Intersection_for_viol.png"), width = 11, height = 5.5, units = "in", res = 300)
 par(bg = NA)
-plot_individual_genes(gene.list = int.genes, order.by = "means", stat.y = 0.8, stat.x = 0.05, stat.y.spread = 0.18, 
-    label.nudge = -0.1, cex.lab = 1.2)
+plot_individual_genes(gene.list = int.genes, order.by = "means", stat.y = 0.8, 
+    stat.x = 0.05, stat.y.spread = 0.18, label.nudge = -0.1, cex.lab = 1.2, 
+    p.x.nudge = 0.1)
 dev.off()
 }
 ```
@@ -2819,6 +2870,12 @@ connector.result <- plot_individual_genes(gene.list = connector.genes,
     plot.type = "individual", plot.label = plot.label, 
     label.margin = 4, order.by = "PC", return.full.result = TRUE)
 #dev.off()
+
+glutamate.genes <- gsub("**", "", rownames(connector.result$row.p), fixed = TRUE)
+
+write.table(glutamate.genes, file.path(results.dir, 
+    "validation_gene_sets", "Glutamate_Genes.txt"), 
+    quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
 ```
 
 The enrichments of the intersectional genes are shown below.
@@ -3023,9 +3080,9 @@ k_bd_illustration <- function(BD_label = "Apoptosis", KEGG_label = "MAPK\nsignal
 #here we plot violin plots of specific terms we are interested in.
 
 pdf(here("Results", "for_paper", "Intersection_examples.pdf"), width = 5, height = 5)
-mapk.apoptosis.stats <- term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "Apoptosis", 
-    mean.term.vals = mean.bd.k.vals, stat.x = 0.05, stat.y = 0.2, 
-    stat.y.spread = 0.12, autoflip.stat.y = FALSE, cex.lab = 1.2,
+mapk.apoptosis.stats <- term_vioplot(outer.term = "MAPK signaling pathway", 
+    inner.term = "Apoptosis", mean.term.vals = mean.bd.k.vals, stat.x = 0.05, 
+    stat.y = 0.2, stat.y.spread = 0.12, autoflip.stat.y = FALSE, cex.lab = 1.2,
     label.nudge = -0.08, return.stats = TRUE)
 
 mapk.dna.stats <- term_vioplot(outer.term = "MAPK signaling pathway", inner.term = "DNA Repair", 
@@ -5112,8 +5169,8 @@ dev.off()
 
 pdf(here("Results", "for_paper", "App_Apoe.pdf"), width = 10, height = 4.5)
 par(mfrow = c(1,2))
-gene_vioplot("App", stat.y = 0.25, stat.y.spread = 0.18, label.nudge = -0.08)
-gene_vioplot("Apoe", label.nudge = -0.08, stat.y = 0.9, stat.x = 0.22)
+gene_vioplot("App", stat.y = 0.25, stat.y.spread = 0.18, label.nudge = -0.08, p.x.nudge = 0.07)
+gene_vioplot("Apoe", label.nudge = -0.08, stat.y = 0.9, stat.x = 0.22, p.x.nudge = 0.07, sci.thresh = 1e-5)
 dev.off()
 ```
 
@@ -5199,4 +5256,46 @@ boxplot(log2(apoe.counts))
 
 which(apoe.counts < 10000)
 which(apoe.counts > 50000)
+```
+
+
+```{r sci, eval = FALSE}
+# Source - https://stackoverflow.com/q
+# Posted by Thrawn, modified by community. See post 'Timeline' for change history
+# Retrieved 2025-12-16, License - CC BY-SA 4.0
+
+# Source - https://stackoverflow.com/a
+# Posted by Federico Giorgi, modified by community. See post 'Timeline' for change history
+# Retrieved 2025-12-16, License - CC BY-SA 4.0
+library(corto)
+numbers<-c(3.456e-12,0.00901,5670000,-3.16e18,0.000004522,rnorm(5,sd=0.0000001))
+plot(0,xlim=c(0,10),ylim=c(0,10),type="n")
+text(c(2,6),c(10,10),labels=c("Before","After"),font=2)
+for(i in 10:1){
+    text(c(2,6),c(i-1,i-1),labels=c(numbers[i],scinot(numbers)[i]))
+}
+
+
+cyto.idx <- grep("cytokine", names(kegg.list), ignore.case = TRUE)
+for(i in 1:length(cyto.idx)){
+    write.table(kegg.list[[i]][which(!is.na(kegg.list[[i]]))],
+        paste0("~/Desktop/", gsub(" ", "_", names(kegg.list)[cyto.idx[i]]), ".txt"),
+        sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+}
+```
+
+```{r other_validation_sets, eval = FALSE}
+#int.name = "Ribosome : Synapse"
+int.name = "Ribosome : Immune Response"
+
+int.genes <- plot_individual_genes(intersection.name = int.name, 
+        plot.type = "individual", return.full.result = TRUE)
+
+gene.names <- gsub("**", "", rownames(int.genes$row.p), fixed = TRUE)
+
+write.table(gene.names, file.path(results.dir, 
+    "validation_gene_sets", 
+    paste0(gsub(" ", "_", gsub(" : ", "-", int.name), "_Genes.txt"))), 
+    quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
+
 ```

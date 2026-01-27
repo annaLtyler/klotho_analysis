@@ -1,0 +1,409 @@
+---
+title: "GTEx Validation One Tissue"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+## Introduction
+
+The purpose of this workflow is to see if we can recapitulate key findings
+from the mouse experiment in a human cohort. We are using GTEx gene expression
+to see if individuals with the different Klotho haplotypes (with or without 
+different APOE genotypes) have variation in glutamate receptor genes. 
+
+We will bin the individuals by age and adjust for sex. 
+
+Of course, we know that tons of environmental variables affect Klotho 
+levels. I'll do the simplest analysis at first and then go further if
+we need to.
+
+
+```{r clear}
+rm(list = ls())
+library(here)
+```
+
+```{r param}
+args = commandArgs(trailingOnly=TRUE)
+
+expr.filename <- args[1]
+
+if(is.na(expr.filename)){
+  expr.filename <- "gene_reads_v11_brain_amygdala.gct"
+  #expr.filename <- "gene_reads_v11_brain_anterior_cingulate_cortex_ba24.gct"
+  #expr.filename <- "gene_reads_v11_brain_caudate_basal_ganglia.gct"
+  #expr.filename <- "gene_reads_v11_brain_hippocampus.gct"
+  #expr.filename <- "gene_reads_v11_brain_nucleus_accumbens_basal_ganglia.gct"
+}
+
+tissue.name <- gsub(".gct", "", gsub("gene_reads_v11_", "", expr.filename))
+
+gene.set.file <- "Glutamate_Genes.txt"
+#gene.set.file <- "Ribosome-Synapse_Genes.txt"
+#gene.set.file <- "Ribosome-Immune_Response_Genes.txt"
+
+dot.col <- "#dd1c77"
+scale.expr <- TRUE #if TRUE, scales expression across individuals
+
+results.dir <- here("Results", "GTEx")
+if(!file.exists(results.dir)){dir.create(results.dir)}
+```
+
+This workflow is looking at expression in `r tissue.name`.
+
+Expression values are scaled: `r as.character(scale.expr)`.
+
+The validation set was taken from `r gene.set.file`.
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+```
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "vioplot", "corto")
+load_libraries(needed.libraries)
+```
+
+
+```{r read_data}
+geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
+het.col <- "gray"
+hap.cols <- c("FCFC" = as.vector(geno.cols["FC/FC"]), 
+  "FCVS" = het.col, "VSVS" = as.vector(geno.cols["VS/VS"]))
+#barplot(rep(1, 3), col = hap.cols)
+
+data.dir <- here("Data", "Human", "GTEX")
+
+pheno <- read.delim(file.path(data.dir, "GTEx_Analysis_2021-02-11_v9_Annotations_SubjectPhenotypesDS.txt"))
+haps <- read.table(file.path(data.dir, "id.geno.klotho.apoe.ALL.txt"), sep = " ", row.names = 1)
+#table(haps)
+
+val.genes <- read.table(here("Results", "age_batch_12_gene", 
+  "validation_gene_sets", gene.set.file))[,1]
+
+
+ortho.file <- here("Results", "age_batch_12_gene", "validation_gene_sets",
+  paste0(gsub(".txt", "", gene.set.file), "_Orthologs.csv"))
+
+gene.orthos <- get_orthologs(mouse.id = val.genes, file.name = ortho.file)
+```
+
+```{r read_expr}
+expr <- read.delim(file.path(data.dir, expr.filename), skip = 2)
+expr.gene.info <- expr[,1:2]
+
+age <- pheno[,"AGE"]
+sex <- pheno[,"SEX"]
+names(age) <- names(sex) <- pheno[,"SUBJID"]
+```
+
+## Age Distribution
+
+Age is distributed in the following way:
+
+```{r age}
+hist(age)
+```
+
+We binned the subjects into the following age bins.
+
+```{r bin_age}
+#automatic generation of bins
+age.bins <- round(segment_region(min(age), max(age), 4, "ends"))
+
+#there aren't many individuals with expression and VSVS haplotypes
+#check ages to make bins
+#vs.idx <- which(matched.haps[,1] == "VSVS")
+#matched.age[vs.idx]
+#age.bins <- c(20, 55, 70)
+
+bin.mat <- consec_pairs(age.bins)
+
+#adjust so we have non-overlapping bins. Otherwise patients get double-assigned
+bin.mat[2:nrow(bin.mat),1] <- bin.mat[2:nrow(bin.mat),1]+1
+
+#assign each person a bin based on age
+assign_bin <- function(value, bin.mat){
+  bin.which <- which(apply(bin.mat, 1, function(x) segments.overlap(value, value, x[1], x[2])))
+  return(bin.which)
+}
+
+age.bin <- sapply(age, function(x) assign_bin(x, bin.mat))
+bin.names <- apply(bin.mat, 1, function(x) paste(x, collapse = "-"))
+barplot_with_num(table(age.bin), names = bin.names, ylab = "Count",
+  main = "Patients in each age group")
+```
+
+## Distribution of sex by age
+
+Sex and age are distributed as follows:
+
+```{r sex, fig.width = 7, fig.height = 5}
+age.sex <- table(data.frame("age bin" = age.bin, "sex" = sex))
+rownames(age.sex) <- bin.names
+colnames(age.sex) <- c("Female", "Male")
+
+#quartz(width = 7, height = 5)
+a <- barplot(t(age.sex), beside = TRUE, legend = TRUE, 
+  args.legend = c("x" = "topleft"), ylim = c(0, max(age.sex)*1.1))
+text(x = a[1,], y = age.sex[,1]+15, labels = age.sex[,1])
+text(x = a[2,], y = age.sex[,2]+15, labels = age.sex[,2])
+```
+
+## Gene expression by age
+
+```{r extract_genes}
+common.genes <- intersect(gene.orthos[,"human_external_gene_name"], expr.gene.info[,2])
+gene.idx <- match(common.genes, expr.gene.info[,2])
+
+expr.num <- expr[gene.idx,3:ncol(expr)]
+```
+
+```{r align_vars}
+#line up all variables by subject ID.
+pheno.subj.id <- pheno[,"SUBJID"]
+
+hap.subj.id <- rownames(haps)
+mod.hap.subj.id <- sapply(strsplit(hap.subj.id, "-"), function(x) paste(x[1], x[2], sep = "-"))
+rownames(haps) <- mod.hap.subj.id
+
+expr.subj.id <- colnames(expr.num)
+mod.expr.subj.id <- sapply(strsplit(expr.subj.id, ".", fixed = TRUE), function(x) paste(x[1], x[2], sep = "-"))
+colnames(expr.num) <- mod.expr.subj.id
+
+common.id <- Reduce("intersect", list(pheno.subj.id, mod.hap.subj.id, mod.expr.subj.id))
+
+#match up covariates
+pheno.id.idx <- sapply(common.id, function(x) which(pheno.subj.id == x))
+matched.age <- age[pheno.id.idx]
+matched.age.bin <- age.bin[pheno.id.idx]
+matched.sex <- sex[pheno.id.idx]
+
+expr.id.idx <- sapply(common.id, function(x) which(colnames(expr.num) == x))
+matched.expr <- expr.num[,expr.id.idx]
+#matched.expr[1:10, 1:10]
+
+hap.idx <- sapply(common.id, function(x) which(rownames(haps) == x))
+matched.haps <- haps[hap.idx,]
+
+matched.gene.info <- expr.gene.info[gene.idx,]
+```
+
+```{r adjust_expr}
+#adjust by sex
+adj.expr <- log2(adjust(t(matched.expr), matrix(matched.sex, ncol = 1))+1)
+#name the genes something useful.
+colnames(adj.expr) <- matched.gene.info[,"Description"]
+
+if(scale.expr){
+  scaled.expr <- apply(adj.expr, 2, scale)
+  dimnames(scaled.expr) <- dimnames(adj.expr)
+  use.expr <- scaled.expr
+  ylab = "Scaled Expression"
+}else{
+  use.expr <- adj.expr
+  ylab = "log2(count)"
+}
+
+binned.expr <- lapply(1:max(age.bin), function(x) use.expr[which(matched.age.bin == x),])
+names(binned.expr) <- bin.names
+```
+
+The genes in this module have the following correlation structure.
+
+```{r gene_cor}
+#pheatmap(use.expr)
+pheatmap(cor(use.expr, use = "pairwise.complete.obs"))
+```
+
+The following plot shows gene expression for this group
+of genes by age. 
+
+```{r zero_line}
+#adds zero line to grouped box plot.
+add_zero_line <- function(){
+  plot.dim <- par("usr")
+  segments(plot.dim[1], 0, plot.dim[2], 0)
+}
+```
+
+```{r plot_expr, fig.width = 12, fig.height = 5}
+if(scale.expr){
+  mean.order <- 1:ncol(adj.expr)
+}else{
+  mean.order <- order(colMeans(adj.expr))
+}
+ordered.expr <- lapply(binned.expr, function(x) x[,mean.order])
+#quartz(width = 12, height = 5)
+plot.grouped.boxes(ordered.expr, type = "matrix", print.vals = NA, ylab = ylab,
+  main = "Expression by Age Bins")
+add_zero_line()
+```
+
+## Mean expression by age
+
+Mean expression for each gene in each age group is shown below. 
+
+```{r heat, fig.width = 3, fig.height = 5}
+mean.mat <- sapply(binned.expr, function(x) colMeans(x, na.rm = TRUE))
+#quartz(width = 3, height = 5)
+pheatmap(mean.mat, cluster_cols = FALSE)
+write.table(mean.mat, 
+  file.path(results.dir, paste0("Mean_Expr_by_Age_", tissue.name, ".csv")),
+  quote = FALSE, sep = ",")
+```
+
+As a group, these genes do seem to decline in expression with age.
+
+```{r overall}
+mean.mat.tests <- pairwise_test(mean.mat)
+
+vioplot(mean.mat, col = hap.cols, main = "Module Mean Expression",
+  ylim = c(min(mean.mat), max(mean.mat)+0.2))
+add_pairwise_results(mean.mat, mean.mat.tests, y.nudge = 0.15, text.nudge = 0.01)
+
+mtext("Mean Scaled Expression", side = 2, line = 2.5)
+
+```
+
+## Differential expression by age
+
+Does gene expression vary across age groups?
+The line marks an unadjusted p value of 0.05.
+
+```{r age_test, fig.width = 12, fig.height = 5}
+expr.diff.pvals <- rep(NA, ncol(ordered.expr[[1]]))
+names(expr.diff.pvals) <- colnames(ordered.expr[[1]])
+
+for(i in 1:ncol(ordered.expr[[1]])){
+  test.expr <- lapply(ordered.expr, function(x) x[,i])
+  test.diff <- aov.by.list(test.expr)
+  expr.diff.pvals[i] <- test.diff[1, "Pr(>F)"]
+}
+
+barplot(-log10(expr.diff.pvals), las = 2, cex.names = 1.2,
+  ylab = "-log10(p)")
+abline(h = -log10(0.05))
+```
+
+## Expression by Kl haplotype {.tabset .tabset-fade .tabset-pills}
+
+Now it's time to bring in the haplotypes.
+We want to see if these genes are differentially 
+expressed by Klotho haplotype only, and whether that
+expression difference increases with age.
+
+```{r kl_hap, fig.width = 12, fig.height = 5, results = "asis"}
+kl.haps <- c("FCFC", "FCVS", "VSVS")
+kl.groups <- lapply(kl.haps, function(x) rownames(matched.haps)[which(matched.haps[,1] == x)])
+
+for(i in 1:length(ordered.expr)){
+  cat("###", bin.names[i], "\n")
+  age.expr <- ordered.expr[[i]]
+  #bin these individuals into haplotypes
+  hap.expr <- lapply(kl.groups, function(x) age.expr[which(rownames(age.expr) %in% x),,drop=FALSE])
+  names(hap.expr) <- kl.haps
+  plot.grouped.boxes(hap.expr, type = "matrix", main = names(ordered.expr)[i],
+    ylab = "Scaled Expression", print.vals = NA, group.cols = hap.cols)
+  add_zero_line()
+  cat("\n\n")
+}
+```
+
+## Quantifying the effects of Kl haplotype {.tabset .tabset-fade .tabset-pills}
+
+We want to see whether Klotho haplotype has a significant
+effect on expression of genes individually, and on the group
+as a whole.
+
+```{r module_overall, results = "asis", fig.height = 5, fig.width = 7}
+stop()
+
+kl.expr.by.age <- vector(mode = "list", length = length(ordered.expr))
+names(kl.expr.by.age) <- names(ordered.expr)
+kl.effect.mat <- matrix(NA, nrow = length(ordered.expr), ncol = length(kl.haps))
+rownames(kl.effect.mat) <- names(ordered.expr)
+colnames(kl.effect.mat) <- kl.haps
+
+for(i in 1:length(ordered.expr)){
+  cat("###", names(ordered.expr)[i], "\n")
+  
+  age.expr <- ordered.expr[[i]]
+
+  #bin these individuals into haplotypes
+  hap.expr <- lapply(kl.groups, function(x) age.expr[which(rownames(age.expr) %in% x),,drop=FALSE])
+  names(hap.expr) <- kl.haps
+  
+  #calculate mean expression over all genes in the group
+  mean.expr <- lapply(hap.expr, colMeans)
+
+  #remove any categories that are all NA
+  plot.expr <- mean.expr[which(!is.na(sapply(mean.expr, function(x) mean(x, na.rm = TRUE))))]
+  kl.expr.by.age[[i]] <- mean.expr
+  mean.by.geno <- sapply(mean.expr, function(x) mean(x, na.rm = TRUE))
+  kl.effect.mat[i,] <- mean.by.geno
+
+  
+  #need to make the pairwise test function work with lists
+  age.mat.tests <- pairwise_test(age.table)
+
+  pval <- threshold_p(diff.p[1,"Pr(>F)"], return.text = TRUE)
+
+  vioplot(plot.expr, col = hap.cols[names(plot.expr)], main = "Group Mean Expression")
+  mtext("Mean Scaled Expr", side = 2, line = 2.5)
+  stripchart(plot.expr, vertical = TRUE, pch = 16, method = "jitter", col = dot.col,
+    add = TRUE)
+  mtext(pval, side = 3, line = -2)
+  cat("\n\n")
+}
+
+saveRDS(kl.expr.by.age, 
+  file.path(results.dir, paste0("Mean_Expr_per_gene_by_Age_", tissue.name, ".RDS")))
+
+write.table(kl.effect.mat, 
+  file.path(results.dir, paste0("Mean_KL_Expr_by_Age_", tissue.name, ".csv")),
+  sep = ",", quote = FALSE)
+```
+
+## Summary of Klotho effects by age
+
+The following plot shows the effect of Klotho haplotype in 
+each age bin.
+
+```{r kl_age_summ, fig.width = 10, fig.height = 5}
+plot.grouped.boxes(group.list = kl.expr.by.age, plot.grouping = "inner",
+  ylab = "Mean Scaled Expression", main = "Effect of Haplotype at each Age",
+  group.cols = hap.cols)
+add_zero_line()
+```
+
+Bar plot showing the same thing.
+
+```{r kl_by_age_summary, fig.width = 7, fig.height = 5}
+barplot(t(kl.effect.mat), beside = TRUE, legend = TRUE, col = hap.cols,
+  ylab = "Mean Scaled Expression")
+abline(h = 0)
+```
+
+the following plot shows the effect of age in each Klotho haplotype.
+
+```{r, age_kl_summ, fig.width = 10, fig.height = 5}
+plot.grouped.boxes(kl.expr.by.age, ylab = "Mean Scaled Expression",
+  main = "Effect of Age in each Haplotype")
+add_zero_line()
+```
+
+The bar plot below shows the same thing in bars.
+
+```{r age_by_kl_summary, fig.width = 7, fig.height = 5}
+barplot(kl.effect.mat, beside = TRUE, legend = TRUE, col = hap.cols,
+  ylab = "Mean Scaled Expression")
+abline(h = 0)
+```

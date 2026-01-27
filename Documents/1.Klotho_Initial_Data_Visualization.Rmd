@@ -1323,7 +1323,7 @@ factor.labels <- c("sex_ge" = "sex", "ordered_geno" = "Klotho genotype", "age_ba
 
 #run this workflow for age = 4 months, age = 12 months, and age = all 
 #to generate all files for the table in the paper.
-if(length(de.files) > 1){
+if(length(de.files) > 2){
   num.de <- lapply(de.files, readRDS)
   names(num.de) <- gsub(".RDS", "", gsub("num_de_", "", basename(de.files)))
   all.factors <- Reduce("union", lapply(num.de, names))

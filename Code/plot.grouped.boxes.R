@@ -63,7 +63,7 @@ cex = 1, cex.names = 1, pch = 16, within.group.sep = 0.7, between.group.sep = 1.
 				data.vals <- group.list[[l]][,i]; label <- colnames(group.list[[l]])[i]
 				}
 
-			if(length(data.vals) > 0){
+			if(length(data.vals) > 0 && !all(!is.finite(data.vals))){
 				col.idx <- l%%length(group.cols)
 				if(col.idx == 0){col.idx <- length(group.cols)}
 				if(plot.type == "box"){

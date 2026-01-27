@@ -1,4 +1,4 @@
-#xlab = ""; ylab = ""; main = NULL; main.shift = 0.12; col.names = NULL; row.names = NULL; row.text.adj = 1; row.text.shift = 0; row.text.rotation = 0; col.text.rotation = 90; col.text.adj = 1; col.text.shift = 0; show.text = TRUE; cex = 0.5; col.text.cex = 1; row.text.cex = 1; main.cex = 1; split.at.vals = FALSE; split.points = 0; col.scale = c("green", "purple", "orange", "blue", "brown", "gray"); light.dark = "f"; class.mat = NULL; grad.dir = c("high", "low", "middle", "ends"); color.fun = c("linear", "exponential"); exp.steepness = 1; global.color.scale = FALSE; global.min = NULL; global.max = NULL; sig.digs = 3;use.pheatmap.colors = FALSE; color.dist = NULL
+#xlab = ""; ylab = ""; main = NULL; main.shift = 0.12; col.names = NULL; row.names = NULL; row.text.adj = 1; row.text.shift = 0; row.text.rotation = 0; col.text.rotation = 90; col.text.adj = 1; col.text.shift = 0; show.text = TRUE; cex = 0.5; col.text.cex = 1; row.text.cex = 1; main.cex = 1; split.at.vals = FALSE; split.points = 0; col.scale = c("green", "purple", "orange", "blue", "brown", "gray"); light.dark = "f"; class.mat = NULL; grad.dir = c("high", "low", "middle", "ends"); color.fun = c("linear", "exponential"); exp.steepness = 1; global.color.scale = FALSE; global.min = NULL; global.max = NULL; sig.digs = 3;use.pheatmap.colors = FALSE; color.dist = NULL; na.col = "white"
 #The custom color distribution automatically sets a global color scale
 #col.scale can be a single color, one of c("green", "purple", "orange", "blue", "brown", "gray")
 #or it can be a list the same length as the number of 
@@ -12,7 +12,7 @@
 #mat <- matrix(sort(rnorm(25)), 5, 5); imageWithText(mat, split.at.vals = TRUE, col.scale = list(brewer.pal(8, "Blues"), brewer.pal(8, "Reds")), grad.dir = "ends")
 #mat <- matrix(sort(rnorm(25)), 5, 5); imageWithText(mat, split.at.vals = TRUE, col.scale = c("blue", "brown"), grad.dir = "ends")
 
-imageWithText <- function(mat, xlab = "", ylab = "", main = NULL, main.shift = 0.12, 
+imageWithTextScinot <- function(mat, xlab = "", ylab = "", main = NULL, main.shift = 0.12, 
 col.names = colnames(mat), row.names = rownames(mat), row.text.adj = 1, row.text.shift = 0, 
 row.text.rotation = 0, col.text.rotation = 90, col.text.adj = 1, 
 col.text.shift = 0, show.text = TRUE, cex = 0.5, col.text.cex = 1, 
@@ -22,10 +22,12 @@ light.dark = "f", n.col = 4, class.mat = NULL,
 grad.dir = c("high", "low", "middle", "ends"), color.fun = c("linear", "exponential", "custom"), 
 color.dist = NULL, exp.steepness = 1, global.color.scale = FALSE, global.min = NULL, 
 global.max = NULL, sig.digs = 3, use.pheatmap.colors = FALSE, na.col = "lightgray", 
-gridlines = FALSE){
+gridlines = FALSE, use.scinot = TRUE, scinot.min = 0.001, scinot.max = 9999, 
+col.widths = NULL){
 
 		require(grid)
-		
+        require(corto)
+
 		#make sure Inf and -Inf are coded as NA
 		mat[which(!is.finite(mat))] <- NA
 		
@@ -34,6 +36,13 @@ gridlines = FALSE){
 			}
 		# if(length(light.dark) < length(col.scale)){light.dark <- rep(light.dark, length(col.scale))}
 		
+		if(is.null(col.widths)){
+			col.widths <- rep(1, ncol(mat))
+			#col.widths[2] <- 2 #testing variable column widths
+		}
+		col.widths <- (col.widths/sum(col.widths))*ncol(mat) #make sure widths sum to ncol(mat)
+		#sum(col.widths)
+
 		color.fun <- color.fun[1]
 		
 		end.fudge.factor = 10^-10
@@ -263,8 +272,7 @@ gridlines = FALSE){
 		}else{
 			ColorRamp = fill.color.ramp(mat, class.mat, global.color.scale)
 			ColorRamp[which(is.na(ColorRamp))] <- na.col
-		}
-		 	
+		}		 	
 
 		zmin <- min(mat, na.rm = TRUE); zmax <- max(mat, na.rm = TRUE)
 
@@ -284,14 +292,40 @@ gridlines = FALSE){
 
 		max.dim <- max(c(dim(mat)[1], dim(mat)[2]))
 
+		#set up the plotting area
 		plot(c(1, dim(mat)[2]), c(1, dim(mat)[1]), type = "n", axes = FALSE, xlab = xlab, ylab = ylab, xlim = c(0.7, dim(mat)[2]+0.2), ylim = c(0.7, dim(mat)[1]+0.2), bg = "transparent")
 
-		rasterImage(col, xleft = 0.5, ybottom = 0.5, xright = dim(mat)[2]+0.5, ytop = dim(mat)[1]+0.5, interpolate = FALSE, bg = "transparent")
-		x.coord <- matrix(segment_region(0.5, dim(mat)[2]+0.5, dim(mat)[2], "center"), nrow = dim(mat)[1], ncol = dim(mat)[2], byrow = TRUE)
-		y.coord <- matrix(segment_region(0.5, dim(mat)[1]+0.5, dim(mat)[1], "center"), nrow = dim(mat)[1], ncol = dim(mat)[2])
+		#add columns separately if they have variable sizes
+		if(length(unique(col.widths)) > 1){
+			x.left <- 0.5
+			x.right <- x.left+col.widths[1]
+			col.coord <- mean(c(x.left, x.right))
+			rasterImage(col[,1], xleft = x.left, ybottom = 0.5, xright = x.right, ytop = dim(mat)[1]+0.5, interpolate = FALSE, bg = "transparent")	
+			for(i in 2:ncol(mat)){
+				x.left <- x.right
+				x.right <- x.left+col.widths[i]
+				rasterImage(col[,i], xleft = x.left, ybottom = 0.5, xright = x.right, ytop = dim(mat)[1]+0.5, interpolate = FALSE, bg = "transparent")	
+				col.coord <- c(col.coord, mean(c(x.left, x.right)))
+			}			
+			x.coord <- matrix(rep(col.coord, nrow(mat)), nrow = nrow(mat), byrow = TRUE)
+		}else{
+			rasterImage(col, xleft = 0.5, ybottom = 0.5, xright = dim(mat)[2]+0.5, ytop = dim(mat)[1]+0.5, interpolate = FALSE, bg = "transparent")
+			x.coord <- matrix(segment_region(0.5, dim(mat)[2]+0.5, dim(mat)[2], "center"), nrow = dim(mat)[1], ncol = dim(mat)[2], byrow = TRUE)
+		}
+			y.coord <- matrix(segment_region(0.5, dim(mat)[1]+0.5, dim(mat)[1], "center"), nrow = dim(mat)[1], ncol = dim(mat)[2])
 		
 		if(show.text){
-			text(x.coord, rev(y.coord), labels = signif(as.vector(mat), sig.digs), cex = cex)
+            text.mat <- signif(mat, sig.digs)
+            below.min <- which(abs(text.mat) < scinot.min)
+            above.max <- which(abs(text.mat) > scinot.max)
+            if(length(below.min) > 0){
+                text.mat[below.min] <- scinot(text.mat[below.min])
+            }
+            if(length(above.max) > 0){
+                text.mat[above.max] <- scinot(text.mat[above.max])
+            }
+			#text(x.coord, rev(y.coord), labels = signif(as.vector(mat), sig.digs), cex = cex)
+            text(x.coord, rev(y.coord), labels = as.vector(text.mat), cex = cex)
 		}
 		
 		if(!is.null(main)){
@@ -324,6 +358,7 @@ gridlines = FALSE){
 			text(row.text.x, y.coord[,1], labels = rev(row.names), adj = row.text.adj, cex = row.text.cex, srt = row.text.rotation)
 			}
 
-	invisible(col)
+	result <- list("col" = col, "x.coord" = x.coord, "y.coord" = y.coord, "col.widths" = col.widths)
+	invisible(result)
 
 	}
