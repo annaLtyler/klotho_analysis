@@ -1,0 +1,297 @@
+---
+title: "GTEx Aging Signatures"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+I am thinking of ways to help Yi Juin with aging signatures
+in the GTEx data. I want to play around with our KEGG-
+Biodomain intersections a bit before I suggest anything.
+
+```{r clear}
+rm(list = ls())
+library(here)
+```
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+```
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "vioplot", "corto")
+load_libraries(needed.libraries)
+```
+
+```{r expr_files}
+data.dir <- here("Data", "Human", "GTEX")
+pheno <- read.delim(file.path(data.dir, "GTEx_Analysis_2021-02-11_v9_Annotations_SubjectPhenotypesDS.txt"))
+age <- pheno[,"AGE"]
+names(age) <- pheno[,"SUBJID"]
+
+expr.files <- list.files(here("Results", "GTEx"), 
+    pattern = "Adjusted_Expr", full.names = TRUE)
+
+tissue.names <- gsub(".RDS", "", gsub("Adjusted_Expr_", "", basename(expr.files)))
+file.pairs <- pair.matrix(expr.files)
+tissue.pairs <- pair.matrix(tissue.names)
+```
+
+
+
+```{r tissue_pairs, eval = FALSE}
+#correlations of expression in different brain tissues
+
+cor.dist <- vector(mode = "list", length = nrow(file.pairs))
+names(cor.dist) <- apply(tissue.pairs, 1, function(x) paste(x, collapse = "-"))
+
+for(i in 1:nrow(file.pairs)){
+    print(i)
+    file1 <- file.pairs[i,1]
+    file2 <- file.pairs[i,2]
+
+    expr1 <- readRDS(file1)
+    expr2 <- readRDS(file2)
+
+    common.gene <- intersect(colnames(expr1), colnames(expr2))
+    common.ind <- intersect(rownames(expr1), rownames(expr2))
+
+    gene1.idx <- match(common.gene, colnames(expr1))
+    gene2.idx <- match(common.gene, colnames(expr2))
+
+    ind1.idx <- match(common.ind, rownames(expr1))
+    ind2.idx <- match(common.ind, rownames(expr2))
+
+    aligned1 <- expr1[ind1.idx, gene1.idx]
+    aligned2 <- expr2[ind2.idx, gene2.idx]
+
+    tissue.cor <- sapply(1:nrow(aligned1), 
+        function(x) cor(aligned1[x,], aligned2[x,], 
+        use = "pairwise.complete.obs", method = "spearman"))
+    names(tissue.cor) <- rownames(aligned1)
+
+    cor.dist[[i]] <- tissue.cor
+}
+
+#cor.order <- order(sapply(cor.dist, mean))
+#par(mar = c(4,28, 4, 2))
+#boxplot(cor.dist[cor.order], las = 2, horizontal = TRUE)
+#abline(v = 0)
+```
+
+```{r sim_mat, eval = FALSE}
+sim.mat <- matrix(NA, nrow = length(tissue.names), ncol = length(tissue.names))
+rownames(sim.mat) <- colnames(sim.mat) <- tissue.names
+for(i in 1:nrow(tissue.pairs)){
+    tissue1 <- tissue.pairs[i,1]
+    tissue2 <- tissue.pairs[i,2]
+    sim.mat[tissue1, tissue2] <- mean(cor.dist[[i]])
+    sim.mat[tissue2, tissue1] <- mean(cor.dist[[i]])
+}
+pheatmap(sim.mat, display_numbers = TRUE)
+```
+
+I thought it might be interesting to see how the kegg-biodomain
+intersections look at different ages.
+
+```{r kegg-biodomain}
+kg.bd <- readRDS(here("Results", "Processed_Data", 
+    "Human_KEGG_Intersections_for_GSEA.RDS"))
+```
+
+```{r}
+full.cor.list <- tissue.ind.means <- vector(mode = "list", length = length(tissue.names))
+names(full.cor.list) <- names(tissue.ind.means) <- tissue.names
+
+for(tx in 1:length(tissue.names)){
+    print(tx)
+    tx.expr <- readRDS(expr.files[tx])
+    all.age.cor <- all.ind.means <- vector(mode = "list", length = length(kg.bd))
+    names(all.age.cor) <- names(all.ind.means) <- names(kg.bd)
+    all.mean <- rowMeans(tx.expr, na.rm = TRUE)
+    #overall expression changes with age, so we are
+    #going to put everyone on the same level by regressing
+    #out mean expression. I'm not sure why this is. I'm
+    #already using TPM. Shouldn't that fix that kind of thing?
+    #plot.with.model(age[names(all.mean)], all.mean)
+    adj.tx <- adjust(matX = tx.expr, adj.mat = matrix(all.mean, ncol = 1), retain.intercept = FALSE)
+    #adj.tx <- tx.expr
+    
+    for(bd in 1:length(kg.bd)){
+        k.age.cor <- rep(NA, length(kg.bd[[bd]]))
+        names(k.age.cor) <- names(kg.bd[[bd]])
+        ind.means <- vector(mode = "list", length = length(kg.bd[[bd]]))
+        names(ind.means) <- names(kg.bd[[bd]])
+
+        for(k in 1:length(kg.bd[[bd]])){    
+            int.id <- kg.bd[[bd]][[k]]
+            common.genes <- intersect(colnames(adj.tx), int.id)
+            if(length(common.genes) < 10){ #only look at intersections with at least 10 genes
+                k.age.cor[k] <- NA
+                next()
+                }
+            int.expr <- adj.tx[,common.genes]
+            #plot.decomp(int.expr, cols = colors.from.values(age))
+            #plot.decomp(t(int.expr))
+            #pheatmap(int.expr, scale = "row")
+            #pheatmap(int.expr)
+            #boxplot(t(int.expr))
+            #for each individual, calculate mean expression for the group of genes
+            mean.expr <- apply(int.expr, 1, mean)
+            ind.means[[k]] <- mean.expr
+            #plot.with.model(age[names(mean.expr)], mean.expr, report = "cor.test")
+            age.cor <- cor(mean.expr, age[rownames(int.expr)], method = "spearman")
+            k.age.cor[k] <- age.cor
+        }
+        all.age.cor[[bd]] <- k.age.cor
+        all.ind.means[[bd]] <- ind.means
+    }
+    full.cor.list[[tx]] <- all.age.cor
+    tissue.ind.means[[tx]] <- all.ind.means
+
+    #pdf(paste0("~/Desktop/", tissue.names[tx], ".pdf"), width = 10, height = 7)
+    #cor.order <- order(sapply(all.age.cor, function(x) mean(x, na.rm = TRUE)))
+    #par(mar = c(4,16, 4, 2))
+    #boxplot(all.age.cor[cor.order], las = 2, horizontal = TRUE, main = tissue.names[tx])
+    #abline(v = 0)
+    #dev.off()
+}
+
+sim_mat <- function(cor.list){
+    bd <- names(cor.list)
+    all.k <- unique(unlist(lapply(cor.list, names)))
+    sim.mat <- matrix(NA, nrow = length(bd), ncol = length(all.k))
+    rownames(sim.mat) <- bd
+    colnames(sim.mat) <- all.k
+    for(i in 1:length(cor.list)){
+        sim.mat[i,names(cor.list[[i]])] <- cor.list[[i]]
+    }
+    return(sim.mat)
+}
+
+all.mat <- lapply(full.cor.list, sim_mat)
+for(tx in 1:length(full.cor.list)){
+    pdf(paste0("~/Desktop/heat_", tissue.names[tx], ".pdf"), height = 40, width = 7)
+    test.decomp <- decomp_with_nas(all.mat[[tx]], add.zeros = TRUE, plot.results = FALSE)
+    #row.order <- order(test.decomp$u[,1])
+    #col.order <- order(test.decomp$v[,1])
+    row.order <- order(rowMeans(all.mat[[tx]], na.rm = TRUE))
+    col.order <- order(colMeans(all.mat[[tx]], na.rm = TRUE))
+    par(mar = c(4,4, 4, 2))
+    pheatmap(t(all.mat[[tx]][row.order, col.order]), 
+        cluster_rows = FALSE, cluster_cols = FALSE,
+        main = tissue.names[tx])
+    par(mar = c(4,24, 4, 2))
+    boxplot(all.mat[[tx]][,col.order], las = 2, horizontal = TRUE)
+    dev.off()
+
+}
+
+col.vals <- sapply(all.mat, function(x) colMeans(x, na.rm = TRUE))
+row.vals <- sapply(all.mat, function(x) rowMeans(x, na.rm = TRUE))
+
+pdf("~/Desktop/kegg_mean_cor.pdf", width = 8,  height = 45)
+row.order <- order(rowMeans(col.vals, na.rm = TRUE))
+col.order <- order(colMeans(col.vals, na.rm = TRUE))
+pheatmap(col.vals[row.order, col.order], cluster_rows = FALSE, cluster_cols = FALSE)
+dev.off()
+
+
+pdf("~/Desktop/bd_mean_cor.pdf", width = 7, height = 7)
+row.order <- order(rowMeans(row.vals, na.rm = TRUE))
+col.order <- order(colMeans(row.vals, na.rm = TRUE))
+pheatmap(row.vals[row.order, col.order], cluster_rows = FALSE, cluster_cols = FALSE)
+dev.off()
+
+row.order <- order(rowMeans(col.vals, na.rm = TRUE))
+boxplot(t(col.vals[row.order,]), las = 2)
+
+pairs(col.vals)
+```
+
+## Networks
+
+```{r net}
+all.thresh <- vector(mode = "list", length = length(tissue.names))
+names(all.thresh) <- tissue.names
+
+pdf("~/Desktop/nets.pdf")
+for(tx in 1:length(tissue.names)){
+    thresh.mat <- all.mat[[tx]]
+    all.vals <- as.vector(thresh.mat[which(!is.na(thresh.mat))])
+    high.thresh <- get.percentile(all.vals, 99)
+    low.thresh <- get.percentile(all.vals*-1, 99)
+
+    keep.vals <- union(which(thresh.mat > high.thresh), which(thresh.mat <= -low.thresh))
+    zero.out <- setdiff(1:length(thresh.mat), keep.vals)
+    thresh.mat[zero.out] <- NA
+    keep.rows <- setdiff(1:nrow(thresh.mat), which(apply(thresh.mat, 1, function(x) all(is.na(x)))))
+    keep.cols <- setdiff(1:ncol(thresh.mat), which(apply(thresh.mat, 2, function(x) all(is.na(x)))))
+    sub.mat <- thresh.mat[keep.rows, keep.cols]
+    all.thresh[[tx]] <- sub.mat
+    #pheatmap(sub.mat, cluster_rows = FALSE, cluster_cols = FALSE)
+    edge.list <- which(!is.na(sub.mat), arr.ind = TRUE)
+    edge.weights <- sub.mat[which(!is.na(sub.mat))]
+    edge.list[,1] <- rownames(sub.mat)[edge.list[,1]]
+    edge.list[,2] <- colnames(sub.mat)[as.numeric(edge.list[,2])]
+
+    sub.net <- graph_from_edgelist(edge.list, directed = FALSE)
+    text.size <- scale.between.vals(degree(sub.net)/max(degree(sub.net)), 0.3, 1.2)
+    plot(sub.net, vertex.size = degree(sub.net), layout = layout_with_kk,
+        main = tissue.names[tx], edge.color = colors.from.values(edge.weights, 
+        use.pheatmap.colors = TRUE), edge.width = abs(edge.weights)*10,
+        vertex.label.cex = text.size)
+    add_color_bar(edge.weights, use.pheatmap.colors = TRUE, position = "topright")
+}
+dev.off()
+
+all.rownames <- unique(unlist(lapply(all.thresh, rownames)))
+all.colnames <- unique(unlist(lapply(all.thresh, colnames)))
+
+all.thresh.mat <- matrix(NA, nrow = length(all.rownames), ncol = length(all.colnames))
+rownames(all.thresh.mat) <- all.rownames
+colnames(all.thresh.mat) <- all.colnames
+for(tx in 1:length(all.thresh)){
+    all.thresh.mat[rownames(all.thresh[[tx]]), colnames(all.thresh[[tx]])] <- all.thresh[[tx]]
+}
+
+row.order <- order(rowMeans(all.thresh.mat, na.rm = TRUE))
+col.order <- order(colMeans(all.thresh.mat, na.rm = TRUE))
+pheatmap(all.thresh.mat[row.order, col.order], cluster_rows = FALSE, cluster_cols = FALSE)
+```
+
+How can we summarize this result and then look for aging subtypes?
+Each individual needs a score in multiple categories and multiple
+brain tissues. But we also don't have longitudinal data, only 
+snapshots, so do we only look in older people? Do we fit some
+kind of model to serve as a reference, and then people deviate 
+from that reference?
+
+People could be scored based on their deviation from the mean
+of other people their age in each grouping.
+
+```{r ind_score}
+#tissue.ind.means has mean expression values for every
+#intersection in every tissue.
+
+#tissue.ind.means
+
+for(tx in 1:length(tissue.names)){
+    tx.means <- tissue.ind.means[[tx]]
+    for(bd in 1:length(tx.means)){
+        all.k.means <- Reduce("rbind", tx.means[[bd]])
+        rownames(all.k.means) <- names(tx.means[[bd]])[which(sapply(tx.means[[bd]], length) > 0)]
+        test <- apply(all.k.means, 1, function(x) cor(x, age[colnames(all.k.means)]))
+        pheatmap(all.k.means)
+        plot.decomp(t(all.k.means), cols = colors.from.values(age[colnames(all.k.means)]), main = names(tissue.ind.means[[tx]])[bd])
+        plot.decomp(all.k.means)
+        boxplot(all.k.means[,order(colMeans(all.k.means))])
+    }
+}
+```

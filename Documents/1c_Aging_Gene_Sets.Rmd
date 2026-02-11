@@ -1,0 +1,163 @@
+---
+title: "Aging Gene Sets"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+## Introduction
+
+The purpose of this workflow is to check whether 
+specific gene sets identified in 1a.KEGG_and_Biodomains.Rmd
+have differential expression across age groups.
+
+```{r param}
+rm(list = ls())
+library(here)
+
+args = commandArgs(trailingOnly=TRUE)
+gene.set.name <- args[1]
+
+if(is.na(gene.set.name)){
+    gene.set.name <- "Glutamate_Genes"
+    #gene.set.name <- "Parkinson_disease-Mitochondrial_Metabolism_Genes"
+    #gene.set.name <- "Ribosome-Immune_Response_Genes"
+    #gene.set.name <- "Ribosome-Synapse_Genes"
+    #gene.set.name <- "Gastric_acid_secretion-Mitochondrial_Metabolism_Genes"
+}
+gene.set.text <- gsub("_", " ", gene.set.name)
+
+results.dir <- here("Results", "age_batch_12_gene")
+dot.col <- "#dd1c77"
+
+```
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+
+general.data.dir <- here("Data", "general")
+group.processed.data.dir <- here("Results", "all", "processed_data")
+processed.data.dir <- here("Results", "all_gene", "processed_data")
+```
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "DT", "gprofiler2", "cluster", "vioplot")
+load_libraries(needed.libraries)
+```
+
+
+```{r info}
+#gene information tables
+gene.info <- read.table(file.path(general.data.dir, "mouse_gene_info.txt"), sep = "\t", header = TRUE)
+scaled.expr <- readRDS(file.path(processed.data.dir, "Final_Adjusted_Expr.RDS"))
+covar.table <- read.csv(file.path(processed.data.dir, "mouse_info_all_geno.csv"))
+
+gene.set <- read.delim(here("Results", "age_batch_12_gene", "validation_gene_sets", 
+    paste0(gene.set.name, ".txt")))
+gene.id <- gene.info[match(gene.set[,1], gene.info[,"external_gene_name"]),"ensembl_gene_id"]
+names(gene.id) <- gene.set[,1]
+```
+
+## Individual Gene Distributions by Age
+
+```{r zero_line}
+#adds zero line to grouped box plot.
+add_zero_line <- function(){
+  plot.dim <- par("usr")
+  segments(plot.dim[1], 0, plot.dim[2], 0)
+}
+```
+
+## All expression
+
+The boxplot below shows expression for all genes and 
+all individuals at both ages.
+
+```{r gene_set, fig.width = 5, fig.height = 5}
+gene.idx <- match(gene.id, colnames(scaled.expr))
+sub.expr <- scaled.expr[,gene.idx]
+colnames(sub.expr) <- names(gene.id)
+
+u_age <- c(4, 12)
+age.id <- lapply(u_age, 
+    function(x) rownames(covar.table)[which(covar.table[,"age_batch"] == x)])
+
+binned.expr <- lapply(age.id, function(x) sub.expr[x,])
+names(binned.expr) <- u_age
+
+boxplot(binned.expr, ylim = c(min(sub.expr), max(sub.expr)+0.5),
+    ylab = "Scaled Expression")
+diff.test <- pairwise_test(binned.expr)
+add_pairwise_results(binned.expr, diff.test, y.nudge = 0.02)
+```
+
+## Boxes by Gene
+
+The boxplot below splits up expression by gene. 
+
+```{r by_gene, fig.width = 12, fig.height = 6}
+means.by.age <- sapply(binned.expr, colMeans)
+mean.diff.order <- order(means.by.age[,2]-means.by.age[,1], decreasing = TRUE)
+ordered.expr <- lapply(binned.expr, function(x) x[,mean.diff.order])
+plot.grouped.boxes(ordered.expr, type = "matrix", plot.type = "vioplot")
+add_zero_line()
+```
+
+## Median Expression by Age
+
+The violin plot shows the median expression for each
+gene at different ages.
+
+```{r, mean_diff}
+#mean.expr <- lapply(binned.expr, colMeans)
+mean.expr <- lapply(binned.expr, function(x) apply(x, 2, median))
+vioplot(mean.expr, col = "lightgray", ylim = c(min(unlist(mean.expr)), 
+    max(unlist(mean.expr))+0.02),
+    main = paste(gene.set.text, "expression with age"))
+mtext("Mean Expression", side = 2, line = 2.5)
+stripchart(mean.expr, vertical = TRUE, pch = 16, method = "jitter", 
+    col = dot.col, add = TRUE)
+abline(h = 0)
+
+test.diff <- pairwise_test(mean.expr)
+add_pairwise_results(mean.expr, test.diff, y.nudge = 0.02)
+```
+
+## Median Expression by Age with Individual Genes
+
+The plot below shows the same as above but with 
+the median trajectories of individual genes tracked.
+
+```{r mean_detail, fig.width = 7, fig.height = 7}
+#mean.table <- sapply(binned.expr, colMeans)
+mean.table <- sapply(binned.expr, function(x) apply(x, 2, median))
+
+plot.new()
+plot.window(xlim = c(0.5,2.5), ylim = c(min(mean.table)-0.02, max(mean.table)+0.01))
+vioplot(mean.expr, col = "lightgray", add = TRUE, axes = FALSE)
+plot.dim <- par("usr")
+draw.rectangle(plot.dim[1], plot.dim[2], plot.dim[3], plot.dim[4], 
+    border.col = NA, fill = rgb(1,1,1, alpha = 0.9))
+for(i in 1:length(gene.set[,1])){
+    points(1:ncol(mean.table), mean.table[i,], type = "b", col = i, pch = 16,
+        lwd = 2)
+    text(x = ncol(mean.table)+0.02, y = mean.table[i,ncol(mean.table)],
+        labels = rownames(mean.table)[i], adj = 0, col = i, font = 2)
+    text(x = 1-0.02, y = mean.table[i,1],
+        labels = rownames(mean.table)[i], adj = 1, col = i, font = 2)
+}
+axis(2)
+abline(h = 0)
+mtext("Mean Expression", side = 2, line = 2.5, cex = 1.5)
+mtext("Individual Gene Trajectories", side = 3, line = 2.5, font = 2, cex = 1.2)
+text(x = 1:ncol(mean.table), y = min(mean.table)-0.02, 
+    labels = paste(colnames(mean.table), "months"), adj = 0.5, cex = 1.5)
+add_pairwise_results(mean.expr, test.diff, y.nudge = 0.02)
+
+```

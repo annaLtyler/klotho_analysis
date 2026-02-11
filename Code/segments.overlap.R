@@ -1,6 +1,8 @@
 #This function tells you if two segments overlap
 segments.overlap <- function(start1, end1, start2, end2){	
-	all.pos <- c("1" = start1, "1" = end1, "2" = start2, "2" = end2)
+	
+	all.pos <- c("1" = as.numeric(start1), "1" = as.numeric(end1), 
+		"2" = as.numeric(start2), "2" = as.numeric(end2))
 	
 	#if the segments start or stop in the same place
 	#say they overlap

@@ -33,6 +33,7 @@ library(here)
 args = commandArgs(trailingOnly=TRUE)
 
 expr.filename <- args[1]
+gene.set <- args[2]
 
 if(is.na(expr.filename)){
   expr.filename <- "gene_reads_v11_brain_amygdala.gct"
@@ -40,19 +41,27 @@ if(is.na(expr.filename)){
   #expr.filename <- "gene_reads_v11_brain_caudate_basal_ganglia.gct"
   #expr.filename <- "gene_reads_v11_brain_hippocampus.gct"
   #expr.filename <- "gene_reads_v11_brain_nucleus_accumbens_basal_ganglia.gct"
+
+  #gene.set.file <- "Glutamate_Genes.txt"
+  #gene.set.file <- "Ribosome-Synapse_Genes.txt"
+  #gene.set.file <- "Ribosome-Immune_Response_Genes.txt"
+  gene.set.file <- "Parkinson_disease-Mitochondrial_Metabolism_Genes.txt"
+}else{
+  gene.set.file <- paste0(gene.set, ".txt")
 }
 
 tissue.name <- gsub(".gct", "", gsub("gene_reads_v11_", "", expr.filename))
-
-gene.set.file <- "Glutamate_Genes.txt"
-#gene.set.file <- "Ribosome-Synapse_Genes.txt"
-#gene.set.file <- "Ribosome-Immune_Response_Genes.txt"
+gene.set.label <- gsub(".txt", "", gene.set.file)
 
 dot.col <- "#dd1c77"
-scale.expr <- TRUE #if TRUE, scales expression across individuals
+scale.expr <- FALSE #if TRUE, scales expression across individuals
 
 results.dir <- here("Results", "GTEx")
 if(!file.exists(results.dir)){dir.create(results.dir)}
+
+quick.run <- TRUE #this subsets out the genes we need before adusting so it
+                  #goes faster. Otherwise all genes are adjusted and written 
+                  #to file for use in other workflows
 ```
 
 This workflow is looking at expression in `r tissue.name`.
@@ -74,7 +83,7 @@ load_libraries(needed.libraries)
 
 ```{r read_data}
 geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
-het.col <- "gray"
+het.col <- "#dfc27d"
 hap.cols <- c("FCFC" = as.vector(geno.cols["FC/FC"]), 
   "FCVS" = het.col, "VSVS" = as.vector(geno.cols["VS/VS"]))
 #barplot(rep(1, 3), col = hap.cols)
@@ -88,7 +97,6 @@ haps <- read.table(file.path(data.dir, "id.geno.klotho.apoe.ALL.txt"), sep = " "
 val.genes <- read.table(here("Results", "age_batch_12_gene", 
   "validation_gene_sets", gene.set.file))[,1]
 
-
 ortho.file <- here("Results", "age_batch_12_gene", "validation_gene_sets",
   paste0(gsub(".txt", "", gene.set.file), "_Orthologs.csv"))
 
@@ -96,13 +104,75 @@ gene.orthos <- get_orthologs(mouse.id = val.genes, file.name = ortho.file)
 ```
 
 ```{r read_expr}
+expr.meta <- as.matrix(read.delim(file.path(data.dir, "GTEx_Analysis_v11_Annotations_SampleAttributesDS.txt")))
 expr <- read.delim(file.path(data.dir, expr.filename), skip = 2)
 expr.gene.info <- expr[,1:2]
-
-age <- pheno[,"AGE"]
-sex <- pheno[,"SEX"]
-names(age) <- names(sex) <- pheno[,"SUBJID"]
 ```
+
+```{r align_vars}
+#line up all variables by subject ID. Use the subject IDs 
+#from pheno as the reference format. Modify the subject ID
+#formats for all other data tables so we can pull the same 
+#individuals out of each one. We need to line up phenotype
+#data, haplotype data, and expression data.
+pheno.subj.id <- pheno[,"SUBJID"]
+hap.subj.id <- rownames(haps) #from Robert; WGS
+expr.subj.id <- colnames(expr) #subject IDs for expression
+expr.meta.samp.id <- expr.meta[,1] #sample IDs for expression, includes subject ID
+
+
+#modify each subject ID format to look like pheno subject IDs
+mod.hap.subj.id <- sapply(strsplit(hap.subj.id, "-"), 
+  function(x) paste(x[1], x[2], sep = "-"))
+rownames(haps) <- mod.hap.subj.id
+
+#align metadata with the expression samples we have
+alt.samp.id <- gsub(".", "-", colnames(expr), fixed = TRUE)
+common.id <- intersect(alt.samp.id, expr.meta[,1])
+meta.idx <- which(expr.meta[,1] %in% common.id)
+sample.meta <- expr.meta[meta.idx,]
+meta.aligned.expr <- expr[,match(common.id, gsub(".", "-", colnames(expr), fixed = TRUE))]
+colnames(meta.aligned.expr) <- common.id
+
+#extract the subject ID from the sample ID
+#so we can align phenotype and haplotype data
+mod.expr.subj.id <- sapply(strsplit(colnames(meta.aligned.expr), "-"), 
+  function(x) paste(x[1:2], collapse = "-"))
+
+#find the IDs common to phenotype, haplotype, and expression
+common.id <- Reduce("intersect", list(pheno.subj.id, mod.hap.subj.id, mod.expr.subj.id))
+
+#match up all matrices based on common IDs
+pheno.id.idx <- sapply(common.id, function(x) which(pheno.subj.id == x))
+expr.id.idx <- sapply(common.id, function(x) which(mod.expr.subj.id == x))
+hap.id.idx <- sapply(common.id, function(x) which(rownames(haps) == x))
+
+matched.pheno <- pheno[pheno.id.idx,]
+matched.haps <- haps[hap.id.idx,]
+matched.expr <- meta.aligned.expr[,expr.id.idx]
+  colnames(matched.expr) <- common.id
+matched.meta <- sample.meta[sapply(common.id, function(x) grep(x, sample.meta[,1])),]
+
+
+#filter out genes with fewer than five counts on average
+total.counts <- rowSums(matched.expr)
+keep.genes <- which(total.counts >= 5*ncol(matched.expr))
+filtered.expr <- matched.expr[keep.genes,]
+filtered.gene.info <- expr.gene.info[keep.genes,]
+
+#convert to TPM
+millions.per.ind <- colSums(filtered.expr)/1e6
+tpm.expr <- sapply(1:length(millions.per.ind), 
+  function(x) filtered.expr[,x]/millions.per.ind[x])
+dimnames(tpm.expr) <- dimnames(filtered.expr)
+
+age <- matched.pheno[,"AGE"]
+sex <- matched.pheno[,"SEX"]
+sex[which(sex == 1)] <- "male"
+sex[which(sex == 2)] <- "female"
+names(age) <- names(sex) <- common.id
+```
+
 
 ## Age Distribution
 
@@ -148,59 +218,67 @@ Sex and age are distributed as follows:
 ```{r sex, fig.width = 7, fig.height = 5}
 age.sex <- table(data.frame("age bin" = age.bin, "sex" = sex))
 rownames(age.sex) <- bin.names
-colnames(age.sex) <- c("Female", "Male")
 
 #quartz(width = 7, height = 5)
 a <- barplot(t(age.sex), beside = TRUE, legend = TRUE, 
   args.legend = c("x" = "topleft"), ylim = c(0, max(age.sex)*1.1))
-text(x = a[1,], y = age.sex[,1]+15, labels = age.sex[,1])
-text(x = a[2,], y = age.sex[,2]+15, labels = age.sex[,2])
+text(x = a[1,], y = age.sex[,1]+2, labels = age.sex[,1])
+text(x = a[2,], y = age.sex[,2]+2, labels = age.sex[,2])
 ```
 
-## Gene expression by age
+## `r gene.set` gene expression by age
 
-```{r extract_genes}
-common.genes <- intersect(gene.orthos[,"human_external_gene_name"], expr.gene.info[,2])
-gene.idx <- match(common.genes, expr.gene.info[,2])
+```{r extract_fun}
+#extract a subset of genes we are interested in.
+#genes should be in columns
+extract_genes <- function(expr.mat, gene.info, gene.names){
+  gene.idx <- match(gene.names, gene.info[,"Description"])
+  not.na <- which(!is.na(gene.idx))
+  expr.sub <- expr.mat[,gene.idx[not.na]]
+  colnames(expr.sub) <- gene.names[not.na]
+  sub.info <- gene.info[gene.idx[not.na],]
+  result <- list("expression" = expr.sub, "info" = sub.info)
+  return(result)
+}
 
-expr.num <- expr[gene.idx,3:ncol(expr)]
-```
-
-```{r align_vars}
-#line up all variables by subject ID.
-pheno.subj.id <- pheno[,"SUBJID"]
-
-hap.subj.id <- rownames(haps)
-mod.hap.subj.id <- sapply(strsplit(hap.subj.id, "-"), function(x) paste(x[1], x[2], sep = "-"))
-rownames(haps) <- mod.hap.subj.id
-
-expr.subj.id <- colnames(expr.num)
-mod.expr.subj.id <- sapply(strsplit(expr.subj.id, ".", fixed = TRUE), function(x) paste(x[1], x[2], sep = "-"))
-colnames(expr.num) <- mod.expr.subj.id
-
-common.id <- Reduce("intersect", list(pheno.subj.id, mod.hap.subj.id, mod.expr.subj.id))
-
-#match up covariates
-pheno.id.idx <- sapply(common.id, function(x) which(pheno.subj.id == x))
-matched.age <- age[pheno.id.idx]
-matched.age.bin <- age.bin[pheno.id.idx]
-matched.sex <- sex[pheno.id.idx]
-
-expr.id.idx <- sapply(common.id, function(x) which(colnames(expr.num) == x))
-matched.expr <- expr.num[,expr.id.idx]
-#matched.expr[1:10, 1:10]
-
-hap.idx <- sapply(common.id, function(x) which(rownames(haps) == x))
-matched.haps <- haps[hap.idx,]
-
-matched.gene.info <- expr.gene.info[gene.idx,]
 ```
 
 ```{r adjust_expr}
-#adjust by sex
-adj.expr <- log2(adjust(t(matched.expr), matrix(matched.sex, ncol = 1))+1)
-#name the genes something useful.
-colnames(adj.expr) <- matched.gene.info[,"Description"]
+#get names for human orthologs of the mouse genes we are interested in
+genes.of.interest <- intersect(gene.orthos[,"human_external_gene_name"], 
+  expr.gene.info[,2])
+
+if(quick.run){
+  sub.set <- extract_genes(expr.mat = t(tpm.expr), 
+    gene.info = filtered.gene.info, gene.names = genes.of.interest)
+  sub.expr <- sub.set$expression
+  sub.info <- sub.set$info
+}else{
+  sub.expr <- t(tpm.expr) #make sure genes are in columns
+  sub.info <- filtered.gene.info
+}
+
+#dim(sub.expr)
+#dim(sub.info)
+
+#log transform
+log.expr <- log2(sub.expr+1)
+
+#adjust all genes for sex, site of collection, and RIN
+#we might want to use them later
+adj.mat <- cbind(dummy_covar(cbind(matched.meta[,"SMCENTER",drop=FALSE], 
+  "sex" = sex)), "RIN" = as.numeric(matched.meta[,"SMRIN"]))
+adj.expr <- adjust(log.expr, adj.mat, retain.intercept = FALSE)
+
+ensembl.id <- sapply(strsplit(sub.info[,1], ".", fixed = TRUE), 
+  function(x) x[1])
+colnames(adj.expr) <- ensembl.id
+
+#boxplot(adj.expr[,1:10])
+#boxplot(t(adj.expr[1:10,]), las = 2)
+#hist(rowMeans(adj.expr, na.rm = TRUE)) #individuals have mean 0
+#hist(colMeans(adj.expr, na.rm = TRUE)) #genes have mean 0
+#hist(adj.expr)
 
 if(scale.expr){
   scaled.expr <- apply(adj.expr, 2, scale)
@@ -212,8 +290,40 @@ if(scale.expr){
   ylab = "log2(count)"
 }
 
-binned.expr <- lapply(1:max(age.bin), function(x) use.expr[which(matched.age.bin == x),])
+
+#boxplot(use.expr[,1:10])
+#boxplot(t(use.expr[1:10,]), las = 2)
+#hist(rowMeans(use.expr, na.rm = TRUE)) #individuals have mean 0
+#hist(colMeans(use.expr, na.rm = TRUE)) #genes have mean 0
+#hist(use.expr)
+if(!quick.run){ #only save if we haven't subset the genes yet
+  saveRDS(use.expr, 
+    here("Results", "GTEx", paste0("Adjusted_Expr_", tissue.name, ".RDS")))
+
+  #then subset out the genes of interest for the rest of the analysis
+  sub.set <- extract_genes(use.expr, sub.info, genes.of.interest)
+  use.expr <- sub.set$expression
+  sub.info <- sub.set$info
+}
+
+```
+
+```{r bin_expr}
+binned.expr <- lapply(1:max(age.bin), function(x) use.expr[which(age.bin == x),])
 names(binned.expr) <- bin.names
+```
+
+```{r interaction_model}
+#test whether age and genotype interact 
+int.model <- apply(use.expr, 2, 
+  function(x) lm(x~age*ordered(matched.haps[,1], 
+  levels = c("FCFC", "FCVS", "VSVS"))))
+int.p <- sapply(int.model, function(x) coef(summary(x))[5,4])
+
+max.y <- max(c(-log10(0.05), -log10(int.p)))
+barplot(-log10(int.p), las = 2, ylim = c(0, max.y+0.1), ylab = "-log10(p)",
+  main = "Interaction p values for Klotho genotype and age")
+abline(h = -log10(0.05))
 ```
 
 The genes in this module have the following correlation structure.
@@ -226,21 +336,13 @@ pheatmap(cor(use.expr, use = "pairwise.complete.obs"))
 The following plot shows gene expression for this group
 of genes by age. 
 
-```{r zero_line}
-#adds zero line to grouped box plot.
-add_zero_line <- function(){
-  plot.dim <- par("usr")
-  segments(plot.dim[1], 0, plot.dim[2], 0)
-}
-```
 
 ```{r plot_expr, fig.width = 12, fig.height = 5}
-if(scale.expr){
-  mean.order <- 1:ncol(adj.expr)
-}else{
-  mean.order <- order(colMeans(adj.expr))
-}
-ordered.expr <- lapply(binned.expr, function(x) x[,mean.order])
+young.mean <- colMeans(binned.expr[[1]])
+old.mean <- colMeans(binned.expr[[length(binned.expr)]])
+diff.order <- order(old.mean - young.mean)
+
+ordered.expr <- lapply(binned.expr, function(x) x[,diff.order])
 #quartz(width = 12, height = 5)
 plot.grouped.boxes(ordered.expr, type = "matrix", print.vals = NA, ylab = ylab,
   main = "Expression by Age Bins")
@@ -254,9 +356,11 @@ Mean expression for each gene in each age group is shown below.
 ```{r heat, fig.width = 3, fig.height = 5}
 mean.mat <- sapply(binned.expr, function(x) colMeans(x, na.rm = TRUE))
 #quartz(width = 3, height = 5)
-pheatmap(mean.mat, cluster_cols = FALSE)
+pheatmap(mean.mat[diff.order,], cluster_cols = FALSE, cluster_rows = FALSE)
+
 write.table(mean.mat, 
-  file.path(results.dir, paste0("Mean_Expr_by_Age_", tissue.name, ".csv")),
+  file.path(results.dir, 
+  paste0("Mean_Expr_by_Age_", tissue.name, "_", gene.set.label, ".csv")),
   quote = FALSE, sep = ",")
 ```
 
@@ -269,7 +373,7 @@ vioplot(mean.mat, col = hap.cols, main = "Module Mean Expression",
   ylim = c(min(mean.mat), max(mean.mat)+0.2))
 add_pairwise_results(mean.mat, mean.mat.tests, y.nudge = 0.15, text.nudge = 0.01)
 
-mtext("Mean Scaled Expression", side = 2, line = 2.5)
+mtext("Mean Expression", side = 2, line = 2.5)
 
 ```
 
@@ -302,7 +406,8 @@ expression difference increases with age.
 
 ```{r kl_hap, fig.width = 12, fig.height = 5, results = "asis"}
 kl.haps <- c("FCFC", "FCVS", "VSVS")
-kl.groups <- lapply(kl.haps, function(x) rownames(matched.haps)[which(matched.haps[,1] == x)])
+kl.groups <- lapply(kl.haps, 
+  function(x) rownames(matched.haps)[which(matched.haps[,1] == x)])
 
 for(i in 1:length(ordered.expr)){
   cat("###", bin.names[i], "\n")
@@ -323,8 +428,22 @@ We want to see whether Klotho haplotype has a significant
 effect on expression of genes individually, and on the group
 as a whole.
 
-```{r module_overall, results = "asis", fig.height = 5, fig.width = 7}
-stop()
+```{r mean_order}
+test_order <- function(data.mat.or.list, test.results){
+  comp.rows <- test.results[[1]]
+
+  if(class(data.mat.or.list)[1] == "matrix"){
+    maxes <- apply(comp.rows, 1, function(x) c(max(data.mat.or.list[,x[1]]), max(data.mat.or.list[,x[2]])))
+  }else{
+    maxes <- apply(comp.rows, 1, function(x) c(max(data.mat.or.list[[x[1]]]), max(data.mat.or.list[[x[2]]])))
+  }
+  max.order <- order(apply(maxes, 2, max))
+  return(max.order)
+}
+
+```
+
+```{r module_overall, results = "asis", fig.height = 6, fig.width = 7}
 
 kl.expr.by.age <- vector(mode = "list", length = length(ordered.expr))
 names(kl.expr.by.age) <- names(ordered.expr)
@@ -350,25 +469,34 @@ for(i in 1:length(ordered.expr)){
   mean.by.geno <- sapply(mean.expr, function(x) mean(x, na.rm = TRUE))
   kl.effect.mat[i,] <- mean.by.geno
 
-  
   #need to make the pairwise test function work with lists
-  age.mat.tests <- pairwise_test(age.table)
+  effect.tests <- pairwise_test(plot.expr)
 
-  pval <- threshold_p(diff.p[1,"Pr(>F)"], return.text = TRUE)
-
-  vioplot(plot.expr, col = hap.cols[names(plot.expr)], main = "Group Mean Expression")
+  vioplot(plot.expr, col = hap.cols[names(plot.expr)], main = "Group Mean Expression",
+    ylim = c(min(unlist(plot.expr), na.rm = TRUE), 
+    max(unlist(plot.expr), na.rm = TRUE)+0.5))
   mtext("Mean Scaled Expr", side = 2, line = 2.5)
   stripchart(plot.expr, vertical = TRUE, pch = 16, method = "jitter", col = dot.col,
     add = TRUE)
-  mtext(pval, side = 3, line = -2)
+
+  
+  #reorder test effects so comparisons with the highest values are plotted later
+
+  
+  add_pairwise_results(data.mat.or.list = plot.expr, 
+    test.results = effect.tests, y.nudge = 0.05, text.nudge = 0.03,
+    min.beam.dist = 0.07)
+  
   cat("\n\n")
 }
 
 saveRDS(kl.expr.by.age, 
-  file.path(results.dir, paste0("Mean_Expr_per_gene_by_Age_", tissue.name, ".RDS")))
+  file.path(results.dir, 
+  paste0("Mean_Expr_per_gene_by_Age_", tissue.name, "_", gene.set.label, ".RDS")))
 
 write.table(kl.effect.mat, 
-  file.path(results.dir, paste0("Mean_KL_Expr_by_Age_", tissue.name, ".csv")),
+  file.path(results.dir, 
+  paste0("Mean_KL_Expr_by_Age_", tissue.name, "_", gene.set.label, ".csv")),
   sep = ",", quote = FALSE)
 ```
 

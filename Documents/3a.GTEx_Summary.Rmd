@@ -33,13 +33,32 @@ load_libraries(needed.libraries)
 ```
 
 ```{r params}
+args = commandArgs(trailingOnly=TRUE)
+
+gene.set <- args[1]
+
+if(is.na(gene.set)){
+    gene.set <- "Glutamate_Genes"
+    #gene.set <- "Ribosome-Synapse_Genes"
+    #gene.set <- "Parkinson_disease-Mitochondrial_Metabolism_Genes"
+}
+gene.group.label = gsub("_", " ", gene.set)
+
 tissue.cols <- brewer.pal(12, "Paired")
+
+geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
+het.col <- "#dfc27d"
+hap.cols <- c("FCFC" = as.vector(geno.cols["FC/FC"]), 
+  "FCVS" = het.col, "VSVS" = as.vector(geno.cols["VS/VS"]))
+
 ```
+
 
 ## Effects of Age
 
 ```{r age_effect, fig.width = 12, fig.height = 7}
-all.age.files <- list.files(here("Results", "GTEx"), pattern = "Mean_Expr_by_Age",
+all.age.files <- get.files(here("Results", "GTEx"), 
+    want = c(gene.set, "Mean_Expr_by_Age"),
     full.names = TRUE)
 tissues <- gsub("_", " ", gsub(".csv", "", gsub("Mean_Expr_by_Age_brain_", "", basename(all.age.files))))
 all.age <- lapply(all.age.files, read.csv)
@@ -47,7 +66,7 @@ age.bins <- gsub(".", "-", gsub("X", "", colnames(all.age[[1]])), fixed = TRUE)
 for(i in 1:length(all.age)){
     colnames(all.age[[i]]) <- age.bins
 }
-names(all.age) <- tissues
+names(all.age) <- gsub(paste("", gene.group.label), "", tissues)
 plot.grouped.boxes(all.age, type = "matrix", legend.x = 15, legend.y = 1,
     ylab = "Expression Relative to Tissue Mean")
 
@@ -68,31 +87,34 @@ for(i in 1:nrow(age.table)){
 }
 axis(2)
 mtext("Expression Relative to Tissue Mean", side = 2, line = 2.5)
-mtext("Glutamate Receptor Expression Declines with Age\nAcross all Brain Tissues", 
+mtext(paste(gene.group.label, "Gene Expression Trends with Age\nAcross all Brain Tissues"), 
     side = 3, line = 1.5)
 text(1:length(age.bins), y = ymin, labels = age.bins)
 legend("topright", pch = 16, col = tissue.cols[1:nrow(age.table)], 
     legend = rownames(age.table))
+
 ```
 
 ```{r age_viol, fig.width = 7, fig.height = 6}
+
 age.mat.tests <- pairwise_test(age.table)
 
 vioplot(age.table, main = "Expression Across all Tissues with Age",
     ylim = c(min(age.table), max(age.table)+0.1))
-add_pairwise_results(data.mat = age.table, 
+add_pairwise_results(data.mat.or.list = age.table, 
     test.results = age.mat.tests, y.nudge = 0.02, text.nudge = 0.02)
 
 mtext("Expression Relative to Tissue Mean", side = 2, line = 2.5)
 ```
 
-## Effects of Klotho on Glutamate Receptor Gene Expression {.tabset .tabset-fade .tabset-pills}
+## Effects of Klotho on `r gene.group.label` Gene Expression {.tabset .tabset-fade .tabset-pills}
 
 Klotho haplotype seems to have varied effects
 across regions.
 
 ```{r kl_files}
-kl.files <- list.files(here("Results", "GTEx"), pattern = "Mean_KL_Expr_by_Age", full.name = TRUE)
+kl.files <- get.files(here("Results", "GTEx"), 
+    want = c("Mean_KL_Expr_by_Age", gene.set), full.name = TRUE)
 kl.expr <- lapply(kl.files, read.csv)
 names(kl.expr) <- tissues
 ```
@@ -102,9 +124,11 @@ ymin <- min(unlist(kl.expr), na.rm = TRUE)-0.1
 ymax <- max(unlist(kl.expr), na.rm = TRUE)+0.1
 
 kl.by.age <- lapply(1:length(age.bins), function(x) 
-    t(sapply(kl.expr, function(y) y[x,])))
+    t(sapply(kl.expr, function(y) as.numeric(y[x,]))))
 names(kl.by.age) <- age.bins
-
+for(i in 1:length(kl.by.age)){
+    colnames(kl.by.age[[i]]) <- colnames(kl.expr[[1]])
+}
 
 for(i in 1:length(kl.by.age)){
     cat("###", names(kl.by.age)[i], "\n")
@@ -128,13 +152,14 @@ for(i in 1:length(kl.by.age)){
     par(mar = c(4,0,4,2))
     plot.new()
     plot.window(xlim = c(0,1), ylim = c(0,1))
-    legend(x = 0, y = 1, legend = rownames(kl.by.age[[i]]), 
+    legend(x = 0, y = 1, legend = gsub(paste("", gene.group.label), "", rownames(kl.by.age[[i]])), 
         col = tissue.cols[1:nrow(kl.by.age[[i]])], pch = 16, lty = 1)
    cat("\n\n") 
 }
+
 ```
 
-## Glutamate gene expression by KL and in boxes {.tabset .tabset-fade .tabset-pills}
+## `r gene.group.label` Gene expression by KL and age {.tabset .tabset-fade .tabset-pills}
 
 
 ```{r boxes, results = "asis"}
@@ -145,19 +170,157 @@ for(i in 1:length(kl.by.age)){
     age.batch <- apply(kl.by.age[[i]], 2, as.numeric)
     test.diff <- pairwise_test(age.batch)
     
-    boxplot(age.batch, ylab = "Expression Relative to Tissue Mean",
-        main = names(kl.by.age)[i], ylim = c(min(age.batch, na.rm = TRUE), 
-        max(age.batch, na.rm = TRUE)+0.5))
+    #remove columns of NAs, vioplot can't handle them.
+    not.na.col <- which(apply(age.batch, 2, function(x) !all(is.na(x))))
+    no.na <- age.batch[,not.na.col]
+
+    vioplot(no.na,main = names(kl.by.age)[i], 
+        ylim = c(min(age.batch, na.rm = TRUE), 
+        max(age.batch, na.rm = TRUE)+0.55), col = hap.cols[colnames(no.na)])
+    mtext("Expression Relative to Tissue Mean", side = 2, line = 2.5)
 
     stripchart(lapply(1:ncol(age.batch), function(x) age.batch[,x]), 
         vertical = TRUE, method = "jitter", col = "#dd1c77",
         add = TRUE, pch = 16)
     abline(h = 0)
     
-    add_pairwise_results(data.mat = age.batch, test.results = test.diff)
+    add_pairwise_results(data.mat.or.list = no.na, test.results = test.diff,
+        y.nudge = 0.05, text.nudge = 0.04, min.beam.dist = 0.1)
     
     cat("\n\n")
 }
+```
+
+```{r old_kl_effect}
+pdf(here("Results", "for_paper", paste0("Human_Validation_vioplot_", gene.set, ".pdf")), 
+    width = 5, height = 5)   
+    #quartz(width = 5, height = 5)
+    i = 3
+    par(lwd = 1)
+    age.batch <- apply(kl.by.age[[i]], 2, as.numeric)
+    test.diff <- pairwise_test(age.batch)
+
+    #remove columns of NAs, vioplot can't handle them.
+    not.na.col <- which(apply(age.batch, 2, function(x) !all(is.na(x))))
+    no.na <- age.batch[,not.na.col]
+
+    ylim <- c(min(age.batch, na.rm = TRUE), max(age.batch, na.rm = TRUE)+0.2)
+    #ylim = c(-0.5, 0.45)
+    vioplot(no.na, ylim = ylim, col = hap.cols[colnames(no.na)],
+        cex.lab = 1.5, cex.axis = 1.5,)
+    mtext("Median Expression", side = 2, line = 2.5, cex = 1.5)
+
+    stripchart(lapply(1:ncol(age.batch), function(x) age.batch[,x]), 
+        vertical = TRUE, method = "jitter", col = "#dd1c77",
+        add = TRUE, pch = 16)
+    abline(h = 0)
+
+   reordered.result <- test.diff
+    if(gene.set == "Glutamate_Genes" || gene.set == "Parkinson_disease-Mitochondrial_Metabolism_Genes"){
+        #change order of beams
+        new.order <- c(1,3,2)
+        reordered.result[[1]] <- test.diff[[1]][new.order,]
+        reordered.result[[2]] <- test.diff[[2]][new.order]
+    }
+    if(gene.set == "Parkinson_disease-Mitochondrial_Metabolism_Genes"){
+        y.nudge = 0.07; min.beam.dist = 0.25; text.nudge = 0.06 
+    }else{
+        y.nudge = 0.05; min.beam.dist = 0.15; text.nudge = 0.04
+    }
+
+    add_pairwise_results(data.mat.or.list = no.na, test.results = reordered.result,
+        y.nudge = y.nudge, text.nudge = text.nudge, min.beam.dist = min.beam.dist, 
+        force.higher = FALSE)
+    
+dev.off()
+```
+
+## Side-by-side boxplots
+
+```{r geno_on_x, fig.width = 7, fig.height = 5}
+plot.grouped.boxes(kl.by.age, type = "matrix", main = "Effects of age in each genotype",
+    ylab = "Expression relative to tissue mean")
+add_zero_line()
+```
+
+
+```{r age_on_x, fig.width = 7, fig.height = 5}
+#rearrange to get the effects of age on the x axis
+age.by.kl <- lapply(1:ncol(kl.by.age[[1]]), function(x) sapply(kl.by.age, function(y) y[,x]))
+names(age.by.kl) <- colnames(kl.by.age[[1]])
+plot.grouped.boxes(age.by.kl, type = "matrix", main = "Effects of genotype in each age",
+    group.cols = hap.cols)
+add_zero_line()
+```
+
+## Interaction Model
+
+The plot below shows how `r gene.group.label` median expression
+changes with age for each genotype. The p value is for the
+interaction between age and genotype.
+
+The error bars show the 95% confidence intervals for the 
+median values.
+
+```{r interaction_model, fig.width = 6, fig.height = 6}
+age.factor <- ordered(unlist(lapply(1:length(kl.by.age), function(x) rep(names(kl.by.age)[x], length(kl.by.age[[x]])))))
+expr.v <- unlist(lapply(kl.by.age, unlist))
+geno.v <- ordered(unlist(lapply(kl.by.age, function(x) rep(colnames(x), each = nrow(x)))))
+model <- lm(expr.v~age.factor*geno.v)
+model.p <- threshold_p(coef(summary(model))["age.factor.L:geno.v.L","Pr(>|t|)"], return.text = TRUE)
+
+#interaction.plot(geno.v, age.factor, expr.v, 
+#    fun = function(x) mean(x, na.rm = TRUE), lwd = 3, xlab = "Genotype",
+#    ylab = paste(gene.group.label, "Expression"), trace.label = "Age Group")
+
+par(lwd = 3)
+interaction.plot(age.factor, geno.v, expr.v, 
+    fun = function(x) median(x, na.rm = TRUE), lwd = 3,
+    ylab = paste(gene.group.label, "Median Expression"), 
+    trace.label = "Genotype", legend = FALSE, lty = 1,
+    xlab = "Age Group", col = hap.cols, main = model.p,
+    ylim = c(-0.8, 1.2))
+
+#add 95% confidence intervals to the median
+bounds <- add_interaction_error(age.factor, geno.v, expr.v,
+    fun = function(x) median(x, na.rm = TRUE), lwd = 3,
+    cols = hap.cols, 
+    error.fun = function(x) conf_int(x, 95, 1000, function(y) median(y, na.rm = TRUE)),
+    horiz.width = 0.02)
+
+par(lwd = 1)
+legend("topright", legend = levels(geno.v), lty = 1, col = hap.cols, lwd = 3)
+
+abline(h = 0)
+```
+
+```{r int_plot}
+ylim <- c(min(bounds$lower_bounds, na.rm = TRUE), max(bounds$upper_bounds, na.rm = TRUE))
+pdf(here("Results", "for_paper", paste0("Human_Validation_Interaction_", gene.set, ".pdf")), 
+    width = 5, height = 5)
+#quartz(width = 5, height = 5)
+par(lwd = 3, bg = NA, mar = c(5,5,4,2))
+interaction.plot(age.factor, geno.v, expr.v, 
+    fun = function(x) median(x, na.rm = TRUE), lwd = 3,
+    ylab = "Median Expression", 
+    trace.label = "Genotype", legend = FALSE, lty = 1,
+    xlab = "Age", col = hap.cols, main = "",
+    ylim = ylim, cex.lab = 1.5, cex.axis = 1.5)
+
+text(x = 1.5, y = 0.55, labels = model.p, cex = 1.5)
+
+#add 95% confidence intervals to the median
+add_interaction_error(age.factor, geno.v, expr.v,
+    fun = function(x) median(x, na.rm = TRUE), lwd = 3,
+    cols = hap.cols, 
+    error.fun = function(x) conf_int(x, 95, 1000, function(y) median(y, na.rm = TRUE)),
+    horiz.width = 0.02)
+
+par(lwd = 1)
+legend("topright", legend = levels(geno.v), lty = 1, col = hap.cols, lwd = 3)
+
+abline(h = 0)
+dev.off()
 ```
 
 
@@ -166,17 +329,16 @@ for(i in 1:length(kl.by.age)){
 We really only have the FC/FC and the VS/VS genotypes in the mice,
 so only those are a direct comparison. 
 
-
-In young mice, Klotho allele has no effect on glutamate receptor 
+In young mice, Klotho allele has no effect on `r gene.group.label` 
 genes. We don't have any young VS/VS individuals. The youngest is
 52, so I don't think we can really evaluate this similarity. 
 
-In older mice, the VS/VS genotype reduces glutamate receptor 
+In older mice, the VS/VS genotype reduces `r gene.group.label` 
 expression. 
 
 We have middle aged humans, and older humans (no older mice yet).
-In middle aged humans, the VS/VS haplotype reduces glutamate
-receptor gene expression in some brain areas, but seems to 
+In middle aged humans, the VS/VS haplotype reduces `r gene.group.label`
+gene expression in some brain areas, but seems to 
 increase it in others.
 
 It appears to do the same thing in humans in multiple brain 

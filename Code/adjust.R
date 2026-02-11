@@ -27,6 +27,7 @@ adjust <- function(matX, adj.mat, retain.intercept = TRUE){
 	for(i in 1:ncol(new.mat)){
 		na.locale <- union(which(is.na(matX[,i])), adj.na.idx)
 		not.na.locale <- setdiff(1:nrow(matX), na.locale)
+		if(length(not.na.locale) == 0){next()}
 		model <- lm(matX[,i]~adj.mat)
 		intercept <- coef(model)[1]
 		res <- residuals(model)

@@ -2,7 +2,7 @@
 #It clusters the covariance matrix instead.
 
 decomp_with_nas <- function(mat, pc = 2, add.zeros = FALSE, cols = rep("black", nrow(mat)),
-  label.points = FALSE){  
+  label.points = FALSE, plot.results = TRUE){  
   
   if(add.zeros){
     no.na.mat <- mat
@@ -11,7 +11,8 @@ decomp_with_nas <- function(mat, pc = 2, add.zeros = FALSE, cols = rep("black", 
     cov.mat <- cov(t(mat), use = "pairwise.complete.obs")
     no.na.mat <- cov.mat
   }
-  no.na.decomp <- plot.decomp(no.na.mat, cols = cols, pc = pc, label.points = label.points)
+  no.na.decomp <- plot.decomp(no.na.mat, cols = cols, pc = pc, 
+    label.points = label.points, plot.results = plot.results)
   invisible(no.na.decomp)
   
 }

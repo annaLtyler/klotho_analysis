@@ -17,6 +17,10 @@ xlim = NULL, plot.results = TRUE){
 		pc <- 2
 		}
 
+	#if(is.null(xlim)){
+	#	xlim = c(min(pc.mat[,1]), max(pc.mat[,1])*1.05)
+	#}
+
 	na.rows <- which(apply(mat, 1, function(x) all(!is.na(x))))
 	if(length(na.rows) < nrow(mat)){
 		warning("Removing rows with missing values")
@@ -66,9 +70,6 @@ xlim = NULL, plot.results = TRUE){
 			}
 			if(pc == 2){
 				if(label.points){
-					if(is.null(xlim)){
-						xlim = c(min(pc.mat[,1]), max(pc.mat[,1])*1.05)
-					}
 					plot(pc.mat[,1], pc.mat[,2], xlab = colnames(pc.mat)[1], 
 					ylab = colnames(pc.mat)[2], 
 					main = plot.label[i], col = cols[na.rows], pch = pch, cex = cex,
@@ -76,7 +77,7 @@ xlim = NULL, plot.results = TRUE){
 					text(pc.mat[,1], pc.mat[,2], rownames(mat), pos = 4, cex = label.cex)
 				}else{
 					plot(pc.mat[,1], pc.mat[,2], xlab = colnames(pc.mat)[1], 
-					ylab = colnames(pc.mat)[2], 
+					ylab = colnames(pc.mat)[2], xlim = xlim,
 					main = plot.label[i], col = cols[na.rows], pch = pch, cex = cex)
 				}
 			}else{

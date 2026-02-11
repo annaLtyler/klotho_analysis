@@ -272,8 +272,7 @@ adj_expr <- adjust(t(pared.expr), dummy.covar, retain.intercept = FALSE)
 if(rank.normalize){
     adj_expr <- apply(adj_expr, 2, rankZ)
 }
-write.table(adj_expr, file.path(processed.data.dir, "Final_Adjusted_Expr.txt"),
-    quote = FALSE, sep = "\t")
+saveRDS(adj_expr, file.path(processed.data.dir, "Final_Adjusted_Expr.RDS"))
 
 #plot(test_adj_expr, adj_expr);abline(h = 0) #adding Ide expression doesn't change things too much, but it does change some things
 #test.dist <- test_adj_expr - adj_expr
@@ -3722,6 +3721,7 @@ alt_cor_test <- function(gene1, gene2, test.int, nperm = 1000, plot.results = TR
 #alt_cor_test("Med16", "Mapt", test.factor)
 
 #alt_cor_test(sample(mouse.genes[,"external_gene_name"], 1), sample(mouse.genes[,"external_gene_name"], 1), test.factor)
+
 ```
 
 ```{r interaction_correlations}
@@ -5286,16 +5286,78 @@ for(i in 1:length(cyto.idx)){
 
 ```{r other_validation_sets, eval = FALSE}
 #int.name = "Ribosome : Synapse"
-int.name = "Ribosome : Immune Response"
+#int.name = "Ribosome : Immune Response"
+#int.name = "Parkinson disease : Mitochondrial Metabolism"
+int.name = "Gastric acid secretion : Mitochondrial Metabolism"
+int.name = "MAPK signaling pathway : DNA Repair"
+int.name = "MAPK signaling pathway : Apoptosis"
 
 int.genes <- plot_individual_genes(intersection.name = int.name, 
-        plot.type = "individual", return.full.result = TRUE)
+        plot.type = "individual", order.by = "means", 
+        return.full.result = TRUE)
 
 gene.names <- gsub("**", "", rownames(int.genes$row.p), fixed = TRUE)
 
 write.table(gene.names, file.path(results.dir, 
     "validation_gene_sets", 
-    paste0(gsub(" ", "_", gsub(" : ", "-", int.name), "_Genes.txt"))), 
+    paste0(gsub(" ", "_", gsub(" : ", "-", int.name)), "_Genes.txt")), 
     quote = FALSE, sep = "\t", row.names = FALSE, col.names = FALSE)
 
+```
+
+### Interaction between age and Klotho genotype
+
+If we are looking at multiple ages, we can look at interactions
+between age and Klotho genotype. In the human data set, we saw
+that the VS haplotype suppressed glutamate receptor genes in older
+people. Can we show the same thing here? 
+
+```{r interaction_plot}
+#int.name <- "Nicotine addiction : APP Metabolism"; ymax = 1; ymin = -1
+int.name <- "Ribosome : Synapse"; ymax = 1.5; ymin = -1.2
+#int.name = "Parkinson disease : Mitochondrial Metabolism"; ymax = 1; ymin = -1
+
+file.label <- strsplit(int.name, " ")[[1]][1]
+if(subgroup == "all ages"){
+    pdf(here("Results", "for_paper", paste0("Human_Validation_mouse_", file.label, ".pdf")),
+        width = 5, height = 5)
+    par(lwd = 3, bg = NA, mar = c(5,5,4,2))
+
+    int.genes <- plot_individual_genes(intersection.name = int.name, 
+        plot.type = "none")
+    mean.expr <- apply(adj_expr[,int.genes], 1, median)
+    
+    hom.idx <- which(test.factor != "WT")
+
+    age.factor <- rep(NA, nrow(covar.table))
+    age.factor[which(covar.table[,"age_batch"] == 4)] <- "4 mos"
+    age.factor[which(covar.table[,"age_batch"] == 12)] <- "12 mos"
+    age.factor <- ordered(age.factor, levels = c("4 mos", "12 mos"))
+    
+    model <- lm(mean.expr[hom.idx]~age.factor[hom.idx]*test.factor[hom.idx])
+    model.p <- threshold_p(summary(model)$coefficients[4,"Pr(>|t|)"], return.text = TRUE)
+    
+    interaction.plot(age.factor[hom.idx], test.factor[hom.idx], 
+        mean.expr[hom.idx],cex.lab = 1.5, cex.axis = 1.5,
+        lwd = 3, col = geno.cols, lty = 1, ylim = c(ymin, ymax),
+        xlab = "Age", ylab = "Median Expression", legend = FALSE)
+    
+    #add 95% confidence intervals to the mean
+    bounds <- add_interaction_error(age.factor[hom.idx], test.factor[hom.idx], 
+        mean.expr[hom.idx],
+        fun = function(x) median(x, na.rm = TRUE), lwd = 3,
+        cols = geno.cols, 
+        error.fun = function(x) conf_int(x, 95, 1000, function(y) median(y, na.rm = TRUE)),
+        horiz.width = 0.02)
+
+    par(lwd = 1)
+    legend("bottomleft", legend = c("FCFC", "VSVS"), lty = 1, col = geno.cols[c("FC", "VS")], 
+    lwd = 3)
+
+    #add p value for interaction
+    text(x = 0.9, y = ymax*0.9, labels = model.p, cex = 1.5, adj = 0)
+
+    abline(h = 0)
+    dev.off()
+}
 ```
