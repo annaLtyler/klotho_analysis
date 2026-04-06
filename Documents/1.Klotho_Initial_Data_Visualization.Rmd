@@ -27,14 +27,6 @@ project and with using Synapse. In this workflow we:
   between GO terms and biodomains, and intersections between boidomains
   and KEGG pathways.
 
-```{r set_version, eval = FALSE}
-#IT keeps updating R automatically, which breaks all my code.
-#this line points us to the original development library.
-#You need to run this before you can click the knit button
-#because knit calls rmarkdown::render, which is in the older 
-#library
-.libPaths(c("~/Library/R/arm64/4.4/library", .libPaths()))
-```
 
 ```{r param}
 rm(list = ls())
@@ -54,8 +46,8 @@ args <- commandArgs(trailingOnly=T)
 subgroup <- args[2]
 
 if(is.na(subgroup)){
-  #subgroup <- "all ages"
-  subgroup <- list("age_batch" = 12)
+  subgroup <- "all ages"
+  #subgroup <- list("age_batch" = 12)
   #subgroup <- list("age_batch" = 4)
   #subgroup <- list("age_batch" = 4, "sex_ge" = "Female") #example with more than one filter
 }
@@ -80,7 +72,7 @@ remove.qc <- TRUE #if 1a_Klotho_QC.Rmd has been run, and animals were identified
 
 ordered.geno <- c("FC/FC", "WT/FC", "WT/WT", "WT/VS", "VS/VS")
 
-use.carrier.status <- TRUE #if true, fits models with the ordered factor FC > WT > VS
+use.carrier.status <- FALSE #if true, fits models with the ordered factor FC > WT > VS
                           #if false, fits models with the ordered factor FC/FC > FC/WT > WT/WT > WT/VS > VS/VS
 if(use.carrier.status){
   geno.used = c("FC, WT, VS"); carrier.text = "carriers"
@@ -160,7 +152,7 @@ geno.cols <- get_geno_cols(here("Data", "general", "geno_cols.csv"))
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("synapser", "pheatmap", "DESeq2", "DT", "vioplot", "RColorBrewer",
   "gprofiler2", "cluster", "pathview", "clusterProfiler", "stringr", "igraph", "wordcloud",
-  "wordcloud2", "easyPubMed", "tm")
+  "wordcloud2", "easyPubMed", "tm", "corto")
 load_libraries(needed.libraries)
 ```
 
@@ -312,7 +304,7 @@ The table of animals with called genotypes is as follows:
 
 ```{r dt}
 datatable(condensed.table)
-write.table(condensed.table, file.path(results.dir, "mouse.info.csv"), sep = ",", quote = FALSE)
+write.table(condensed.table, file.path(results.dir, "mouse.info.csv"), sep = ",", quote = FALSE, row.names = FALSE)
 ```
 
 ## Group Counts
@@ -1497,11 +1489,17 @@ if(!use.carrier.status){
   barplot_with_num(signif(pc.model.comparison["AIC",], 2), 
     ylab = "AIC", main = "AIC", ylim = c(0, 12), text.shift = 0.09)
 
-  boxplot(comp.r2, ylab = "R2", main = "Variance Explained")
+  boxplot(comp.r2, ylab = bquote(italic(R)^2), main = "Variance Explained")
+  draw.rectangle(0.42, 1.2, 0.22, 0.25, fill = "white")
+  test.diff <- t.test(comp.r2[,1], comp.r2[,2])
+  test.p <- threshold_p(p = test.diff$p.value, return.text = TRUE, sci.not = TRUE)
+  text(x = 0.55, y = 0.235, labels = test.p[1])
+  text(x = 0.9, y = 0.237, labels = test.p[2])
   boxplot(-log10(comp.p), ylab = "-log10(p)", main = "-log10(p)")
   boxplot(comp.AIC, ylab = "AIC", main = "AIC")
 
-  plot(comp.r2, main = "Variance Explained", xlab = "Additive R2", ylab = "Dominant R2")
+  plot(comp.r2, main = "Variance Explained", xlab = paste("Additive", bquote(italic(R^2))), 
+    ylab = "Dominant R2")
     abline(0,1, col = "red")
   plot(-log10(comp.p), main = "-log10(p)", xlab = "Additive -log10(p)", ylab = "Dominant -log10(p)")
     abline(0,1, col = "red")
@@ -1562,6 +1560,18 @@ if(final.params){
   col.scale = list(heatmap.neg.col, heatmap.pos.col), cex = 1, 
   grad.dir = "ends", bar.lwd = 3, round.nearest = 0.1)
   dev.off()
+
+
+  #more stats for grouping of haplotypes
+  vs.mat <- scaled.mat[,grep("VS", colnames(scaled.mat))]
+  fc.mat <- scaled.mat[,grep("FC", colnames(scaled.mat))]
+  mean.vs <- rowMeans(vs.mat)
+  mean.fc <- rowMeans(fc.mat)
+  upreg <- which(mean.vs - mean.fc > 0)
+  downreg <- which(mean.vs - mean.fc < 0)
+  boxplot(cbind(vs.mat[upreg,], fc.mat[upreg,]))
+  boxplot(cbind(vs.mat[downreg,], fc.mat[downreg,]))
+
 }
 ```
 

@@ -1,0 +1,610 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+
+library(Seurat)
+library(GSEABase)
+library(escape)
+library(AUCell)
+library(tidyverse)
+library(dittoSeq)
+library(gridExtra)
+library(patchwork)
+library(MAST)
+
+#read in the seurat file, provided by the Oetjen et al.(GSE120446), and name it properly
+setwd("C:/Users/M235000/Desktop/Example")
+example <- readRDS("C:/Users/M235000/Desktop/Example/example.RDS")
+example_seu <- example
+example_seu@meta.data$cluster_id <- as.factor(example_seu@meta.data$cluster_id)
+
+#read in the three gene sets, "SEN_Mayo", "GenAge" and "CellAge", as provided called "3datasets.xlsx".
+X3datasets <- read_excel("3datasets.xlsx", sheet = "testrun")
+
+#use these datasets to form distinct vectors...
+SEN_Mayo <- X3datasets$SEN_Mayo[1:8]
+GenAge <- X3datasets$GenAge[1:6]
+CellAge <- X3datasets$CellAge[1:9]
+
+#... transform them into the GeneSet format
+gs1  <- GeneSet(SEN_Mayo)
+gs2  <- GeneSet(GenAge)
+gs3  <- GeneSet(CellAge)
+#... merge them, name them...
+geneSets <- list(geneSet1=gs1, geneSet2=gs2, geneSet3=gs3)
+geneSets$geneSet1@setName <- "SEN_Mayo"
+geneSets$geneSet2@setName <- "GenAge"
+geneSets$geneSet3@setName <- "CellAge"
+#... and merge transform them into a "GeneSetCollection"
+geneSets <- GeneSetCollection(geneSets)
+
+#since the next calculation takes some time, it is advisable to increase the memory limit
+memory.limit(64000000)
+#calculate an EnrichmentScore (ES). More cores can be used when on a server
+ES <- enrichIt(obj = example_seu, gene.sets = geneSets, groups = 1000, cores = 2)
+#add these three GeneSetScores to the metadata of your Seurat file
+example_seu <- AddMetaData(example_seu, ES)
+
+#transform the cluster_id into a new (amended) cluster_id_new, which now contains an additional cell type, "SASP cells", as all of these cells have an ES above 0.1429 (top 10%, this has to be calculated manually)
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_new = ifelse(example_seu@meta.data$SEN_Mayo > 0.1429, "SASP cells", cluster_id))
+
+#add one parameter for the violin plots
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_2 = ifelse(example_seu@meta.data$SEN_Mayo > 0.1429, "SASP cells", "other"))
+
+#Fig. 3C
+#Create a PCA-plot, based upon all expressed SASP markers in your panel
+library(PCAtools)
+library(DESeq2)
+library(readxl)
+rawcounts_for_pca_SASP <- read_excel("F:/Forschung/ownCloud/Projekt M/Mayo 2020/_Project 8 Seq human_dia_mice/_Manuscript and Figures/Fig. 4/INK-ATTAC/Rawcounts_just_certain_SASP.xlsx", sheet = "SASP_cleaned_removed")
+design1<-data.frame(experiment=colnames(rawcounts_for_pca_SASP[2:42]),  treatment = c("old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_veh", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "old_ap", "young", "young", "young", "young", "young", "young", "young", "young", "young", "young", "young", "young"))
+rownames(design1)<-colnames(rawcounts_for_pca_SASP[,2:42])
+metadata <- transform(design1, treatment_time = ifelse(design1$treatment == "old_veh", "old_veh", ifelse(design1$treatment == "old_ap", "old_ap", ifelse(design1$treatment == "young", "young", ""))))
+young_old_ap <- DESeqDataSetFromMatrix(countData = rawcounts_for_pca_SASP[,2:42], colData = design1, design = ~  treatment)
+vsd <- varianceStabilizingTransformation(young_old_ap)
+mat <- assay(vsd)
+rownames(mat) <- rawcounts_for_pca_SASP$Gene_Name
+pca(mat)
+p <- pca(mat)
+mat <- mat[,which(colnames(mat) %in% rownames(metadata))]
+p <- pca(mat, metadata = metadata, removeVar = 0.1)
+biplot(p,
+       colby = 'treatment', colkey = c('old_veh' = '#A00000', 'old_ap' = '#008000', "young" = "#0000C0"),
+       colLegendTitle = 'treatment',
+       lab=NULL,
+       showLoadings = TRUE,
+       lengthLoadingsArrowsFactor = 1.5,
+       sizeLoadingsNames = 4,
+       colLoadingsNames = 'black',
+       gridlines.minor = FALSE,
+       gridlines.major = FALSE,
+       # encircle config
+       encircle = TRUE,
+       encircleFill = TRUE,
+       hline = 0, vline = c(0),
+       legendPosition = 'top', legendLabSize = 16, legendIconSize = 8.0)
+
+#Fig.4A
+#plot an UMAP with the ES, as in Fig.4A
+A <- FeaturePlot(example_seu, reduction = "umap", features="SEN_Mayo", label=TRUE, label.size=3.5)+ scale_colour_gradient2(midpoint=0.2, low="blue", mid="grey", high="#CE1261", space="Lab")+theme(axis.title.x = element_blank(), axis.title.y = element_blank())& NoAxes()
+
+example_seu@meta.data$cluster_id_2 <- factor(example_seu@meta.data$cluster_id_2, levels=c("other", "SASP cells"))
+Idents(example_seu) <- "cluster_id2" 
+#determine DE genes using the MAST package
+DE_SASP_vs_all <- FindMarkers(example_seu, ident.1 = "SASP cells", logfc.threshold = 0, test.use = "MAST", only.pos = FALSE, min.pct = 0.0)
+
+#Fig.4B
+B1 <- VlnPlot(example_seu, "CDKN1A", log=TRUE)+theme(axis.title.x = element_blank()) + ylab("Log UMI")& NoLegend()
+B2 <- VlnPlot(example_seu, "TGFB1", log=TRUE)+theme(axis.title.x = element_blank()) + ylab("Log UMI")& NoLegend()
+Idents(example_seu) <- "cluster_id_new" 
+
+#plot another UMAP with the x-axis as ES of "CellAge", and the y-axis as ES of "GenAge", color-coded according to the new created cluster_id_new metadata column
+
+colorkey <- rep("grey", nlevels(example_seu@meta.data$cluster_id))
+colorkey[nlevels(example_seu@meta.data$cluster_id)+1] <- "#CE1261"
+
+B <- dittoScatterPlot(example_seu, x.var="CellAge", y.var="GenAge", color.var = "cluster_id_new", size=1, do.raster=FALSE, color.panel=colorkey)+ theme(panel.background=element_blank(), panel.grid.major = element_blank(), panel.border = element_blank(), panel.grid.minor = element_blank())
+
+print(A | B1/B2 | B )
+
+#Fig.4C
+library(CellChat)
+library(patchwork)
+Idents(example_seu) <- "cluster_id2"
+
+#CellChat
+data.input <- GetAssayData(example_seu, assay = "RNA", slot = "data")
+labels <- Idents(example_seu)
+meta <- data.frame(group = labels, row.names = names(labels))
+
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "group")
+
+cellchat <- setIdent(cellchat, ident.use = "group")
+groupSize <- as.numeric(table(cellchat@idents))
+
+CellChatDB <- CellChatDB.human
+CellChatDB.use <- CellChatDB
+cellchat@DB <- CellChatDB.use
+cellchat <- subsetData(cellchat)
+future::plan("multiprocess", workers = 4)
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+cellchat <- projectData(cellchat, PPI.human)
+
+cellchat <- computeCommunProb(cellchat)
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat <- aggregateNet(cellchat)
+
+myorder <- c("CD10+ B cells", "CD20+ B cells", "Plasma cells", "Plasmacytoid dendric cells", "Conventional dendric cells", "CD4+ naïve T cells", "CD4+ memory T cells", "CD8+ naïve T cells", "CD8+ effector T cells", "Early erythroid progenitors", "Early erythrocytes", "Late erythrocytes", "HSPCs", "Monocyte progenitors", "CD14+ monocytes", "CD16+ monocytes", "Macrophages", "Natural killer cells", "SASP cells")
+
+cellchat@idents <- factor(x=cellchat@idents, levels=myorder)
+
+group.cellType <- c(rep("B cells", 5), rep("T cells", 4), rep("Ery", 3), rep("HSPCs", 1), rep("Mono", 5), rep("SASP", 1))
+group.cellType <- factor(group.cellType, levels = c("B cells", "T cells", "Ery", "HSPCs", "Mono", "SASP"))
+
+object.list <- list(cellchat)
+object.list <- lapply(object.list, function(x) {mergeInteractions(x, group.cellType)})
+weight.max <- getMaxWeight(object.list, slot.name = c("idents", "net", "net"), attribute = c("idents","count", "count.merged"))
+
+par(mfrow = c(1,1), xpd=TRUE)
+
+# for number of interactions
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$count.merged, weight.scale = T, label.edge= TRUE, edge.weight.max = weight.max[3], edge.width.max = 12, edge.label.cex = 1.8, vertex.label.cex = 2 ,title.name = paste0("Number of interactions - "))
+}
+
+# for number interaction strength
+for (i in 1:length(object.list)) {
+  netVisual_circle(object.list[[i]]@net$weight.merged, weight.scale = FALSE, label.edge= TRUE, edge.weight.max = weight.max[3], edge.width.max = 12, edge.label.cex = 1.8, vertex.label.cex = 2 ,title.name = paste0("Interaction strength - "))
+}
+
+#Fig.4D
+netVisual_chord_gene(cellchat, sources.use = c(19), targets.use = c(1:19), slot.name = "netP", legend.pos.x = 10)
+
+#Fig. 4E
+plotGeneExpression(cellchat, signaling = "MIF")
+plotGeneExpression(cellchat, signaling = "PECAM1")
+
+#Fig. 4F
+SASP_seurat <- subset(example_seu, subset=cluster_id2=="SASP cells")
+SASP_seurat <- RunUMAP(SASP_seurat, dims = 1:40,reduction = "pca", verbose=FALSE)
+SASP_seurat <- RunTSNE(SASP_seurat, dims = 1:40,reduction = "pca", verbose=FALSE)
+
+library(scLink)
+library(corrplot)
+counts <- as.matrix(GetAssayData(SASP_seurat, slot = "counts"))
+counts_new <- t(counts)
+genes <- c("Cdkn2a", "Cdkn1a", "Gapdh", "Actb")
+count.norm = sclink_norm(counts_new, scale.factor = 1e6, filter.genes = FALSE, gene.names = genes)
+networks = sclink_net(expr = count.norm, ncores = 1, lda = seq(0.5, 0.1, -0.05))
+corr = sclink_cor(expr = count.norm, ncores = 1)
+col <- colorRampPalette(c("blue", "white", "red"))
+corrplot(M, method="color", order="hclust", addrect=10, tl.pos="top", tl.cex = 0.5, tl.col = "black", col=col(100))
+
+#Fig. 4G
+library(igraph)
+library(SingleCellExperiment)
+library(bigSCale)
+library(ggpubr)
+library(ggsci)
+library(ggExtra)
+
+#convert Seurat into SingleCellExperiment
+counts <- SASP_seurat@assays$RNA@counts
+metadata <- SASP_seurat@meta.data
+metadata$cluster_id2 <- factor(SASP_seurat@meta.data$cluster_id2)
+sce <- SingleCellExperiment(assays = list(counts = counts), 
+                            colData = metadata)
+gene.names <- rowData(sce)@rownames
+expr.ctl <- counts
+
+#calculate network, this takes ~ 10 hrs
+results.ctl=compute.network(expr.data = expr.ctl,gene.names = gene.names)
+results.ctl2 <- results.ctl
+#shift the correlations into the "tot.scores" column
+colnames(results.ctl2$tot.scores) <- colnames(results.ctl$correlations)
+#save this in the dataframe "c"
+c <- as.data.frame(results.ctl2$tot.scores)
+#use ggplot2 to transform this correlation into a proper format, making use of the lancet-palette
+p.1 <- ggscatter(c, x = "Il1b", y = "Ereg",
+               size = 3, alpha = 0.6,
+               color="Ereg",
+               add = "reg.line", conf.int = TRUE,
+               add.params = list(color = "black", fill = "darkgrey"),
+               cor.coef = TRUE, cor.metfhod = "spearman",
+               xlab = "Z-score Il1b", ylab = "Z-score Ereg")+
+  scale_color_gradientn(colours=pal_lancet(palette = c("lanonc"), alpha = 1)(2))
+
+p.2 <- ggscatter(c, x = "Cdkn1a", y = "Icam1",
+               size = 3, alpha = 0.6,
+               color="Icam1",
+               add = "reg.line", conf.int = TRUE,
+               add.params = list(color = "black", fill = "darkgrey"),
+               cor.coef = TRUE, cor.metfhod = "spearman",
+               xlab = "Z-score Cdkn1a", ylab = "Z-score Icam1")+
+  scale_color_gradientn(colours=pal_lancet(palette = c("lanonc"), alpha = 1)(2))
+
+p.3 <- ggscatter(c, x = "Cdkn2a", y = "Jun",
+                size = 3, alpha = 0.6,
+                color="Jun",
+                add = "reg.line", conf.int = TRUE,
+                add.params = list(color = "black", fill = "darkgrey"),
+                cor.coef = TRUE, cor.metfhod = "spearman",
+                xlab = "Z-score Cdkn2a", ylab = "Z-score Jun")+
+  scale_color_gradientn(colours=pal_lancet(palette = c("lanonc"), alpha = 1)(2))
+
+print(p.1/p.2/p.3)
+
+
+#plot it with a boxplot-overlay
+ggMarginal(p, type = "boxplot")
+
+#Fig. 4H
+library(Nebulosa)
+library(patchwork)
+#create a theme to have the tSNE plots in a quadratic shape
+my_theme = theme(
+  axis.title.x = element_blank(),
+  axis.text.x = element_blank(),
+  axis.title.y = element_blank(),
+  aspect.ratio=1,
+  plot.title = element_text(hjust = 0.5),
+  legend.position="none")
+h1 <- plot_density(SASP_seurat, c("Ereg"), pal="plasma", reduction="tsne") + my_theme
+h2 <- plot_density(SASP_seurat, c("Il1b"), pal="plasma", reduction="tsne") + my_theme
+h3 <- plot_density(SASP_seurat, c("Icam1"), pal="plasma", reduction="tsne") + my_theme
+h4 <- plot_density(SASP_seurat, c("Cdkn1a"), pal="plasma", reduction="tsne") + my_theme
+h5 <- plot_density(SASP_seurat, c("Jun"), pal="plasma", reduction="tsne") + my_theme
+h6 <- plot_density(SASP_seurat, c("Cdkn2a"), pal="plasma", reduction="tsne") + my_theme
+
+print(h1/h3/h5 | h2/h4/h6)
+
+#Fig. 5A, B
+#plot an UMAP with the ES, as in Fig.4A
+A <- FeaturePlot(example_seu, reduction = "umap", features="SASPlist2.0", label=TRUE, label.size=3.5)+ scale_colour_gradient2(midpoint=0.2, low="blue", mid="grey", high="#CE1261", space="Lab")+theme(axis.title.x = element_blank(), axis.title.y = element_blank())& NoAxes()
+
+B1 <- VlnPlot(example_seu, "Cdkn1a", log=TRUE)+theme(axis.title.x = element_blank()) + ylab("Log UMI")& NoLegend()
+B2 <- VlnPlot(example_seu, "Tgfb1", log=TRUE)+theme(axis.title.x = element_blank()) + ylab("Log UMI")& NoLegend()
+Idents(example_seu) <- "cluster_id2" 
+
+#plot another UMAP with the x-axis as ES of "CellAge", and the y-axis as ES of "GenAge", color-coded according to the new created cluster_id_new metadata column
+example_seu@meta.data$cluster_id2 <- as.factor(example_seu@meta.data$cluster_id2)
+
+colorkey <- rep("grey", nlevels(example_seu@meta.data$cluster_id))
+colorkey[nlevels(example_seu@meta.data$cluster_id)+1] <- "#CE1261"
+dittoScatterPlot(example_seu, x.var="CellAge", y.var="GenAge", color.var = "cluster_id_new", size=1, do.raster=FALSE, color.panel=colorkey)+ theme(panel.background=element_blank(), panel.grid.major = element_blank(), panel.border = element_blank(), panel.grid.minor = element_blank())
+print(A | B1/B2 | B )
+
+#Fig. 5C
+#CellChat
+data.input <- GetAssayData(example_seu, assay = "RNA", slot = "data")
+labels <- Idents(example_seu)
+meta <- data.frame(group = labels, row.names = names(labels))
+
+cellchat <- createCellChat(object = data.input, meta = meta, group.by = "group")
+
+cellchat <- setIdent(cellchat, ident.use = "group")
+groupSize <- as.numeric(table(cellchat@idents))
+
+CellChatDB <- CellChatDB.human
+CellChatDB.use <- CellChatDB
+cellchat@DB <- CellChatDB.use
+cellchat <- subsetData(cellchat)
+future::plan("multiprocess", workers = 4)
+cellchat <- identifyOverExpressedGenes(cellchat)
+cellchat <- identifyOverExpressedInteractions(cellchat)
+cellchat <- projectData(cellchat, PPI.human)
+
+cellchat <- computeCommunProb(cellchat)
+cellchat <- filterCommunication(cellchat, min.cells = 10)
+cellchat <- computeCommunProbPathway(cellchat)
+cellchat <- aggregateNet(cellchat)
+
+myorder <- c("Chondro-hyper", "Chondro-prehyper", "Chondro-progen", "Chondro-prol/rest", "Chondrocyte", "EC", "Pericytes", "Fibroblast", "Lymphocyte", "Mast cell", "Lepr MSC", "MSC", "Mineralizing Osteocyte", "OLC 1", "OLC 2", "Osteoblast", "Osteocyte", "SASP cells")
+cellchat@idents <- factor(x=cellchat@idents, levels=myorder)
+group.cellType <- c(rep("Chondro", 5), rep("Endo", 2), rep("Fibro", 1), rep("Immune", 2), rep("MSCs", 2), rep("Osteo", 5), rep("SASP", 1))
+group.cellType <- factor(group.cellType, levels = c("Chondro", "Endo", "Fibro", "Immune", "MSCs", "Osteo", "SASP"))
+
+object.list <- list(cellchat)
+object.list <- lapply(object.list, function(x) {mergeInteractions(x, group.cellType)})
+weight.max <- getMaxWeight(object.list, slot.name = c("idents", "net", "net"), attribute = c("idents","count", "count.merged"))
+for (i in 1:length(object.list)) {
+  +     netVisual_circle(object.list[[i]]@net$weight.merged, weight.scale = F, label.edge= TRUE, edge.weight.max = weight.max[2], edge.width.max = 4, edge.label.cex = 1.8, vertex.label.cex = 2 ,title.name = paste0("Interaction strength - "))
+
+#Fig. 5D
+netVisual_chord_gene(cellchat_musmusculus2, sources.use = c(18, 14, 11, 12, 1), targets.use = c(1:18), slot.name = "netP", legend.pos.x = 10, signaling = c("MIF", "MK" ,"CXCL", "ANGPTL", "PECAM1"), color.use=c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#f29403", "#f781bf", "#bc9dcc", "#a65628", "#55b0e4", "#222f75", "#1b9e77", "#b2df8a", "#e3be00", "#fb9a99", "#910241", "#00cdd1", "black", "#CE1261"))
+
+#MIF pathway
+plotGeneExpression(cellchat_musmusculus2, signaling = "MIF", idents="SASP cells")
+
+#Fig. 5E
+#unfortunately, the subset function in Seurat does not work for multiple cluster correctly. We introduce a new metadata-column instead.
+example_seu@meta.data$cluster_id_monocle <- ""
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "Lepr MSC", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "OLC 1", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "OlC 2", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "SASP cells", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+#transform in a proper seurat for the subsequent monocle analysis
+subset_monocle_seurat <- subset(example_seu, subset=cluster_id_monocle=="", invert=TRUE)
+
+#monocle analysis
+library(monocle)
+library(DDRTree)
+library(viridis)
+data <- as(as.matrix(subset_monocle_seurat@assays$RNA@data), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = subset_monocle_seurat@meta.data)
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+HSMM <- newCellDataSet(data,
+                       phenoData = pd,
+                       featureData = fd,
+                       #lowerDetectionLimit = 0.5,
+                       expressionFamily = uninormal())
+subset_monocle_seurat <- FindVariableFeatures(subset_monocle_seurat, selection.method = "vst", nfeatures = 2000)
+subset_monocle_seurat@active.assay <- "RNA"
+var_genes <- subset_monocle_seurat[["RNA"]]@var.features
+ordering_genes <- var_genes
+HSMM <- setOrderingFilter(HSMM, ordering_genes)
+HSMM <- reduceDimension(HSMM,norm_method="none", 
+                        reduction_method="DDRTree",
+                        max_components=4,
+                        scaling=TRUE,
+                        verbose=TRUE,
+                        pseudo_expr=0)
+HSMM <- orderCells(HSMM)
+
+#small inset
+e.1 <- plot_genes_in_pseudotime(HSMM["Cdkn1a"], color_by = "Pseudotime")
+e.2 <- plot_genes_in_pseudotime(HSMM["Trp53"], color_by = "Pseudotime")
+print(e.1|e.2)
+
+d.1 <- plot_cell_trajectory(HSMM, 
+                            color_by = "Pseudotime",
+                            theta = -15,
+                            show_branch_points = TRUE,
+                            show_tree = TRUE,
+                            cell_size = 2)
+d.2 <- plot_cell_trajectory(HSMM, 
+                            color_by = "cluster_id_monocle",
+                            theta = -15,
+                            show_branch_points = TRUE,
+                            show_tree = TRUE,
+                            cell_size = 2)
+d.3 <- plot_cell_trajectory(HSMM, 
+                            markers = c("Cdkn1a"),
+                            use_color_gradient=TRUE, 
+                            show_branch_points = FALSE)+scale_color_viridis(option="plasma")
+print(d.1/d.2/d.3)
+
+#Fig. 5F
+marker_genes <- row.names(subset(fData(HSMM),
+                                 gene_short_name %in% SEN_Mayo))
+diff_test_res <- differentialGeneTest(HSMM[marker_genes,], fullModelFormulaStr = "~sm.ns(Pseudotime)")
+sig_gene_names <- row.names(subset(diff_test_res, qval < 0.1))
+plot_genes_branched_heatmap(HSMM[(sig_gene_names),],
+                            branch_point = 2,
+                            num_clusters = 3,
+                            cores = 2,
+                            use_gene_short_name = T,
+                            show_rownames = T)
+
+#Fig. 5G
+library(igraph)
+library(SingleCellExperiment)
+library(bigSCale)
+library(ggpubr)
+library(ggsci)
+library(ggExtra)
+
+#convert Seurat into SingleCellExperiment
+counts <- SASP_seurat@assays$RNA@counts
+metadata <- SASP_seurat@meta.data
+metadata$cluster_id2 <- factor(SASP_seurat@meta.data$cluster_id2)
+sce <- SingleCellExperiment(assays = list(counts = counts), 
+                            colData = metadata)
+gene.names <- rowData(sce)@rownames
+expr.ctl <- counts
+
+#calculate network, this takes ~ 10 hrs
+results.ctl=compute.network(expr.data = expr.ctl,gene.names = gene.names)
+results.ctl2 <- results.ctl
+#shift the correlations into the "tot.scores" column
+colnames(results.ctl2$tot.scores) <- colnames(results.ctl$correlations)
+#save this in the dataframe "c"
+c <- as.data.frame(results.ctl2$tot.scores)
+#use ggplot2 to transform this correlation into a proper format, making use of the lancet-palette
+p.1 <- ggscatter(c, x = "Pappa", y = "Fgf7",
+                 size = 3, alpha = 0.6,
+                 color="Fgf7",
+                 add = "reg.line", conf.int = TRUE,
+                 add.params = list(color = "black", fill = "darkgrey"),
+                 cor.coef = TRUE, cor.metfhod = "spearman",
+                 xlab = "Z-score Pappa", ylab = "Z-score Fgf7")+
+  scale_color_gradientn(colours=pal_lancet(palette = c("lanonc"), alpha = 1)(2))
+
+p.2 <- ggscatter(c, x = "Cdkn2a", y = "Dkk1",
+                 size = 3, alpha = 0.6,
+                 color="Dkk1",
+                 add = "reg.line", conf.int = TRUE,
+                 add.params = list(color = "black", fill = "darkgrey"),
+                 cor.coef = TRUE, cor.metfhod = "spearman",
+                 xlab = "Z-score Cdkn2a", ylab = "Z-score Dkk1")+
+  scale_color_gradientn(colours=pal_lancet(palette = c("lanonc"), alpha = 1)(2))
+
+p.3 <- ggscatter(c, x = "Cdkn1a", y = "Bmp2",
+                 size = 3, alpha = 0.6,
+                 color="Bmp2",
+                 add = "reg.line", conf.int = TRUE,
+                 add.params = list(color = "black", fill = "darkgrey"),
+                 cor.coef = TRUE, cor.metfhod = "spearman",
+                 xlab = "Z-score Cdkn1a", ylab = "Z-score Bmp2")+
+  scale_color_gradientn(colours=pal_lancet(palette = c("lanonc"), alpha = 1)(2))
+
+print(p.1/p.2/p.3)
+
+#Fig. S2A
+library(openxlsx)
+write.xlsx(table(example_seu@meta.data$cluster_id2, seurat_musmusculuslabelled4@meta.data$cluster_id), "cluster_numbers.xlsx")
+
+#Fig. S2B
+write.xlsx(table(example_seu@meta.data$Phase), "phase_all.xlsx")
+write.xlsx(table(SASP_seurat@meta.data$Phase), "phase_justSASP.xlsx")
+
+#Fig. S2C
+library(gprofiler2)
+DE_SASP_pos <- FindMarkers(example_seu, ident.1 = "SASP cells", logfc.threshold = 0, test.use = "MAST", only.pos = TRUE, min.pct = 0.0)
+gostres <- gost(query = rownames(DE_SASP_pos), 
+                organism = "mmusculus", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "annotated", custom_bg = NULL, 
+                numeric_ns = "", as_short_link = FALSE,
+                sources=c("GO:BP", "GO:MF", "GO:CC", "KEGG", "REAC", "HP", "HPA", "WP"))
+p <- gostplot(gostres, capped = FALSE, interactive = FALSE)
+pp <- publish_gostplot(p, highlight_terms = c("GO:0036094", "GO:0005615", "GO:0030141", "GO:0099503", "GO:0007050", "GO:0008285", "0010941", "GO:0140352", "KEGG:04911", "REAC:R-HSA-382551", "WP:WP254"), 
+                       width = NA, height = NA, filename = NULL)
+pp
+
+#Fig. S2D
+#unfortunately, the subset function in Seurat does not work for multiple cluster correctly. We introduce a new metadata-column instead.
+example_seu@meta.data$cluster_id_monocle <- ""
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "CD14+ monocytes", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "CD16+ monocytes", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "Macrophages", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+example_seu@meta.data <- transform(example_seu@meta.data, cluster_id_monocle = ifelse(example_seu@meta.data$cluster_id2 == "SASP_cells", example_seu@meta.data$cluster_id2, example_seu@meta.data$cluster_id_monocle))
+#transform in a proper seurat for the subsequent monocle analysis
+subset_monocle_seurat <- subset(example_seu, subset=cluster_id_monocle=="", invert=TRUE)
+#monocle analysis
+library(monocle)
+library(DDRTree)
+library(viridis)
+data <- as(as.matrix(subset_monocle_seurat@assays$RNA@data), 'sparseMatrix')
+pd <- new('AnnotatedDataFrame', data = subset_monocle_seurat@meta.data)
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+HSMM <- newCellDataSet(data,
+                       phenoData = pd,
+                       featureData = fd,
+                       #lowerDetectionLimit = 0.5,
+                       expressionFamily = uninormal())
+subset_monocle_seurat <- FindVariableFeatures(subset_monocle_seurat, selection.method = "vst", nfeatures = 2000)
+subset_monocle_seurat@active.assay <- "RNA"
+var_genes <- subset_monocle_seurat[["RNA"]]@var.features
+ordering_genes <- var_genes
+HSMM <- setOrderingFilter(HSMM, ordering_genes)
+HSMM <- reduceDimension(HSMM,norm_method="none", 
+                        reduction_method="DDRTree",
+                        max_components=4,
+                        scaling=TRUE,
+                        verbose=TRUE,
+                        pseudo_expr=0)
+HSMM <- orderCells(HSMM)
+d.1 <- plot_cell_trajectory(HSMM, 
+                            color_by = "Pseudotime",
+                            theta = -15,
+                            show_branch_points = TRUE,
+                            show_tree = TRUE,
+                            cell_size = 2)
+d.2 <- plot_cell_trajectory(HSMM, 
+                     color_by = "cluster_id_monocle",
+                     theta = -15,
+                     show_branch_points = TRUE,
+                     show_tree = TRUE,
+                     cell_size = 2)
+d.3 <- plot_cell_trajectory(HSMM, 
+                            markers = c("MIF"),
+                            use_color_gradient=TRUE, 
+                            show_branch_points = FALSE)+scale_color_viridis(option="plasma")
+print(d.1|d.2|d.3)
+
+#Fig. S3A
+cellchat <- netAnalysis_computeCentrality(cellchat_musmusculus2, slot.name = "netP")
+netAnalysis_signalingRole_scatter(cellchat_musmusculus2, label.size = 5,  dot.size = c(1, 6), color.use=c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#f29403", "#f781bf", "#bc9dcc", "#a65628", "#55b0e4", "#222f75", "#1b9e77", "#b2df8a", "#e3be00", "#fb9a99", "#910241", "#00cdd1", "black", "#CE1261"), font.size = 20)
+
+#Fig. S3B+C
+netAnalysis_signalingRole_network(cellchat, signaling = c("MIF"), width = 8, height = 2.5, font.size = 10, color.heatmap = "PuBu")
+netAnalysis_signalingRole_network(cellchat, signaling = c("PECAM1"), width = 8, height = 2.5, font.size = 10, color.heatmap = "PuBu")
+
+#Fig. S3D
+netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", color.heatmap="PuBu", font.size=6)
+netAnalysis_signalingRole_heatmap(cellchat, pattern = "outgoing", color.heatmap="PuBu", font.size=6)
+
+#Fig. S3E
+netVisual_bubble(cellchat, sources.use = 19, targets.use = c(1:19), remove.isolate = FALSE, signaling=c("MIF", "PECAM1"))
+
+#Fig. S4A
+write.xlsx(table(SASP_seurat@meta.data$cluster_id), "sasp_cluster_mm.xlsx")
+
+#Fig. S4B
+write.xlsx(table(example_seu@meta.data$cluster_id2, seurat_musmusculuslabelled4@meta.data$cluster_id), "cluster_numbers.xlsx")
+
+#Fig. S4C
+write.xlsx(table(example_seu@meta.data$Phase), "phase_all.xlsx")
+write.xlsx(table(SASP_seurat@meta.data$Phase), "phase_justSASP.xlsx")
+
+#Fig. S4D
+library(gprofiler2)
+DE_SASP_pos <- FindMarkers(example_seu, ident.1 = "SASP cells", logfc.threshold = 0, test.use = "MAST", only.pos = TRUE, min.pct = 0.0)
+gostres <- gost(query = rownames(DE_SASP_pos), 
+                organism = "mmusculus", ordered_query = FALSE, 
+                multi_query = FALSE, significant = TRUE, exclude_iea = FALSE, 
+                measure_underrepresentation = FALSE, evcodes = FALSE, 
+                user_threshold = 0.05, correction_method = "fdr", 
+                domain_scope = "annotated", custom_bg = NULL, 
+                numeric_ns = "", as_short_link = FALSE,
+                sources=c("GO:BP", "GO:MF", "GO:CC", "KEGG", "REAC", "HP", "HPA", "WP"))
+p <- gostplot(gostres, capped = FALSE, interactive = FALSE)
+pp <- publish_gostplot(p, highlight_terms = c("GO:0019838", "GO:0031012", "GO:0008285", "KEGG:04380", "KEGG:04060", "KEGG:04218", "KEGG:04115",  "REAC:R-MMU-1474244", "REAC:R-MMU-381426", "REAC:R-MMU-8957275", "HP:0002758", "WP:WP1270"), 
+                       width = NA, height = NA, filename = NULL)
+pp
+
+#Fig. S4E
+netAnalysis_signalingRole_network(cellchat, signaling = c("MIF"), width = 8, height = 2.5, font.size = 10, color.heatmap = "PuBu")
+netAnalysis_signalingRole_network(cellchat, signaling = c("PECAM1"), width = 8, height = 2.5, font.size = 10, color.heatmap = "PuBu")
+
+#Fig. S4F
+cellchat <- netAnalysis_computeCentrality(cellchat, slot.name = "netP")
+netAnalysis_signalingRole_scatter(cellchat, label.size = 5,  dot.size = c(1, 6), color.use=c("#e41a1c", "#377eb8", "#4daf4a", "#984ea3", "#f29403", "#f781bf", "#bc9dcc", "#a65628", "#55b0e4", "#222f75", "#1b9e77", "#b2df8a", "#e3be00", "#fb9a99", "#910241", "#00cdd1", "black", "#CE1261"), font.size = 20)
+
+#Fig. S4G
+netVisual_bubble(cellchat, sources.use = 19, targets.use = c(1:19), remove.isolate = FALSE, signaling=c("MIF", "PECAM1"))
+
+#Fig. S5A
+library(scLink)
+library(corrplot)
+counts <- as.matrix(GetAssayData(SASP_seurat, slot = "counts"))
+counts_new <- t(counts)
+genes <- c("Cdkn2a", "Cdkn1a", "Gapdh", "Actb")
+count.norm = sclink_norm(counts_new, scale.factor = 1e6, filter.genes = FALSE, gene.names = genes)
+networks = sclink_net(expr = count.norm, ncores = 1, lda = seq(0.5, 0.1, -0.05))
+corr = sclink_cor(expr = count.norm, ncores = 1)
+col <- colorRampPalette(c("blue", "white", "red"))
+corrplot(M, method="color", order="hclust", addrect=10, tl.pos="top", tl.cex = 0.5, tl.col = "black", col=col(100))
+
+#Fig. S5B
+SASP_seurat <- subset(example_seu, subset=cluster_id2=="SASP cells")
+SASP_seurat <- RunUMAP(SASP_seurat, dims = 1:40,reduction = "pca", verbose=FALSE)
+SASP_seurat <- RunTSNE(SASP_seurat, dims = 1:40,reduction = "pca", verbose=FALSE)
+library(Nebulosa)
+library(patchwork)
+#create a theme to have the tSNE plots in a quadratic shape
+my_theme = theme(
+  axis.title.x = element_blank(),
+  axis.text.x = element_blank(),
+  axis.title.y = element_blank(),
+  aspect.ratio=1,
+  plot.title = element_text(hjust = 0.5),
+  legend.position="none")
+b1 <- plot_density(SASP_seurat, c("Fgf7"), pal="plasma", reduction="tsne") + my_theme
+b2 <- plot_density(SASP_seurat, c("Dkk1"), pal="plasma", reduction="tsne") + my_theme
+b3 <- plot_density(SASP_seurat, c("Bmp2"), pal="plasma", reduction="tsne") + my_theme
+b4 <- plot_density(SASP_seurat, c("Pappa"), pal="plasma", reduction="tsne") + my_theme
+b5 <- plot_density(SASP_seurat, c("Cdkn2a"), pal="plasma", reduction="tsne") + my_theme
+b6 <- plot_density(SASP_seurat, c("Cdkn1a"), pal="plasma", reduction="tsne") + my_theme
+
+print(b1/b3/b5 | b2/b4/b6)
+```

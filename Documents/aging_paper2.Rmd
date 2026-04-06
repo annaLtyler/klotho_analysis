@@ -1,0 +1,277 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+#human datast (Fig. 4)
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+
+setwd("/YOURENVIRONMENT/homo_sapiens_oetjen")
+options(timeout=100000000000)
+url="https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE120221&format=file"
+download.file(url, "GSE120221.tar")
+gunzip("GSE120221.tar", remove=FALSE)
+
+# There should be have files for each fastq, containing one
+# "barcodes.tsv.gz", one "features.tsv.gz" and one "matrix.mtx.gz". The folders should be named "bmA", "bmB", "bmC1", ...
+
+for (file in c("bmA", "bmb", "bmC1", "bmCk", "bmC2", "bmE", "bmF", "bmG", "bmH", "bmJ", "bmK", "bmL", "bmM", "bmN", "bmO", "bmP", "bmQ", "bmR", "bmS1", "bmSk1", "bmS2", "bmSk2", "bmT", "bmU", "bmW")){
+        seurat_data <- Read10X(data.dir = paste0("data/", file))
+        seurat_obj <- CreateSeuratObject(counts = seurat_data, 
+                                         min.features = 100, 
+                                         project = file)
+        assign(file, seurat_obj)
+}
+
+merged_seurat <- merge(x = bmA, 
+                       y = c(bmB, bmC1, bmCk, bmC2, bmE, bmF, bmG, bmH, bmJ, bmK, bmL, bmM, bmN, bmO, bmP, bmQ, bmR, bmS1, bmSk1, bmS2, bmSk2, bmT, bmU, bmW), 
+                       add.cell.id = c("bmA", "bmb", "bmC1", "bmCk", "bmC2", "bmE", "bmF", "bmG", "bmH", "bmJ", "bmK", "bmL", "bmM", "bmN", "bmO", "bmP", "bmQ", "bmR", "bmS1", "bmSk1", "bmS2", "bmSk2", "bmT", "bmU", "bmW"))
+
+merged_seurat$log10GenesPerUMI <- log10(merged_seurat$nFeature_RNA) / log10(merged_seurat$nCount_RNA)
+merged_seurat$mitoRatio <- PercentageFeatureSet(object = merged_seurat, pattern = "^MT-")
+merged_seurat$mitoRatio <- merged_seurat@meta.data$mitoRatio / 100
+
+metadata <- merged_seurat@meta.data
+metadata$cells <- rownames(metadata)
+metadata <- metadata %>%
+        dplyr::rename(seq_folder = orig.ident,
+                      nUMI = nCount_RNA,
+                      nGene = nFeature_RNA)
+
+metadata$sample <- NA
+metadata$sample[which(str_detect(metadata$cells, "^bm"))] <- "bone_marrow"
+merged_seurat@meta.data <- metadata
+
+save(merged_seurat, file="data/merged_filtered_seurat.RData")
+
+# filtering:
+
+filtered_seurat <- subset(x = merged_seurat, 
+                         subset= (nUMI >= 500) & 
+                           (nGene >= 250) & 
+                           (log10GenesPerUMI > 0.80) & 
+                           (mitoRatio < 0.20))
+
+# and Gene-level filtering
+counts <- GetAssayData(object = filtered_seurat, slot = "counts")
+nonzero <- counts > 0
+keep_genes <- Matrix::rowSums(nonzero) >= 10
+filtered_counts <- counts[keep_genes, ]
+filtered_seurat <- CreateSeuratObject(filtered_counts, meta.data = filtered_seurat@meta.data)
+
+save(filtered_seurat, file="data/seurat_filtered.RData")
+
+# normalization
+# need cell cycle markers (this one for human) https://www.dropbox.com/s/hus4mrkueh1tfpr/cycle.rda?dl=1
+# Saving in "data" folder
+seurat_phase <- NormalizeData(filtered_seurat)
+load("data/cycle.rda")
+seurat_phase <- CellCycleScoring(seurat_phase, 
+                                 g2m.features = g2m_genes, 
+                                 s.features = s_genes)
+seurat_phase <- FindVariableFeatures(seurat_phase, 
+                     selection.method = "vst",
+                     nfeatures = 2000, 
+                     verbose = FALSE)
+
+# scaling
+seurat_phase <- ScaleData(seurat_phase)
+seurat_phase <- RunPCA(seurat_phase)
+
+# just if you ran locally
+options(future.globals.maxSize = 4000 * 1024^2)
+split_seurat <- SplitObject(filtered_seurat, split.by = "sample")
+split_seurat <- split_seurat[c("bone_marrow")]
+
+for (i in 1:length(split_seurat)) {
+    split_seurat[[i]] <- NormalizeData(split_seurat[[i]], verbose = TRUE)
+    split_seurat[[i]] <- CellCycleScoring(split_seurat[[i]], g2m.features=g2m_genes, s.features=s_genes)
+    split_seurat[[i]] <- SCTransform(split_seurat[[i]], vars.to.regress = c("mitoRatio"))
+    }
+
+# integrating
+integ_features <- SelectIntegrationFeatures(object.list = split_seurat, 
+                                            nfeatures = 3000) 
+split_seurat <- PrepSCTIntegration(object.list = split_seurat, 
+                                   anchor.features = integ_features)
+integ_anchors <- FindIntegrationAnchors(object.list = split_seurat, 
+                                        normalization.method = "SCT", 
+                                        anchor.features = integ_features)
+seurat_integrated <- IntegrateData(anchorset = integ_anchors, 
+                                   normalization.method = "SCT")
+
+seurat_integrated <- RunPCA(object = seurat_integrated)
+seurat_integrated <- RunUMAP(seurat_integrated, 
+                             dims = 1:40,
+			     reduction = "pca")
+seurat_integrated <- FindNeighbors(object = seurat_integrated, 
+                                dims = 1:40)
+seurat_integrated <- FindClusters(object = seurat_integrated,
+                               resolution = c(0.4, 0.6, 0.8, 1.0, 1.4))
+
+Idents(object = seurat_integrated) <- "integrated_snn_res.1.4"
+
+saveRDS(seurat_integrated, "results/seurat_labelled_human.rds")
+
+```
+
+```{r}
+#murine datast (Fig. 5)
+library(SingleCellExperiment)
+library(Seurat)
+library(tidyverse)
+library(Matrix)
+library(scales)
+library(cowplot)
+library(RCurl)
+
+setwd("/YOURENVIRONMENT/homo_sapiens_oetjen")
+options(timeout=100000000000)
+url="https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE128423&format=file"
+download.file(url, "GSE128423_RAW.tar")
+gunzip("GSE128423_RAW.tar", remove=FALSE)
+
+# There should be have files for each fastq, containing one
+# "barcodes.tsv.gz", one "features.tsv.gz" and one "matrix.mtx.gz". The folders should be named "bmA", "bmB", "bmC1", ...
+
+for (file in c("b1", "b2", "b3", "b4", "bm1", "bm2", "bm3", "bm4")){
+        seurat_data <- Read10X(data.dir = paste0("data/", file))
+        seurat_obj <- CreateSeuratObject(counts = seurat_data, 
+                                         min.features = 100, 
+                                         project = file)
+        assign(file, seurat_obj)
+}
+
+merged_seurat <- merge(x = b1, 
+                       y = c(b2, b3, b4, bm1, bm2, bm3, bm4), 
+                       add.cell.id = c("b1", "b2", "b3", "b4", "bm1", "bm2", "bm3", "bm4"))
+
+merged_seurat$log10GenesPerUMI <- log10(merged_seurat$nFeature_RNA) / log10(merged_seurat$nCount_RNA)
+merged_seurat$mitoRatio <- PercentageFeatureSet(object = merged_seurat, pattern = "^mt-")
+merged_seurat$mitoRatio <- merged_seurat@meta.data$mitoRatio / 100
+
+metadata <- merged_seurat@meta.data
+metadata$cells <- rownames(metadata)
+metadata <- metadata %>%
+        dplyr::rename(seq_folder = orig.ident,
+                      nUMI = nCount_RNA,
+                      nGene = nFeature_RNA)
+
+metadata$sample <- NA
+metadata$sample[which(str_detect(metadata$cells, "^b"))] <- "bone"
+metadata$sample[which(str_detect(metadata$cells, "^bm"))] <- "bone_marrow"
+merged_seurat@meta.data <- metadata
+
+save(merged_seurat, file="data/merged_filtered_seurat.RData")
+
+# filtering:
+
+filtered_seurat <- subset(x = merged_seurat, 
+                         subset= (nUMI >= 500) & 
+                           (nGene >= 250) & 
+                           (log10GenesPerUMI > 0.80) & 
+                           (mitoRatio < 0.20))
+
+# and Gene-level filtering
+counts <- GetAssayData(object = filtered_seurat, slot = "counts")
+nonzero <- counts > 0
+keep_genes <- Matrix::rowSums(nonzero) >= 10
+filtered_counts <- counts[keep_genes, ]
+filtered_seurat <- CreateSeuratObject(filtered_counts, meta.data = filtered_seurat@meta.data)
+
+save(filtered_seurat, file="data/seurat_filtered.RData")
+
+# get the cell cycle genes for mus musculus
+if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    install.packages("BiocManager")
+}
+install.packages(pkgs = "RCurl")
+library(RCurl)
+library(AnnotationHub)
+cc_file <- getURL("https://raw.githubusercontent.com/hbc/tinyatlas/master/cell_cycle/Mus_musculus.csv") 
+cell_cycle_genes <- read.csv(text = cc_file)
+ah <- AnnotationHub()
+ahDb <- query(ah, 
+              pattern = c("Mus musculus", "EnsDb"), 
+              ignore.case = TRUE)
+id <- ahDb %>%
+        mcols() %>%
+        rownames() %>%
+        tail(n = 1)
+edb <- ah[[id]]
+
+annotations <- genes(edb, 
+                     return.type = "data.frame")
+
+cell_cycle_markers <- dplyr::left_join(cell_cycle_genes, annotations, by = c("geneID" = "gene_id"))
+
+s_genes <- cell_cycle_markers %>%
+        dplyr::filter(phase == "S") %>%
+        pull("gene_name")
+
+g2m_genes <- cell_cycle_markers %>%
+    filter(phase == "G2/M") %>%
+    pull("geneID")
+
+
+# normalization
+# need cell cycle markers (this one for mus musculus) https://www.dropbox.com/s/hus4mrkueh1tfpr/cycle.rda?dl=1
+# Saving in "data" folder
+seurat_phase <- NormalizeData(filtered_seurat)
+load("data/cycle.rda")
+seurat_phase <- CellCycleScoring(seurat_phase, 
+                                 g2m.features = g2m_genes, 
+                                 s.features = s_genes)
+seurat_phase <- FindVariableFeatures(seurat_phase, 
+                     selection.method = "vst",
+                     nfeatures = 2000, 
+                     verbose = FALSE)
+
+# scaling
+seurat_phase <- ScaleData(seurat_phase)
+seurat_phase <- RunPCA(seurat_phase)
+
+# just if you ran locally
+options(future.globals.maxSize = 4000 * 1024^2)
+split_seurat <- SplitObject(filtered_seurat, split.by = "sample")
+split_seurat <- split_seurat[c("bone", "bone_marrow")]
+
+for (i in 1:length(split_seurat)) {
+    split_seurat[[i]] <- NormalizeData(split_seurat[[i]], verbose = TRUE)
+    split_seurat[[i]] <- CellCycleScoring(split_seurat[[i]], g2m.features=g2m_genes, s.features=s_genes)
+    split_seurat[[i]] <- SCTransform(split_seurat[[i]], vars.to.regress = c("mitoRatio"))
+    }
+
+# integrating
+integ_features <- SelectIntegrationFeatures(object.list = split_seurat, 
+                                            nfeatures = 3000) 
+split_seurat <- PrepSCTIntegration(object.list = split_seurat, 
+                                   anchor.features = integ_features)
+integ_anchors <- FindIntegrationAnchors(object.list = split_seurat, 
+                                        normalization.method = "SCT", 
+                                        anchor.features = integ_features)
+seurat_integrated <- IntegrateData(anchorset = integ_anchors, 
+                                   normalization.method = "SCT")
+
+seurat_integrated <- RunPCA(object = seurat_integrated)
+seurat_integrated <- RunUMAP(seurat_integrated, 
+                             dims = 1:40,
+			     reduction = "pca")
+seurat_integrated <- FindNeighbors(object = seurat_integrated, 
+                                dims = 1:40)
+seurat_integrated <- FindClusters(object = seurat_integrated,
+                               resolution = c(0.4, 0.6, 0.8, 1.0, 1.4))
+
+Idents(object = seurat_integrated) <- "integrated_snn_res.1.4"
+
+saveRDS(seurat_integrated, "results/seurat_labelled_murine.rds")
+
+```

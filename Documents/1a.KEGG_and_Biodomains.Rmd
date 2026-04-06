@@ -1266,7 +1266,8 @@ text(x = plot.dim[2]+(plot.width*0.4), y = mean(plot.dim[3:4]),
     labels = "Expression (A.U.)", srt = 270, cex = 1.2)
 dev.off()
 
-png(here("Results", "for_paper", "colorbar_horizontal.png"), height = 2, width = 5, units = "in", res = 300)
+png(here("Results", "for_paper", "colorbar_horizontal.png"), height = 2, 
+    width = 3.5, units = "in", res = 300)
 par(bg = NA, xpd = NA)
 imageWithTextColorbar(signif(bd.mean.mat, 2), split.at.vals = TRUE, orientation = "h",
     col.scale = list(heatmap.neg.col, heatmap.pos.col), grad.dir = "ends", cex = 1, axis.line = 1)
@@ -2092,6 +2093,9 @@ if(margin.plot == "degree"){
 dev.off()
 
 cat("\n\n")
+
+#save biadjacency matrix, so we can use it for validation
+saveRDS(full.bimat[row.order,col.order], file.path(results.dir, "biadjacency_matrix.RDS"))
 ```
 
 There are some interseting patterns in the biadjacency matrix.
@@ -2516,7 +2520,8 @@ term.name <- "Insulin secretion : Immune Response"
 
 app.id <- mouse.genes[which(mouse.genes[,"external_gene_name"] == "App"), "ensembl_gene_id"]
 
-term.names <- c("Nicotine addiction : APP Metabolism", "Ribosome : Synapse")
+term.names <- c("Nicotine addiction : APP Metabolism", "Ribosome : Synapse", 
+    "Parkinson disease : Mitochondrial Metabolism")
 
 
 x <- 0.8
@@ -2861,6 +2866,7 @@ The figure below shows the overall statistics for this
 set of genes.
 
 ```{r connector_example, fig.width = 10, fig.height = 5}
+
 connector.genes <- Reduce("intersect", pair.genes)
 
 #png(file.path(results.dir, "connector.png"), width = 10, height = 6, units = "in", res = 300)
@@ -5288,15 +5294,18 @@ for(i in 1:length(cyto.idx)){
 #int.name = "Ribosome : Synapse"
 #int.name = "Ribosome : Immune Response"
 #int.name = "Parkinson disease : Mitochondrial Metabolism"
-int.name = "Gastric acid secretion : Mitochondrial Metabolism"
-int.name = "MAPK signaling pathway : DNA Repair"
-int.name = "MAPK signaling pathway : Apoptosis"
+#int.name = "Gastric acid secretion : Mitochondrial Metabolism"
+#int.name = "MAPK signaling pathway : DNA Repair"
+#int.name = "MAPK signaling pathway : Apoptosis"
+int.name = "Glutathione metabolism : Proteostasis"
 
 int.genes <- plot_individual_genes(intersection.name = int.name, 
         plot.type = "individual", order.by = "means", 
         return.full.result = TRUE)
 
 gene.names <- gsub("**", "", rownames(int.genes$row.p), fixed = TRUE)
+
+
 
 write.table(gene.names, file.path(results.dir, 
     "validation_gene_sets", 
@@ -5360,4 +5369,46 @@ if(subgroup == "all ages"){
     abline(h = 0)
     dev.off()
 }
+```
+
+```{r aging_list, eval = FALSE}
+
+#from pmid 35974106
+
+library(readxl)
+#from list of 125 identified genes, not sure which are supposed to go up and which down
+aging.genes <- read_excel(here("Data", "Human", "41467_2022_32552_MOESM4_ESM.xlsx"), sheet = 2)
+aging.id <- mouse.genes[match(aging.genes$"Gene(murine)", mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+
+#from Table 2 listing 20 most upregulated genes
+aging.genes <- read.delim(here("Data", "Human", "sasp_upregulated.txt"), sep = "\t", comment.char = "#") 
+aging.id <- mouse.genes[match(aging.genes[,"gene_name"], mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+fig.file <- "~/Desktop/upregulated_sasp.jpg"
+
+
+#From Figure 4, I did my best to decipher the names of dowbregulated genes
+aging.genes <- read.delim(here("Data", "Human", "sasp_downregulated.txt"), sep = "\t", comment.char = "#")
+aging.ortho <- get_orthologs(human.id = aging.genes[,"gene_name"], 
+    file.name = here("Data", "Human", "sasp_downregulated_orthos.csv"))
+aging.id <- aging.ortho[,"mouse_ensembl_gene_id"]
+fig.file <- "~/Desktop/downregulated_sasp.jpg"
+
+#plot selected gene list
+
+aging.id <- aging.id[which(!is.na(aging.id))]
+
+jpeg(fig.file, width = 12, height = 6, units = "in", res = 300)
+int.genes <- plot_individual_genes(gene.list = aging.id, 
+        plot.type = "individual", order.by = "means", 
+        return.full.result = TRUE)
+mtext(paste(gsub("_sasp", "", gsub(".jpg", "", basename(fig.file))), "in older animals"), side = 3, outer = TRUE, line = -1.5)
+dev.off()
+
+sig.only <- which(int.genes$row.p <= 0.05)
+sig.name <- gsub("**", "", names(int.genes$row.p[sig.only,1]), fixed = TRUE)
+sig.id <- mouse.genes[match(sig.name, mouse.genes[,"external_gene_name"]), "ensembl_gene_id"]
+sig.genes <- plot_individual_genes(gene.list = sig.id, 
+        plot.type = "individual", order.by = "PC", 
+        return.full.result = TRUE)
+
 ```

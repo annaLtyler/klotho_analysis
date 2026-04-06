@@ -1,0 +1,84 @@
+---
+title: "R Notebook RNA Seq young vs old"
+output: html_notebook
+---
+```{r}
+#load all necessary libraries (some might need installing via BiocManager, follow BiocManager::install("PACKAGE") or let the following lines do it)
+packages = c("BiocManager") 
+package.check <- lapply(
+    packages,
+    FUN = function(x) {
+        if (!require(x, character.only = TRUE)) {
+            install.packages(x, dependencies = TRUE)
+            library(x, character.only = TRUE)
+        }
+    }
+)
+
+packages = c("DESeq2", "readxl", "dplyr", "utils", "ggplot2", "R.utils", "gplots", "ggrepel")
+
+#if the packages do not exist, they will be installed:
+package.check <- lapply(
+    packages,
+    FUN = function(x) {
+        if (!require(x, character.only = TRUE)) {
+            BiocManager::install(x, dependencies = TRUE)
+            library(x, character.only = TRUE)
+        }
+    }
+)
+
+#create a new folder for this dataset, and set the working directory to this folder
+dir.create("GSE72815")
+setwd("GSE72815")
+
+#get the raw_counts_file from GEO, download them and untar them
+options(timeout=100000000000)
+url="https://www.ncbi.nlm.nih.gov/geo/download/?acc=GSE72815&format=file&file=GSE72815%5FYOE%5Fcounts%2Ecsv%2Egz"
+download.file(url, "GSE72815.csv.gz")
+gunzip("GSE72815.csv.gz", remove=FALSE)
+
+#read in the table
+GSE72815 <- read.csv("GSE72815.csv")
+GSE72815 <- GSE72815  %>%
+    select(3, 7:64)
+rawcounts <- GSE72815
+
+#remove all "helping" files
+rm(list = ls()[!ls() %in% c("rawcounts")])
+write.csv(rawcounts, "GSE72815_rawcounts.csv")
+
+#You now created a file named rawcounts, in this example from GSE119794. This file should be in your working directory. The  first row contains either "normal" or "tumor", while the first column contains the gene name (or gene symbol). A1 is empty.
+# apply your experimental setup. There are 20 samples, 10 of each for each "condition"
+design1<-data.frame(experiment=colnames(rawcounts[,2:59]),  treatment = c("young", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old+e", "young", "old", "old+e", "young", "old", "old+e", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "young", "old", "old+e", "old", "old+e", "young", "old", "old+e"))
+# add the rownames to the design
+rownames(design1)<-colnames(rawcounts[,2:59])
+# transform the rawcoutns into a Matrix, according to your experimental setup
+youngandold <- DESeqDataSetFromMatrix(countData = (round(rawcounts[,2:59])), colData = design1, design = ~  treatment)
+# perform the actual DESeq
+dyoungandold <- DESeq(youngandold)
+# create a DE results table (the standard parameters are lfcThreshold=0, alpha=0.1, minmu=0.5). The p-value correction is performed according to the methods of Benjamini and Hochberg.
+young_vs_old_res <- results(dyoungandold,contrast=c("treatment","young", "old"))
+# name the results table according to your excel-sheet
+young_vs_old_res@rownames <- rawcounts$GeneID
+# write the results as a *.csv file.Note: high log2FC refers to a high expression in the first condition that is named in the results command (here: "normal")
+write.csv(young_vs_old_res, file="GSE72815_young_vs_old_res.csv", row.names = rawcounts$GeneID)
+
+results <- as.data.frame(young_vs_old_res)
+results=results[order(results$padj),]
+
+ggplot(results, aes(x=log2FoldChange, y=-log10(padj))) +
+    geom_point(aes(color="grey", size=1.5, alpha=0.4)) +
+    ggtitle('Volcano Plot') +
+    labs(y=expression('-Log'[10]*' P'[adj]), x=expression('Log'[2]*' fold change')) +
+    theme_minimal() +
+    geom_text_repel(data=results[1:10,], aes(x = log2FoldChange, y = -log10(padj), label=rownames(results)[1:10]))+
+    theme(legend.position="none", plot.title = element_text(size = rel(1.5), hjust = 0.5))+
+    geom_point(data=results[1:10,],aes(x = log2FoldChange, y = -log10(padj), color="red", size=1.5, alpha=0.4))+
+    scale_color_manual(values=c('gray','red'))
+
+ggsave(
+    "GSE72815_Volcano.png",
+    plot = last_plot(),
+    dpi=600)
+```

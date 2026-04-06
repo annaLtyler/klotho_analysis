@@ -1,0 +1,904 @@
+---
+title: "Validation from organoids"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+## Introduction
+
+This workflow is a grasp at some kind of human validation
+of the mouse results. The human data sets we have are not
+well powered. This organoid set does not look at the variants,
+but could at least tell us if different gene sets are affected
+by Klotho levels in brain organoids.
+
+```{r param}
+rm(list = ls())
+library(here)
+```
+
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+```
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "vioplot", "stringr")
+load_libraries(needed.libraries)
+```
+
+```{r Geo2R}
+# Version info: R 4.2.2, Biobase 2.58.0, GEOquery 2.66.0, limma 3.54.0
+################################################################
+#   Differential expression analysis with DESeq2
+library(DESeq2)
+
+# load counts table from GEO
+urld <- "https://www.ncbi.nlm.nih.gov/geo/download/?format=file&type=rnaseq_counts"
+tbl.file <- here("Data", "Human", "Organoids", "GSE171719_raw_counts_GRCh38.p13_NCBI.RDS")
+if(!file.exists(tbl.file)){
+     path <- paste(urld, "acc=GSE171719", "file=GSE171719_raw_counts_GRCh38.p13_NCBI.tsv.gz", sep="&");
+     tbl <- as.matrix(data.table::fread(path, header=T, colClasses="integer"), rownames="GeneID")
+     saveRDS(tbl, tbl.file)
+}else{
+     tbl <- readRDS(tbl.file)
+}
+
+# load gene annotations 
+annot.file <- here("Data", "Human", "Organoids", "Human.GRCh38.p13.annot.RDS")
+if(!file.exists(annot.file)){
+     apath <- paste(urld, "type=rnaseq_counts", "file=Human.GRCh38.p13.annot.tsv.gz", sep="&")
+     annot <- data.table::fread(apath, header=T, quote="", stringsAsFactors=F, data.table=F)
+     rownames(annot) <- annot$GeneID
+     saveRDS(annot, annot.file)
+}else{
+     annot <- readRDS(annot.file)
+}
+
+
+# sample selection
+gsms <- "000111"
+sml <- strsplit(gsms, split="")[[1]]
+
+# group membership for samples
+gs <- factor(sml)
+groups <- make.names(c("KL","Untreated"))
+levels(gs) <- groups
+sample_info <- data.frame(Group = gs, row.names = colnames(tbl))
+
+# pre-filter low count genes
+# keep genes with at least N counts > 10, where N = size of smallest group
+keep <- rowSums( tbl >= 10 ) >= min(table(gs))
+tbl <- tbl[keep, ]
+
+ds <- DESeqDataSetFromMatrix(countData=tbl, colData=sample_info, design= ~Group)
+
+ds <- DESeq(ds, test="Wald", sfType="poscount")
+
+counts <- vst(tbl)
+
+# extract results for top genes table
+r <- results (ds, contrast=c("Group", groups[1], groups[2]), alpha=0.05, pAdjustMethod ="fdr")
+
+tT <- r[order(r$padj),] 
+tT <- merge(as.data.frame(tT), annot, by=0, sort=F)
+
+tT <- subset(tT, select=c("GeneID","padj","pvalue","lfcSE","stat","log2FoldChange","baseMean","Symbol","Description"))
+#write.table(tT, file=stdout(), row.names=F, sep="\t")
+```
+
+## Differential expression of gene sets of interest {.tabset .tabset-fade .tabset-pills}
+
+```{r gene_sets, results = "asis", fig.width = 12, fig.height = 8}
+
+#gene.sets <- c("Glutamate_Genes", "Ribosome-Synapse_Genes", "Parkinson_disease-Mitochondrial_Metabolism_Genes")
+gene.set.files <- list.files("/Users/atyler/Documents/Projects/Klotho/klotho_analysis/Results/age_batch_12_gene/validation_gene_sets",
+     full.names = TRUE, pattern = "Genes.txt")
+gene.sets <- gsub(".txt", "", basename(gene.set.files))
+
+layout(matrix(c(0,1,3,2,2,2), byrow = TRUE, nrow = 2))
+for(g in 1:length(gene.sets)){
+     cat("###", gene.sets[g], "\n")
+     #validation genes
+     val.genes <- read.table(here("Results", "age_batch_12_gene", "validation_gene_sets", 
+          paste0(gene.sets[g], ".txt")))[,1]
+     
+     ortho.file <- here("Results", "age_batch_12_gene", 
+          "validation_gene_sets", paste0(gene.sets[g], "_Orthologs.csv"))
+     
+     gene.orthos <- get_orthologs(mouse.id = val.genes, file.name = ortho.file)
+     gene.names <- gene.orthos[,"human_external_gene_name"]
+     #gene.names <- c("TNFAIP8L3", "IL10RA", "IL13RA2", "PDGFB", "NFIB", "NFIA", "PDGFC", "CX3CL1", "ATM", "NFIL3", "NFIC", "IL17RD", "ILF2", "TMEM30A", "ARRDC4", "SLC9A7", "ELMOD1")
+
+     gene.idx <- match(gene.names, tT[,"Symbol"])
+     gene.result <- tT[gene.idx,]
+     
+     xmin <- min(gene.result[,"log2FoldChange"], na.rm = TRUE)
+     xmax <- max(gene.result[,"log2FoldChange"], na.rm = TRUE)
+     plot.width <- xmax - xmin
+     plot.max <- xmax + (plot.width*0.2)
+     plot.min <- max(abs(c(xmin, xmax)))*-1
+
+     plot(gene.result[,"log2FoldChange"], -log10(gene.result[,"padj"]), pch = 16,
+          xlab = "log2FC", ylab = "-log10(p)", xlim = c(plot.min, plot.max),
+          main = gene.sets[g])
+     text(x = gene.result[,"log2FoldChange"], y = -log10(gene.result[,"padj"]), 
+          labels = gene.result[,"Symbol"], pos = 4)
+     plot.dim <- par("usr")
+     segments(x0 = 0, y0 = plot.dim[3], y1 = plot.dim[4])
+
+     gene.id <- annot[match(gene.names, annot[,"Symbol"]), "GeneID"]
+     expr.idx <- match(gene.id, rownames(counts))
+     set.expr <- t(apply(log2(counts[expr.idx,]), 1, scale))
+     rownames(set.expr) <- gene.names
+     colnames(set.expr) <- colnames(counts)
+     
+     #annot.df <- data.frame("Treatment" = gs)     
+     #rownames(annot.df) <- colnames(set.expr)
+     #set.mean <- colMeans(set.expr)
+     #pheatmap(set.expr, annotation_col = annot.df, cluster_cols = FALSE, scale = "row", cluster_rows = FALSE)
+
+     #plot.decomp(t(set.expr))
+     
+     by.treatment <- lapply(groups, 
+          function(x) t(set.expr[,which(gs == x)]))
+     names(by.treatment) <- groups
+     untreated.order <- order(colMeans(by.treatment$Untreated))
+     ordered.set <- lapply(by.treatment[2:1], function(x) x[,untreated.order])
+     plot.grouped.boxes(ordered.set, type = "matrix", group.cols = c("#eff3ff", "#4292c6"))
+     add_zero_line()  
+
+     #boxplot(by.treatment[2:1], main = gene.sets[g])
+     gene.means <- lapply(2:1, function(x) colMeans(by.treatment[[x]]))
+     vioplot(gene.means, names = names(by.treatment)[2:1], col = "lightgray")
+     stripchart(gene.means, vertical = TRUE, pch = 16, col = "#dd1c77", 
+          method = "jitter", add = TRUE)
+     mtext("Expression", side = 2, line = 2.5)
+     add_zero_line()
+     cat("\n\n")
+}
+```
+
+
+```{r figures}
+#just volcano plots for paper figure
+
+pdf(here("Results", "for_paper", "Human_Validation_Organoids.pdf"), width = 6, height = 9)
+par(mfrow = c(3,2))
+for(g in 1:length(gene.sets)){
+     #validation genes
+     val.genes <- read.table(here("Results", "age_batch_12_gene", "validation_gene_sets", 
+          paste0(gene.sets[g], ".txt")))[,1]
+     
+     ortho.file <- here("Results", "age_batch_12_gene", 
+          "validation_gene_sets", paste0(gene.sets[g], "_Orthologs.csv"))
+     
+     gene.orthos <- get_orthologs(mouse.id = val.genes, file.name = ortho.file)
+     gene.names <- gene.orthos[,"human_external_gene_name"]
+     #gene.names <- c("TNFAIP8L3", "IL10RA", "IL13RA2", "PDGFB", "NFIB", "NFIA", "PDGFC", "CX3CL1", "ATM", "NFIL3", "NFIC", "IL17RD", "ILF2", "TMEM30A", "ARRDC4", "SLC9A7", "ELMOD1")
+
+     gene.idx <- match(gene.names, tT[,"Symbol"])
+     gene.result <- tT[gene.idx,]
+     
+     xmin <- min(gene.result[,"log2FoldChange"], na.rm = TRUE)
+     xmax <- max(gene.result[,"log2FoldChange"], na.rm = TRUE)
+     plot.width <- xmax - xmin
+     plot.max <- xmax + (plot.width*0.4)
+     plot.min <- max(abs(c(xmin, xmax)))*-1
+
+     ymin <- min(-log10(gene.result[,"padj"]), na.rm = TRUE)
+     ymax <- max(-log10(gene.result[,"padj"]), na.rm = TRUE)*1.05
+
+     split.name <- strsplit(gene.sets[g], "-")
+     k.name <- gsub("_", " ", split.name[[1]][1])
+     bd.name <- gsub("_", " ", gsub("_Genes", "", split.name[[1]][2]))
+     plot.label <- paste("KEGG:", k.name, "\nBiodomain:", bd.name)
+     plot(gene.result[,"log2FoldChange"], -log10(gene.result[,"padj"]), pch = 16,
+          xlab = "log2FC", ylab = "-log10(p)", xlim = c(plot.min, plot.max),
+          main = "", ylim = c(ymin, ymax))
+     mtext(plot.label, side = 3, line = 0.8)
+     text(x = gene.result[,"log2FoldChange"], y = -log10(gene.result[,"padj"]), 
+          labels = gene.result[,"Symbol"], pos = 4)
+     plot.dim <- par("usr")
+     segments(x0 = 0, y0 = plot.dim[3], y1 = plot.dim[4])
+
+     gene.id <- annot[match(gene.names, annot[,"Symbol"]), "GeneID"]
+     expr.idx <- match(gene.id, rownames(counts))
+     set.expr <- t(apply(log2(counts[expr.idx,]), 1, scale))
+     #set.expr <- log2(counts[expr.idx,])
+     rownames(set.expr) <- gene.names
+     colnames(set.expr) <- colnames(counts)
+
+     by.treatment <- lapply(groups, 
+          function(x) t(set.expr[,which(gs == x)]))
+     names(by.treatment) <- groups
+     #boxplot(by.treatment[2:1], cex.axis = 1.5, ylab = "Average Normalized Expression",
+     #     cex.lab = 1.2)
+     #mtext(plot.label, side = 3, line = 0.8)
+     #abline(h = 0)
+
+     gene.means <- lapply(2:1, function(x) colMeans(by.treatment[[x]]))
+     vioplot(gene.means, names = c("", ""), 
+          col = "lightgray", cex.axis = 1.5, cex.lab = 1.2)
+     plot.dim <- par("usr")
+     plot.height <- plot.dim[4] - plot.dim[3]
+     par(xpd = NA)
+     text(x = c(1,2), y = plot.dim[3]-(plot.height*0.15),
+          labels = paste(names(by.treatment)[2:1], "\n(3)"), cex = 1.5)
+     stripchart(gene.means, vertical = TRUE, pch = 16, col = "#dd1c77", 
+          method = "jitter", add = TRUE, cex = 1.5)
+     mtext(plot.label, side = 3, line = 0.8)
+     mtext("Expression (A.U.)", side = 2, line = 2.5, cex = 1.2)
+     add_zero_line()
+}
+dev.off()
+```
+
+```{r sandbox, eval = FALSE}
+#just checking that the fold change direction matches that in the paper
+gene.name <- "SPARCL1" #up with KL added
+gene.name <- "FGL2" #up with KL
+gene.name <- "CDH7" #down with KL added
+gene.name <- "GAPDH"
+
+gene.idx <- match(gene.name, tT[,"Symbol"])
+tT[gene.idx,]
+
+gene.id <- annot[match(gene.name, annot[,"Symbol"]), "GeneID"]
+expr.idx <- match(gene.id, rownames(counts))
+#boxplot(log(counts[expr.idx,])~gs)
+barplot(counts[expr.idx,], col = as.numeric(gs), names = sample_info[,1], main = gene.name)
+```
+
+It would seem that glutamate receptor genes go down 
+when Klotho is induced and ribosomal genes go up. 
+The mitochondrial genes don't have a coherent direction. 
+
+In Figure 5C of the paper, they show KEGG pathways 
+that were enriched among the up and down-regulated
+genes in the organoids. They have both nicotine addiction
+and glutamatergic synapses going down, which matches our 
+VS mice.
+
+The glutamate receptor genes go down in VS animals,
+and when paired with this data set, that would seem
+to indicate more KL in the brain. Very interesting!
+
+They don't talk about this specifically in the paper,
+but they cite another paper about astrocyte senescence
+promoting glutamate toxicity.
+
+
+## More broadly
+
+Maybe we can look at all of the KEGG-Biodomain intersections
+to see how things compare more broadly.
+
+
+```{r broad}
+biadj <- readRDS("/Users/atyler/Documents/Projects/Klotho/klotho_analysis/Results/age_batch_12_gene/biadjacency_matrix.RDS")
+bd.kegg <- readRDS("/Users/atyler/Documents/Projects/Klotho/klotho_analysis/Results/Processed_Data/Human_KEGG_Intersections_for_GSEA.RDS")
+
+pairs.to.check <- which(biadj != 0, arr.ind = TRUE)
+pairs.to.check[,1] <- rownames(biadj)[as.numeric(pairs.to.check[,1])]
+pairs.to.check[,2] <- colnames(biadj)[as.numeric(pairs.to.check[,2])]
+
+fc.mat <- mean.mat <- matrix(NA, nrow = nrow(biadj), ncol = ncol(biadj))
+dimnames(fc.mat) <- dimnames(mean.mat) <- dimnames(biadj)
+
+for(i in 1:nrow(pairs.to.check)){
+     bd.name <- pairs.to.check[i,1]
+     kegg.name <- pairs.to.check[i,2]
+     bd.idx <- which(names(bd.kegg) == bd.name)
+     k.idx <- which(names(bd.kegg[[bd.idx]]) == kegg.name)
+     bd.k.genes <- bd.kegg[[bd.idx]][[k.idx]]
+     gene.id <- annot[match(bd.k.genes, annot[,"EnsemblGeneID"]), "GeneID"]
+     gene.id <- gene.id[which(!is.na(gene.id))]
+     
+     gene.idx <- match(gene.id, tT[,"GeneID"])
+     gene.idx <- gene.idx[which(!is.na(gene.idx))]
+     gene.result <- tT[gene.idx,]
+     #plot(gene.result[,"log2FoldChange"], -log10(gene.result[,"padj"]), pch = 16);abline(v = 0)
+     fc.mat[bd.name, kegg.name] <- mean(gene.result[,"log2FoldChange"], na.rm = TRUE)
+     #fc <- gene.result[,"log2FoldChange"]; names(fc) <- gene.result[,"Symbol"]
+     
+     expr.idx <- match(gene.id, rownames(counts))
+     set.expr <- t(apply(counts[expr.idx,], 1, scale))
+
+     by.treatment <- lapply(groups, 
+          function(x) t(set.expr[,which(gs == x)]))
+     names(by.treatment) <- groups
+     #plot.grouped.boxes(by.treatment[2:1], type = "matrix")
+     by.gene <- t(sapply(1:nrow(set.expr), 
+          function(x) c(mean(by.treatment$Untreated[,x], na.rm = TRUE), mean(by.treatment$KL[,x], na.rm = TRUE))))
+     #mean.diff <- by.gene[,2] - by.gene[,1]; names(mean.diff) <- gene.result[,"Symbol"]
+     #boxplot(by.treatment[2:1])
+     #boxplot(by.gene)
+     #kl.effect <- mean(by.gene[,2] - by.gene[,1], na.rm = TRUE)
+     #kl.effect <- mean(by.treatment$KL, na.rm = TRUE) - mean(by.treatment$Untreated, na.rm = TRUE)
+     kl.model <- lm.by.list(by.treatment[c(2:1)])
+     kl.effect <- coef(summary(kl.model))[2,1]
+     mean.mat[bd.name, kegg.name] <- kl.effect
+}
+```
+
+
+```{r plot_mat}
+heatmap.neg.col = "purple"
+heatmap.pos.col = "brown"
+
+png("~/Desktop/organoid_biadj1.png", width = 12, height = 5, units = "in", res = 300)
+par(mar = c(12, 12, 0,0), bg = NA)
+imageWithText(fc.mat, col.scale = list(heatmap.neg.col, heatmap.pos.col), 
+    split.at.vals = TRUE, show.text = FALSE, row.text.cex = 0.8, col.text.cex = 0.5, 
+    grad.dir = "ends", row.text.shift = 0.02, col.text.shift = 0.04, na.col = "white")
+plot.dim <- par("usr")
+draw.rectangle(min.x = 0.5, max.x = ncol(fc.mat)+0.5, 
+     min.y = 0.5, max.y = nrow(fc.mat)+0.5)
+dev.off()
+
+png("~/Desktop/organoid_biadj2.png", width = 12, height = 5, units = "in", res = 300)
+par(mar = c(12, 12, 0,0), bg = NA)
+imageWithText(mean.mat, col.scale = list(heatmap.neg.col, heatmap.pos.col), 
+    split.at.vals = TRUE, show.text = FALSE, row.text.cex = 0.8, col.text.cex = 0.5, 
+    grad.dir = "ends", row.text.shift = 0.02, col.text.shift = 0.04, na.col = "white")
+plot.dim <- par("usr")
+draw.rectangle(min.x = 0.5, max.x = ncol(mean.mat)+0.5, 
+     min.y = 0.5, max.y = nrow(mean.mat)+0.5)
+dev.off()
+```
+
+```{r plotting_fun}
+
+#testing
+common_points <- function(arr.list){
+     all.pts <- unique(Reduce("rbind", arr.list))
+     common.pts <- NULL
+     for(i in 1:nrow(all.pts)){
+          inlist <- lapply(arr.list, function(x) intersect(which(x[,1] == all.pts[i,1]), which(x[,2] == all.pts[i,2])))
+          inboth <- all(sapply(inlist, length) > 0)
+          if(inboth){
+               common.pts <- rbind(common.pts, all.pts[i,])
+          }
+     }
+     return(common.pts)
+}
+
+spread_coord <- function(coord.vals, min.dist, nudge.dist){
+     
+     coord.dist <- as.matrix(dist(coord.vals))
+     diag(coord.dist) <- NA
+     coord.dist[upper.tri(coord.dist)] <- NA
+     need.to.nudge <- as.logical(length(which(coord.dist < min.dist)))
+     new.coord <- coord.vals
+
+     while(need.to.nudge){
+          too.close <- unique(as.vector(which(coord.dist < min.dist, arr.ind = TRUE)))
+          old.coord <- coord.vals[too.close]
+          
+          #nudge the minimum one down, and the maximum one up
+          new.min <- min(old.coord) - nudge.dist
+          new.max <- max(old.coord) + nudge.dist
+          #print(cbind(new.min, new.max))
+          #spread out coordinates evenly
+          adj.coord <- segment_region(new.min, new.max, length(old.coord), "ends")
+          #put the new coordinates in the same order as the old
+          old.order <- order(old.coord)
+          
+          new.coord[too.close[old.order]] <- adj.coord
+
+          coord.dist <- as.matrix(dist(new.coord))
+          diag(coord.dist) <- NA
+          coord.dist[upper.tri(coord.dist)] <- NA
+          need.to.nudge <- as.logical(length(which(coord.dist < coord.dist)))
+     }
+     
+     return(new.coord)
+}
+
+get_coord <- function(arr.idx){
+     arr.labels <- arr.idx
+     arr.labels[,1] <- rownames(mean.mat)[arr.idx[,1]]
+     arr.labels[,2] <- colnames(mean.mat)[arr.idx[,2]]
+
+     label.names <- apply(arr.labels, 1, function(x) paste(x, collapse = " - "))
+
+     x.coord <- apply(arr.idx, 1, function(x) biadj[x[1], x[2]])
+     y.coord <- apply(arr.idx, 1, function(x) mean.mat[x[1], x[2]])
+     coord.table <- cbind("x" = x.coord, "y" = y.coord)
+     rownames(coord.table) <- label.names
+     return(coord.table)
+}
+
+
+add_labels <- function(arr.idx, label.nudges = NULL,
+     pos = 4, cex = 0.5, min.y.dist = 0.1, nudge.dist = 0.05,
+     col = "black"){
+     
+     pt.coord <- get_coord(arr.idx)
+     pt.x <- pt.coord[,"x"]
+     pt.y <- pt.coord[,"y"]
+     label.names <- rownames(pt.coord)
+     label.y <- spread_coord(coord.vals = pt.y, min.dist = min.y.dist, nudge.dist)
+     #plot(label.y, pt.y)
+
+     if(!is.null(label.nudges)){
+          for(i in 1:length(label.nudges)){
+               label.idx <- which(names(label.y) == names(label.nudges)[i])
+               label.y[label.idx] <- label.y[label.idx]+label.nudges[i]
+          }
+     }
+     
+     text(pt.x, label.y, labels = label.names, pos = pos, cex = cex, col = col)
+     
+     #draw lines from the labels to the dots
+     plot.dim <- par("usr")
+     plot.width <- plot.dim[2] - plot.dim[1]
+     pt.diff <- which(label.y - pt.y != 0)
+     label.x <- pt.x
+
+     #add a bit to label x if in position 4
+     #subtract a bit if in position 2
+     if(pos == 4){
+          label.x[pt.diff] <- label.x[pt.diff]+(plot.width*0.012)
+     }
+     if(pos == 2){
+          label.x[pt.diff] <- label.x[pt.diff]-(plot.width*0.012)
+     }
+     segments(x0 = pt.x, x1 = label.x, y0 = pt.y, y1 = label.y)
+     invisible(label.names)
+}
+```
+
+The following plot shows the comparison between the effects
+of the VS allele in the mice and the effects of overexpressed
+Klotho in organoids. Some of the points with similar effects 
+are labeled.
+
+```{r labeled_comp, fig.width = 7, fig.height = 7}
+
+#quartz(width = 7, height = 7)
+plot(as.vector(biadj), as.vector(mean.mat), pch = 16, 
+     xlab = "Effect of VS allele in mice", xlim = c(-0.7, 1.5),
+     ylab = "Effect of KL induction in human organoids")
+abline(h = 0, v = 0)
+
+
+#abline(h = -0.8) #below this line for common negative effects
+both.neg <- which(mean.mat < -0.7, arr.ind = TRUE)
+add_labels(arr.idx = both.neg, min.y.dist = 0.08, nudge.dist = 0.01,
+     label.nudges = c("Autophagy - Huntington disease" = -0.07))
+
+each.pos <- list(which(mean.mat > 0, arr.ind = TRUE), which(biadj > 0, arr.ind = TRUE))
+both.pos <- common_points(each.pos)
+add_labels(both.pos, min.y.dist = 0.08, nudge.dist = 0.01)
+
+pos.neg.list <- list(which(mean.mat < 0, arr.ind = TRUE), which(biadj > 0, arr.ind = TRUE))
+pos.neg <- common_points(pos.neg.list)
+#add_labels(pos.neg, min.y.dist = 0.08, nudge.dist = 0.01)
+
+#just wondering what this dot was. It's far enough away to label clearly
+neg.pos.list <- list(which(biadj < 0, arr.ind = TRUE), which(mean.mat > 0.7, arr.ind = TRUE))
+neg.pos <- common_points(neg.pos.list) 
+add_labels(neg.pos, min.y.dist = 0.08, nudge.dist = 0.01)
+
+#add a label for the mitochondrial blob
+draw.rectangle(0.22, 0.64, -0.72, -0.02)
+text(x = 0.65, y = mean(c(-0.7, -0.05)), 
+     labels = "Mitochondrial Metabolism\nand Oxidative Stress", cex = 0.5,
+     adj = 0)
+
+```
+
+```{r for_fig}
+#shorten some names
+colnames(biadj) <- colnames(mean.mat) <- gsub("Coronavirus disease - ", "", colnames(mean.mat))
+
+pdf(here("Results", "for_paper", "human_mouse_comparison.pdf"), width = 8, height = 7)
+#quartz(width = 7, height = 7)
+mouse.effects <- as.vector(biadj)
+org.effects <- as.vector(mean.mat)
+
+text.cex = 0.7
+min.dist = 0.2
+
+plot.new()
+plot.window(xlim = c(-0.7, 2),
+     ylim = c(min(org.effects, na.rm = TRUE), max(org.effects, na.rm = TRUE)))
+
+abline(h = 0, v = 0, col = "gray")
+#abline(v = seq(-1, 1.5, 0.5), col = "gray", lty = 2)
+#abline(h = seq(-1.5, 1.5, 0.5), col = "gray", lty = 2)
+
+#add border box
+#draw.rectangle(-1.1, 1.5, -1.5, 1.5)
+
+#add a label for the mitochondrial blob
+draw.rectangle(0.22, 0.64, -0.72, -0.02)
+text(x = 0.65, y = mean(c(-0.7, -0.05)), 
+     labels = "Mitochondrial Metabolism\nand Oxidative Stress", cex = text.cex,
+     adj = 0)
+
+points(mouse.effects, org.effects, pch = 16)
+axis(1)
+axis(2)
+mtext("Effect of VS allele in mice", side = 1, line = 2.5)
+mtext("Effect of KL induction in human organoids", side = 2, line = 2.5)
+
+#abline(h = -0.8) #below this line for common negative effects
+both.neg <- which(mean.mat < -0.68, arr.ind = TRUE)
+add_labels(both.neg, min.y.dist = min.dist, nudge.dist = 0.01, cex = text.cex,
+     label.nudges = c("Autophagy - Huntington disease" = -0.07))
+
+each.pos <- list(which(mean.mat > 0, arr.ind = TRUE), which(biadj > 0, arr.ind = TRUE))
+both.pos <- common_points(each.pos)
+add_labels(both.pos, min.y.dist = min.dist, nudge.dist = 0.01, cex = text.cex)
+
+#lighten the biggest blob.
+big.group <- list(which(biadj < 0, arr.ind = TRUE), which(mean.mat > -0.68, arr.ind = TRUE))
+big.idx <- common_points(big.group)
+big.coord <- get_coord(big.idx)
+points(big.coord, col = "gray", pch = 16)
+dev.off()
+
+
+```
+
+
+```{r for_fig_alt}
+#a version with group labels instead of individual labels
+
+pdf(here("Results", "for_paper", "human_mouse_comparison_alt.pdf"), width = 8, height = 7)
+#quartz(width = 7, height = 7)
+mouse.effects <- as.vector(biadj)
+org.effects <- as.vector(mean.mat)
+
+text.cex = 1.2
+min.dist = 0.2
+
+plot.new()
+plot.window(xlim = c(-0.7, 1.5),
+     ylim = c(min(org.effects, na.rm = TRUE), max(org.effects, na.rm = TRUE)))
+
+abline(h = 0, v = 0, col = "gray")
+#abline(v = seq(-1, 1.5, 0.5), col = "gray", lty = 2)
+#abline(h = seq(-1.5, 1.5, 0.5), col = "gray", lty = 2)
+
+#add a label for the mitochondrial blob
+draw.rectangle(0.22, 0.64, -0.72, -0.02)
+text(x = 0.66, y = mean(c(-0.7, -0.05)), 
+     labels = "Mitochondrial Metabolism\nand Oxidative Stress", 
+     cex = text.cex, adj = 0)
+
+#add a label for APP-synapse blob
+draw.rectangle(-0.67, -0.16, -1.45, -0.58)
+#add a backing rectangle to cover up 0 line
+draw.rectangle(-0.14, 0.5, -1.32, -1, fill = "white", border.col = NA)
+text(x = -0.14, y = mean(c(-1.45, -0.87)), 
+     labels = "APP Metabolism\nand Synapse", 
+     cex = text.cex, adj = 0)
+
+#add a label for ribosomal blob
+draw.rectangle(0.3, 0.9, 0.25, 1.5)
+text(x = 0.92, y = mean(c(0.25, 1.5)), 
+     labels = "Ribosome and\nProteostasis", cex = text.cex, adj = 0)
+
+points(mouse.effects, org.effects, pch = 16)
+axis(1)
+axis(2)
+mtext("Effect of VS allele in mice", side = 1, line = 2.5, cex = 1.5)
+mtext("Effect of KL induction in human organoids", side = 2, line = 2.5, cex = 1.5)
+
+#lighten the biggest blob.
+big.group <- list(which(biadj < 0, arr.ind = TRUE), which(mean.mat > -0.58, arr.ind = TRUE))
+big.idx <- common_points(big.group)
+big.coord <- get_coord(big.idx)
+points(big.coord, col = "gray", pch = 16)
+dev.off()
+```
+
+
+```{r for_fig_all_info}
+#Greg thinks we can cram all the information on there! Let's try.
+
+pdf(here("Results", "for_paper", "human_mouse_comparison_all.pdf"), width = 8, height = 7)
+#quartz(width = 7, height = 7)
+mouse.effects <- as.vector(biadj)
+org.effects <- as.vector(mean.mat)
+
+small.cex = 0.7
+big.cex  <- 1.2
+min.dist = 0.2
+box.col <- "darkgray"
+box.lwd <- 2
+box.lty = 2
+#cat.cols <- c("#fb9a99", "#fdbf6f", "#de77ae")
+cat.cols <- rep("#de77ae", 3)
+
+plot.new()
+plot.window(xlim = c(-0.7, 1.5),
+     ylim = c(min(org.effects, na.rm = TRUE), max(org.effects, na.rm = TRUE)))
+
+abline(h = 0, v = 0, col = "gray")
+#abline(v = seq(-1, 1.5, 0.5), col = "gray", lty = 2)
+#abline(h = seq(-1.5, 1.5, 0.5), col = "gray", lty = 2)
+
+#add a label for APP-synapse blob
+draw.rectangle(-0.67, 0.69, -1.45, -0.68, border = cat.cols[1], lwd = box.lwd, 
+     fill = "white", lty = box.lty)
+text(x = 0.74, y = mean(c(-1.45, -0.87)), 
+     labels = "APP Metabolism\nand Synapse", 
+     cex = text.cex, adj = 0, col = cat.cols[1])
+
+#add APP individual labels
+both.neg <- which(mean.mat < -0.68, arr.ind = TRUE)
+add_labels(both.neg, min.y.dist = min.dist, nudge.dist = 0.01, cex = small.cex,
+     label.nudges = c("Autophagy - Huntington disease" = -0.07))
+
+
+#add a label for the mitochondrial blob after APP blob and fill in white
+draw.rectangle(0.22, 0.64, -0.72, -0.02, fill = "white", border = cat.cols[2], 
+     lwd = box.lwd, lty = box.lty)
+text(x = 0.66, y = mean(c(-0.7, -0.05)), 
+     labels = "Mitochondrial Metabolism\nand Oxidative Stress", 
+     cex = big.cex, adj = 0, col = cat.cols[2])
+
+#add points
+points(mouse.effects, org.effects, pch = 16)
+axis(1)
+axis(2)
+mtext(bquote("Effect Size ("~beta~"), Mouse"), side = 1, line = 2.5, cex = 1.5)
+mtext(bquote("Effect Size ("~beta~"), Organoid"), side = 2, line = 2.5, cex = 1.5)
+
+#add labels for ribosomal blob
+each.pos <- list(which(mean.mat > 0, arr.ind = TRUE), which(biadj > 0, arr.ind = TRUE))
+both.pos <- common_points(each.pos)
+add_labels(both.pos, min.y.dist = min.dist, nudge.dist = 0.01, cex = small.cex)
+
+#add a label for ribosomal blob
+draw.rectangle(0.35, 1.4, 0.25, 1.5, border = cat.cols[3], lwd = box.lwd, 
+     lty = box.lty)
+par(xpd = NA)
+text(x = mean(c(0.35, 1.4)), y = 1.6, col = cat.cols[3],
+     labels = "Ribosome and Proteostasis", cex = text.cex, adj = 0.5)
+
+#lighten the biggest blob.
+big.group <- list(which(biadj < 0, arr.ind = TRUE), which(mean.mat > -0.68, arr.ind = TRUE))
+big.idx <- common_points(big.group)
+big.coord <- get_coord(big.idx)
+points(big.coord, col = "gray", pch = 16)
+
+#add correlation statistics to top left
+cor.stats <- cor.test(mouse.effects, org.effects, 
+     use = "pairwise.complete.obs", method = "spearman")
+r <- cor.stats$estimate
+p <- cor.stats$p.value
+text(-0.65, 1.45, labels = bquote(rho ==.(signif(r, 2))), adj = 0)
+text(-0.65, 1.3, labels = bquote(italic(p) ==.(signif(p, 2))), adj = 0)
+
+#bounding box for stats
+draw.rectangle(-0.67, -0.39, 1.22, 1.52, border = box.col, lwd = box.lwd)
+dev.off()
+
+#make table for supplements
+did.measure <- which(!is.na(biadj), arr.ind = TRUE)
+measured.labels <- sapply(1:2, function(x) dimnames(biadj)[[x]][did.measure[,x]])
+mouse.vals <- as.vector(biadj[which(!is.na(biadj))])
+organoid.vals <- as.vector(mean.mat[which(!is.na(mean.mat))])
+comp.table <- cbind(measured.labels, mouse.vals, organoid.vals)
+colnames(comp.table) <- c("Biodomain", "KEGG", "Effect of KL haplotype in mice", "Effect of KL induction in organoids")
+write_table_with_header(comp.table, 
+     here("Results", "for_paper", "Supplemental_File_Organoid_Comparison.txt"),
+     header = "Comparison of the effect of the KL haplotype in mice and 
+     the effects of KL induction in human iPSC-derived brain organoids
+     on mean gene expression of groups of genes defined as the intersection
+     between a Biodomain and a KEGG pathway. Intersections shown in Figure
+     6 are included. Effects are the beta coefficients from linear models
+     as described in the methods.")
+```
+
+
+Here is just the mitochondrial blob labeled,
+so we can see what's in there. There are so many points to label,
+that the labels spread into the upper quadrant, but we 
+are not actually labeling any of the dots in that quadrant.
+Most of the points have something to do with mitochondria,
+oxidative stress and metal binding. I'd like to summarize this
+group of dots in the figure.
+
+```{r mito_blob, fig.width = 9, fig.height = 7}
+
+#quartz(width = 7, height = 7)
+plot(as.vector(biadj), as.vector(mean.mat), pch = 16, 
+     xlab = "Effect of VS allele in mice", xlim = c(-0.7, 1.5),
+     ylab = "Effect of KL induction in human organoids")
+abline(h = 0, v = 0)
+
+pos.neg.list <- list(which(mean.mat < 0, arr.ind = TRUE), which(biadj > 0, arr.ind = TRUE))
+pos.neg <- common_points(pos.neg.list)
+add_labels(arr.idx = pos.neg, min.y.dist = 0.05, nudge.dist = 0.6, cex = 0.7)
+
+#test more of neg-neg intersections
+#neg.neg.list <- list(which(mean.mat < -0.5, arr.ind = TRUE), which(mean.mat > -1, arr.ind = TRUE), which(biadj < 0, arr.ind = TRUE))
+#neg.neg <- common_points(neg.neg.list)
+#add_labels(arr.idx = neg.neg, min.y.dist = 0.05, nudge.dist = 0.3, cex = 0.7)
+
+
+```
+
+```{r other_checks, eval = FALSE}
+plot(as.vector(biadj), as.vector(mean.mat), pch = 16, 
+     xlab = "Effect of VS allele in mice", xlim = c(-0.7, 1.5),
+     ylab = "Effect of KL induction in human organoids")
+abline(h = 0, v = 0)
+
+#test non-movers in organoids - do these need more body systems?
+neg.non.list <- list(which(mean.mat > -0.1, arr.ind = TRUE), which(mean.mat < 0.1, arr.ind = TRUE), which(biadj < 0, arr.ind = TRUE))
+neg.non <- common_points(neg.non.list)
+idx <- row_col_to_idx(neg.non[,1], neg.non[,2], nrow(mean.mat))
+points(biadj[idx], mean.mat[idx], col = "red")
+test <- add_labels(arr.idx = neg.non, min.y.dist = 0.1, nudge.dist = 0.6, cex = 0.7, 
+     col = "red")
+
+
+#what about positive in organoid and negative in mice
+neg.pos.list <- list(which(mean.mat > 0.1, arr.ind = TRUE), which(biadj < 0, arr.ind = TRUE))
+neg.pos <- common_points(neg.pos.list)
+idx <- row_col_to_idx(neg.pos[,1], neg.pos[,2], nrow(mean.mat))
+points(biadj[idx], mean.mat[idx], col = "red")
+test <- add_labels(arr.idx = neg.pos, min.y.dist = 0.1, nudge.dist = 0.6, cex = 0.7, 
+     col = "red")
+
+neg.blob.list <- list(which(mean.mat < 0, arr.ind = TRUE), which(mean.mat > -0.75, arr.ind = TRUE), which(biadj < 0, arr.ind = TRUE))
+neg.blob <- common_points(neg.blob.list)
+idx <- row_col_to_idx(neg.blob[,1], neg.blob[,2], nrow(mean.mat))
+points(biadj[idx], mean.mat[idx], col = "red")
+test <- add_labels(arr.idx = neg.blob, min.y.dist = 0.1, nudge.dist = 0.6, cex = 0.7, 
+     col = "red")
+
+
+split.test <- strsplit(test, " - ")
+test.bd <- sapply(split.test, function(x) x[1])
+test.k <- sapply(split.test, function(x) x[2])
+
+par(mar = c(4, 14, 4, 2))
+barplot(sort(table(test.bd)), las = 2, horiz = TRUE)
+barplot(sort(table(test.k)), las = 2, horiz = TRUE)
+```
+
+## Check significance?
+
+It occurred to me that with so many gene groups, we could 
+have identified differential expression by chance. Do we 
+need to check the significance of this finding overall?
+Given random sets of genes, how likely is it that we would
+see this concordance by chance?
+
+How do we even test this? It seems like a lot of 
+calculations. We could draw some number of sets of 
+10 genes at random from each data set and see how
+often we get concordance of the effects. But if the
+genes really do have the same effect, we will find
+stuff even in random sets. In fact, if all genes 
+were concordant, every random draw would be concordant...
+
+
+## check all
+
+I'm curious about whether the glutamate genes and the
+ribosomal signals are really the largest. I suspect they 
+are, but I wanted to look even more broadly.
+This code looks across all intersections.
+
+```{r all}
+u_bd <- names(bd.kegg)
+#remove tau homeostasis, it's too small
+u_bd <- u_bd[which(u_bd != "Tau Homeostasis")]
+u_k <- unique(unlist(lapply(bd.kegg, names)))
+all.mat <- matrix(NA, nrow = length(u_bd), ncol = length(u_k))
+rownames(all.mat) <- u_bd
+colnames(all.mat) <- u_k
+
+for(b in 1:length(bd.kegg)){
+     bd.name <- names(bd.kegg)[b]
+     print(bd.name)
+     for(k in 1:length(bd.kegg[[b]])){
+          kegg.name <- names(bd.kegg[[b]])[k]
+          bd.idx <- which(names(bd.kegg) == bd.name)
+          k.idx <- which(names(bd.kegg[[bd.idx]]) == kegg.name)
+          bd.k.genes <- bd.kegg[[bd.idx]][[k.idx]]
+          gene.id <- annot[match(bd.k.genes, annot[,"EnsemblGeneID"]), "GeneID"]
+          gene.id <- gene.id[which(!is.na(gene.id))]
+     
+          gene.idx <- match(gene.id, tT[,"GeneID"])
+          gene.idx <- gene.idx[which(!is.na(gene.idx))]
+          if(length(gene.idx) < 10){
+               next()
+          }
+          gene.result <- tT[gene.idx,]
+     
+          expr.idx <- match(gene.id, rownames(counts))
+          set.expr <- t(apply(counts[expr.idx,], 1, scale))
+
+          by.treatment <- lapply(groups, 
+               function(x) t(set.expr[,which(gs == x)]))
+          names(by.treatment) <- groups
+     
+          by.gene <- t(sapply(1:nrow(set.expr), 
+               function(x) c(mean(by.treatment$Untreated[,x], na.rm = TRUE), mean(by.treatment$KL[,x], na.rm = TRUE))))
+          kl.model <- lm.by.list(by.treatment[c(2:1)])
+          kl.effect <- coef(summary(kl.model))[2,1]
+          all.mat[bd.name, kegg.name] <- kl.effect
+     }
+}
+#remove empty cols
+has.vals <- which(apply(all.mat, 2, function(x) length(which(!is.na(x)))) > 1)
+plot.mat <- all.mat[,has.vals]
+row.order <- order(decomp_with_nas(plot.mat, label.points = TRUE, plot.results = FALSE)$u[,1])
+col.order <- order(decomp_with_nas(t(plot.mat), label.points = TRUE, add.zeros = TRUE, plot.results = FALSE)$u[,1])
+pheatmap(plot.mat[row.order, col.order], cluster_rows = FALSE, cluster_cols = FALSE)
+
+high.test <- which(plot.mat > 1, arr.ind = TRUE)
+high.test.labels <- sapply(1:2, function(x) dimnames(plot.mat)[[x]][high.test[,x]])
+
+low.test <- which(plot.mat < -1, arr.ind = TRUE)
+low.test.labels <- sapply(1:2, function(x) dimnames(plot.mat)[[x]][low.test[,x]])
+
+```
+
+```{r the_rest, eval = FALSE}
+plotDispEsts(ds, main="GSE171719 Dispersion Estimates")
+
+# create histogram plot of p-values
+hist(r$padj, breaks=seq(0, 1, length = 21), col = "grey", border = "white", 
+         xlab = "", ylab = "", main = "GSE171719 Frequencies of padj-values")
+
+# volcano plot
+old.pal <- palette(c("#00BFFF", "#FF3030")) # low-hi colors
+par(mar=c(4,4,2,1), cex.main=1.5)
+plot(r$log2FoldChange, -log10(r$padj), main=paste(groups[1], "vs", groups[2]),
+     xlab="log2FC", ylab="-log10(Padj)", pch=20, cex=0.5)
+with(subset(r, padj<0.05 & abs(log2FoldChange) >= 0),
+     points(log2FoldChange, -log10(padj), pch=20, col=(sign(log2FoldChange) + 3)/2, cex=1))
+legend("bottomleft", title=paste("Padj<", 0.05, sep=""), legend=c("down", "up"), pch=20,col=1:2)
+
+# MD plot
+par(mar=c(4,4,2,1), cex.main=1.5)
+plot(log10(r$baseMean), r$log2FoldChange, main=paste(groups[1], "vs", groups[2]),
+     xlab="log10(mean of normalized counts)", ylab="log2FoldChange", pch=20, cex=0.5)
+with(subset(r, padj<0.05 & abs(log2FoldChange) >= 0),
+     points(log10(baseMean), log2FoldChange, pch=20, col=(sign(log2FoldChange) + 3)/2, cex=1))
+legend("bottomleft", title=paste("Padj<", 0.05, sep=""), legend=c("down", "up"), pch=20,col=1:2)
+abline(h=0)
+palette(old.pal) # restore palette
+
+################################################################
+#   General expression data visualization
+dat <- log10(counts(ds, normalized = T) + 1) # extract normalized counts
+
+# box-and-whisker plot
+lbl <- "log10(raw counts + 1)"
+ord <- order(gs)  # order samples by group
+palette(c("#1B9E77", "#7570B3", "#E7298A", "#E6AB02", "#D95F02",
+          "#66A61E", "#A6761D", "#B32424", "#B324B3", "#666666"))
+par(mar=c(7,4,2,1))
+boxplot(dat[,ord], boxwex=0.6, notch=T, main="GSE171719", ylab="lg(norm.counts)", outline=F, las=2, col=gs[ord])
+legend("topleft", groups, fill=palette(), bty="n")
+
+# UMAP plot (multi-dimensional scaling)
+library(umap)
+dat <- dat[!duplicated(dat), ] # first remove duplicates
+par(mar=c(3,3,2,6), xpd=TRUE, cex.main=1.5)
+ump <- umap(t(dat), n_neighbors = 3, random_state = 123)
+plot(ump$layout, main="UMAP plot, nbrs=3", xlab="", ylab="", col=gs, pch=20, cex=1.5)
+legend("topright", inset=c(-0.15,0), legend=groups, pch=20,
+       col=1:length(groups), title="Group", pt.cex=1.5)
+
+```

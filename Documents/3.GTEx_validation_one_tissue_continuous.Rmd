@@ -1,5 +1,5 @@
 ---
-title: "GTEx Validation One Tissue"
+title: "GTEx Validation One Tissue Continuous"
 author: Anna L Tyler
 date: '`r format(Sys.Date(), "%B %d, %Y")`'
 output:
@@ -12,12 +12,16 @@ output:
 
 ## Introduction
 
-The purpose of this workflow is to see if we can recapitulate key findings
-from the mouse experiment in a human cohort. We are using GTEx gene expression
-to see if individuals with the different Klotho haplotypes (with or without 
-different APOE genotypes) have variation in glutamate receptor genes. 
+This workflow was copied from 3.GTEx_validation_one_tissue.Rmd,
+but doesn't bin people by age. Rather we use a continuous approach.
 
-We will bin the individuals by age and adjust for sex. 
+We want to see if we can recapitulate key findings from the mouse 
+experiment in a human cohort without introducing artifacts from binning. 
+We are using GTEx gene expression to see if individuals with the 
+different Klotho haplotypes (with or without different APOE genotypes) 
+have variation in glutamate receptor genes. 
+
+We will still adjust for sex. 
 
 Of course, we know that tons of environmental variables affect Klotho 
 levels. I'll do the simplest analysis at first and then go further if
@@ -181,51 +185,19 @@ Age is distributed in the following way:
 hist(age)
 ```
 
-We binned the subjects into the following age bins.
-
-```{r bin_age}
-#automatic generation of bins
-age.bins <- round(segment_region(min(age), max(age), 4, "ends"))
-#age.bins <- round(segment_region(min(age), max(age), 3, "ends"))
-#age.bins <- c(20, 65, 70)
-
-#there aren't many individuals with expression and VSVS haplotypes
-#check ages to make bins
-#vs.idx <- which(matched.haps[,1] == "VSVS")
-#matched.age[vs.idx]
-#age.bins <- c(20, 55, 70)
-
-bin.mat <- consec_pairs(age.bins)
-
-#adjust so we have non-overlapping bins. Otherwise patients get double-assigned
-bin.mat[2:nrow(bin.mat),1] <- bin.mat[2:nrow(bin.mat),1]+1
-
-#assign each person a bin based on age
-assign_bin <- function(value, bin.mat){
-  bin.which <- which(apply(bin.mat, 1, function(x) segments.overlap(value, value, x[1], x[2])))
-  return(bin.which)
-}
-
-age.bin <- sapply(age, function(x) assign_bin(x, bin.mat))
-bin.names <- apply(bin.mat, 1, function(x) paste(x, collapse = "-"))
-barplot_with_num(table(age.bin), names = bin.names, ylab = "Count",
-  main = "Patients in each age group")
-```
-
 
 ## Distribution of sex by age
 
 Sex and age are distributed as follows:
 
-```{r sex, fig.width = 7, fig.height = 5}
-age.sex <- table(data.frame("age bin" = age.bin, "sex" = sex))
-rownames(age.sex) <- bin.names
+```{r sex, fig.width = 10, fig.height = 5}
+age.sex <- table(data.frame("age" = age, "sex" = sex))
 
 #quartz(width = 7, height = 5)
 a <- barplot(t(age.sex), beside = TRUE, legend = TRUE, 
   args.legend = c("x" = "topleft"), ylim = c(0, max(age.sex)*1.1))
-text(x = a[1,], y = age.sex[,1]+2, labels = age.sex[,1])
-text(x = a[2,], y = age.sex[,2]+2, labels = age.sex[,2])
+text(x = a[1,], y = age.sex[,1]+0.5, labels = age.sex[,1])
+text(x = a[2,], y = age.sex[,2]+0.5, labels = age.sex[,2])
 ```
 
 
@@ -310,69 +282,10 @@ if(!quick.run){ #only save if we haven't subset the genes yet
   sub.info <- sub.set$info
 }
 
-```
-
-## age, sex, and genotype tables
-
-```{r all_tables}
-#for the paper
-
-kl.hap <- matched.haps[,1]
-kl.hap[which(kl.hap == "TT00")] <- "unknown"
-age.group <- age.bin
-for(i in 1:length(bin.names)){
-  age.group[which(age.bin == i)] <- bin.names[i]
-}
-all.stats <- data.frame("age" = age.group, "sex" = sex, "KL" = kl.hap)
-#table(all.stats)
-
-sex.group <- unique(sex)
-kl.group <- unique(kl.hap)
-
-#organize first by age bin, then by sex, then by klotho haplotype
-group.counts <- group.names <- group.expr <- rep(NA, length(sex.group)*length(kl.group)*length(bin.names))
-idx = 1
-for(a in 1:length(bin.names)){
-  age.idx <- which(age.group == bin.names[a])
-  for(s in 1:length(sex.group)){
-    sex.idx <- which(sex == sex.group[s])
-    for(k in 1:length(kl.group)){
-      k.idx <- which(kl.hap == kl.group[k])
-      
-      group.mean <- NA #initialize each time
-      group.idx <- Reduce("intersect", list(age.idx, sex.idx, k.idx))
-      n.group <- length(group.idx)
-      group.id <- paste(bin.names[a], sex.group[s], kl.group[k])
-      group.names[idx] <- group.id
-      group.counts[idx] <- n.group
-
-      if(n.group > 0){ #calculate mean expression only if there are subjects in the group
-        group.data <- use.expr[group.idx,,drop=FALSE]
-        group.mean <- mean(colMeans(group.data, na.rm = TRUE), na.rm = TRUE)  
-        group.expr[idx] <- group.mean
-      }else{
-          group.expr[idx] <- NA
-      }
-
-      print(c(group.id, n.group, group.mean))
-
-      idx = idx + 1
-
-    }
-  }
-}
-
-result <- rbind(group.counts, group.expr)
-colnames(result) <- group.names
-saveRDS(result, file.path(results.dir, 
-  paste0("Expr_group_num_", tissue.name, "_", gene.set.label, ".RDS")))
+colnames(use.expr) <- genes.of.interest
 ```
 
 
-```{r bin_expr}
-binned.expr <- lapply(1:max(age.bin), function(x) use.expr[which(age.bin == x),])
-names(binned.expr) <- bin.names
-```
 
 ```{r interaction_model}
 
@@ -396,68 +309,15 @@ pheatmap(cor(use.expr, use = "pairwise.complete.obs"))
 ```
 
 The following plot shows gene expression for this group
-of genes by age. 
-
+of genes by age.
 
 ```{r plot_expr, fig.width = 12, fig.height = 5}
-young.mean <- colMeans(binned.expr[[1]])
-old.mean <- colMeans(binned.expr[[length(binned.expr)]])
-diff.order <- order(old.mean - young.mean)
-
-ordered.expr <- lapply(binned.expr, function(x) x[,diff.order])
-#quartz(width = 12, height = 5)
-plot.grouped.boxes(ordered.expr, type = "matrix", print.vals = NA, ylab = ylab,
-  main = "Expression by Age Bins")
-add_zero_line()
-```
-
-## Mean expression by age
-
-Mean expression for each gene in each age group is shown below. 
-
-```{r heat, fig.width = 3, fig.height = 5}
-mean.mat <- sapply(binned.expr, function(x) colMeans(x, na.rm = TRUE))
-#quartz(width = 3, height = 5)
-pheatmap(mean.mat[diff.order,], cluster_cols = FALSE, cluster_rows = FALSE)
-
-write.table(mean.mat, 
-  file.path(results.dir, 
-  paste0("Mean_Expr_by_Age_", tissue.name, "_", gene.set.label, ".csv")),
-  quote = FALSE, sep = ",")
+mean.expr <- rowMeans(use.expr)
+plot.with.model(age, mean.expr, report = "cor.test", ylab = "Mean Expression")
 ```
 
 As a group, these genes do seem to decline in expression with age.
 
-```{r overall}
-mean.mat.tests <- pairwise_test(mean.mat)
-
-vioplot(mean.mat, col = hap.cols, main = "Module Mean Expression",
-  ylim = c(min(mean.mat), max(mean.mat)+0.2))
-add_pairwise_results(mean.mat, mean.mat.tests, y.nudge = 0.15, text.nudge = 0.01)
-
-mtext("Mean Expression", side = 2, line = 2.5)
-
-```
-
-## Differential expression by age
-
-Does gene expression vary across age groups?
-The line marks an unadjusted p value of 0.05.
-
-```{r age_test, fig.width = 12, fig.height = 5}
-expr.diff.pvals <- rep(NA, ncol(ordered.expr[[1]]))
-names(expr.diff.pvals) <- colnames(ordered.expr[[1]])
-
-for(i in 1:ncol(ordered.expr[[1]])){
-  test.expr <- lapply(ordered.expr, function(x) x[,i])
-  test.diff <- aov.by.list(test.expr)
-  expr.diff.pvals[i] <- test.diff[1, "Pr(>F)"]
-}
-
-barplot(-log10(expr.diff.pvals), las = 2, cex.names = 1.2,
-  ylab = "-log10(p)")
-abline(h = -log10(0.05))
-```
 
 ## Expression by Kl haplotype {.tabset .tabset-fade .tabset-pills}
 
@@ -471,16 +331,10 @@ kl.haps <- c("FCFC", "FCVS", "VSVS")
 kl.groups <- lapply(kl.haps, 
   function(x) rownames(matched.haps)[which(matched.haps[,1] == x)])
 
-for(i in 1:length(ordered.expr)){
-  cat("###", bin.names[i], "\n")
-  age.expr <- ordered.expr[[i]]
-  #bin these individuals into haplotypes
-  hap.expr <- lapply(kl.groups, function(x) age.expr[which(rownames(age.expr) %in% x),,drop=FALSE])
-  names(hap.expr) <- kl.haps
-  plot.grouped.boxes(hap.expr, type = "matrix", main = names(ordered.expr)[i],
-    ylab = "Scaled Expression", print.vals = NA, group.cols = hap.cols)
-  add_zero_line()
-  cat("\n\n")
+layout(get.layout.mat(ncol(use.expr)))
+for(i in 1:ncol(use.expr)){
+  plot.with.model(age, use.expr[,i], xlab = "age", report = "cor.test",
+    ylab = "Expression", main = colnames(use.expr)[i])
 }
 ```
 

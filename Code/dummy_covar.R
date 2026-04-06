@@ -6,12 +6,18 @@
 
 dummy_covar <- function(covar.mat){
 
+    factors.found = FALSE
     if(class(covar.mat)[1] == "matrix"){
         u_factors <- lapply(1:ncol(covar.mat), function(x) sort(unique(covar.mat[,x])))
+        factors.found <- TRUE
     }
     if(class(covar.mat)[1] == "data.frame"){
         u_factors <- lapply(1:ncol(covar.mat), function(x) levels(covar.mat[,x]))
+        factors.found <- TRUE
     }
+    
+    if(!factors.found){stop("Data supplied must either be a matrix or a data.frame.")}
+
     num.factors <- sapply(u_factors, length)
     use.these <- which(num.factors > 1) #don't use anything that doesn't vary or is numeric
     total.columns <- sum(num.factors[use.these]) - length(num.factors[use.these])
