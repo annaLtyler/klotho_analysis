@@ -1,0 +1,15 @@
+---
+title: "Alamar"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+The purpose of this workflow is to look at plasma protein levels
+measured by Alamar (https://alamarbio.com/) in the Klotho mice.
+

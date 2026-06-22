@@ -1,0 +1,285 @@
+---
+title: "Klotho Alamar"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+The purpose of this workflow is to investigate the Alamar
+data we got recently looking at abundance of 120 proteins
+related to neurological function and disease.
+
+The mice in this group are all the same age (12 months), 
+They have humanized Klotho haplotype in the following genotype
+combinations: KL-FC, KL-VS/FC and KL-VS.
+All mice have humanized APOE4. 
+
+So, the question here, is whether mice with the APOE4 allele
+and the VS allele have a less AD-like profile than the APOE4 mice
+with just the FC allele. And maybe the VS alone look worse than the
+homs?
+
+We cannot yet compare to other age groups or to APOE carriers,
+but these data will come later.
+
+The proteins in these sets are annotated in groups by Alamar, and
+we can use those groups to look at specific subsets of proteins.
+
+```{r param}
+rm(list = ls())
+library(here)
+```
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+```
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "vioplot", "RColorBrewer",
+  "gprofiler2", "readxl", "stringr")
+load_libraries(needed.libraries)
+```
+
+```{r load_data}
+data.dir <- here("Data", "Mouse", "Alamar", "20260406_Jax_mousePLA_NULISA_Analysis_Software_Report")
+processed.data.dir <- here("Results", "Alamar", "processed_data")
+if(!file.exists(processed.data.dir)){dir.create(processed.data.dir, recursive = TRUE)}
+
+annot <- as.matrix(read_excel(here("Data", "Mouse", "Alamar", "Alamar Nulisa Mouse 120 annotations.xlsx")))
+#names that do not have a 1-to-1 correspondence in the data and the annotations
+tricky.key <- as.matrix(read.delim(here("Data", "Mouse", "Alamar", "tricky_names.txt")))
+norm.counts <- as.matrix(read_excel(file.path(data.dir, "NPQ_Values.xlsx"), sheet = 2))
+
+#subset to KL mice
+kl.idx <- grep("Klotho", colnames(norm.counts))
+kl.mat <- apply(norm.counts[,kl.idx], 2, as.numeric)
+
+#there are gene names and protein (target) names. We need to make
+#sure  that the names being used match between the annotation and
+#the abudance matrix.
+data.names <- gsub("-", "", str_to_lower(norm.counts[,1]))
+annot.gene <- gsub("-", "", str_to_lower(annot[,"Gene name"]))
+annot.target <- gsub("-", "", str_to_lower(annot[,"Target"]))
+
+#these are only mostly aligned. It looks as if Mapt (total tau)
+#is causing some problems. Everything between Mapt in data.names
+#and "Mapt" in annot.gene is misalinged. Awesome. Let's rearrange
+#the data to match the annotation. The Tnfs are also a problem...
+#After going in lots of circles, I've decided to make my own key
+#by hand that aligns the trickier protein and gene names. The vast
+#majority are fine, but some are really tricky.
+check.table <- cbind(data.names, annot.gene, annot.target)
+
+data.gene.match <- sapply(data.names, function(x) which(annot.gene == x))
+data.target.match <- sapply(data.names, function(x) which(annot.target == x))
+match.mat <- cbind(sapply(data.gene.match, length), sapply(data.target.match, length))
+tricky.match <- Reduce("intersect", apply(match.mat, 2, function(x) which(x != 1)))
+#names with no unique mapping. These go in the table made by hand.
+#data.names[tricky.match]
+
+#rename all rows in the data matrix using the target column in the annotation table
+usable.names <- rep(NA, length(data.names))
+for(i in 1:length(data.names)){
+  if(match.mat[i,2] == 1 || match.mat[i,1] == 1){
+    gene.annot.idx <- data.gene.match[[i]]
+    gene.target.idx <- data.target.match[[i]]
+    gene.name.idx <- unique(union(gene.annot.idx, gene.target.idx))
+    if(length(gene.name.idx) > 1){
+      gene.name.idx <- data.target.match[[i]] #happens for Snca
+    }
+    if(length(gene.name.idx) != 1){stop()}
+    usable.names[i] <- str_to_title(annot.target[gene.name.idx])
+  }else{
+    tricky.idx <- which(str_to_lower(tricky.key[,1]) == data.names[i])
+    usable.names[i]  <- tricky.key[tricky.idx,"target"]
+  }
+}
+#cbind(data.names, usable.names)
+rownames(kl.mat) <- usable.names
+saveRDS(kl.mat, file.path(processed.data.dir, "Alamar_Proteins.RDS"))
+
+
+kl.split <- strsplit(colnames(kl.mat), " ")
+mouse.info <- Reduce("rbind", kl.split)
+colnames(mouse.info) <- c("genotype", "ID", "sex")
+mouse.info[,"genotype"] <- gsub("Klotho", "", gsub(".APOE4.hAb", "", mouse.info[,"genotype"]))
+
+geno.cols <- c("FC" = "#31a354", "FC/VS" = "gray", "VS" = "#2b8cbe")
+geno.col <- sapply(mouse.info[,"genotype"], function(x) geno.cols[which(names(geno.cols) == x)])
+sex.cols = c("M" = "#998ec3", "F" = "#d8b365")
+sex.col <- sapply(mouse.info[,"sex"], function(x) sex.cols[which(names(sex.cols) == x)])
+```
+
+## Individuals in PC space
+
+```{r decomp, fig.width = 8, fig.height = 4}
+par(mfrow = c(1,2))
+plot.decomp(t(kl.mat), cols = sex.col, main = "Colored by sex")
+legend("bottomright", legend = names(sex.cols), col = sex.cols, pch = 16)
+
+plot.decomp(t(kl.mat), cols = geno.col, main = "Colored by genotype")
+legend("bottomright", legend = names(geno.cols), col = geno.cols, pch = 16)
+```
+
+Adjusted for sex:
+
+```{r adjust, fig.width = 8, fig.height = 4}
+adj.kl <- adjust(t(kl.mat), dummy_covar(mouse.info[,"sex",drop=FALSE]))
+
+par(mfrow = c(1,2))
+plot.decomp(adj.kl, cols = sex.col, main = "Colored by sex")
+legend("bottomright", legend = names(sex.cols), col = sex.cols, pch = 16)
+
+plot.decomp(adj.kl, cols = geno.col, main = "Colored by genotype")
+legend("bottomright", legend = names(geno.cols), col = geno.cols, pch = 16)
+```
+
+## ANOVA results
+
+We performed an ANOVA to test for effects of genotype in the
+sex-adjusted proteins. The qq plot for the p values is below.
+
+```{r model, fig.width = 5, fig.height = 5}
+geno.test <- apply(adj.kl, 2, function(x) aov(x~as.factor(mouse.info[,"genotype"])))
+geno.p <- sapply(geno.test, function(x) summary(x)[[1]][1,"Pr(>F)"])
+qqunif.plot(pvalues = geno.p, label.above = 2.55, xlim = c(0, 5.5), label.cex = 0.8)
+```
+
+## Significant proteins
+
+```{r sig}
+fdr <- 0.1
+adj.p <- p.adjust(geno.p, "fdr")
+sig.idx <- which(adj.p <= fdr)
+```
+
+There are multiple expression patterns across
+the genotypes. Proteins significant below fdr = `r fdr`
+are shown below.
+
+
+```{r plot_one_protein, fig.width = 8, fig.height = 4}
+plot_one_protein <- function(pname, k.mat){
+  p.idx <- which(colnames(k.mat) == pname)
+  boxplot(k.mat[,p.idx]~mouse.info[,"genotype"], col = geno.cols, xlab = "Genotype",
+    ylab = pname, main = pname)
+}
+
+par(mfrow = c(1,2))
+for(i in 1:length(sig.idx)){
+  plot_one_protein(names(sig.idx)[i], adj.kl)
+}
+```
+
+## Median abundance by genotype
+
+We calculated the (scaled) median expression of each protein across
+genotypes. All medians are shown below.
+
+```{r geno_means, fig.width = 3, fig.height = 13}
+
+geno.idx <- lapply(names(geno.cols), function(x) which(mouse.info[,"genotype"] == x))
+names(geno.idx) <- names(geno.cols)
+
+scaled.kl <- apply(adj.kl, 2, scale)
+rownames(scaled.kl) <- mouse.info[,"ID"]
+
+geno.kl <- lapply(geno.idx, function(x) scaled.kl[x,])
+mean.by.geno <- sapply(geno.kl, function(x) apply(x, 2, median))
+
+pheatmap(mean.by.geno, cluster_cols = FALSE)
+```
+
+The heat map below shows protein abundance for individual mice
+ordered by genotype.
+
+```{r individuals, fig.width = 7, fig.height = 13}
+geno.mat <- t(Reduce("rbind", geno.kl))
+geno.annot <- data.frame("genotype" = unlist(lapply(1:length(geno.kl), function(x) rep(names(geno.cols)[x], nrow(geno.kl[[x]])))))
+rownames(geno.annot) <- colnames(geno.mat)
+pheatmap(geno.mat, cluster_cols = FALSE, annotation_col = geno.annot, annotation_colors = list("genotype" = geno.cols))
+
+#geno.decomp <- plot.decomp(geno.mat)
+#ab.order <- order(geno.decomp$u[,1])
+#pheatmap(geno.mat[ab.order,], cluster_rows = FALSE, cluster_cols = FALSE, annotation_col = geno.annot, annotation_colors = list("genotype" = geno.cols))
+
+#pheatmap(geno.mat[which(adj.p <= fdr),], cluster_cols = FALSE, annotation_col = geno.annot, annotation_colors = list("genotype" = geno.cols))
+```
+
+The plot below shows only those proteins with a genotype fdr
+less than `r fdr`. 
+
+```{r just_sig, fig.width = 3, fig.height = 4}
+pheatmap(mean.by.geno[which(adj.p <= fdr),], cluster_cols = FALSE)
+```
+
+## Functional groups {.tabset .tabset-fade .tabset-pills}
+
+```{r plot_protein_group}
+plot_protein_group <- function(pnames, k.mat, plot.label = ""){
+  layout.mat <- matrix(c(1,1,1,2,3,0), nrow = 2, byrow = TRUE)
+
+  layout(layout.mat)
+
+  p.idx <- match(str_to_lower(pnames), str_to_lower(colnames(k.mat)))
+  na.idx <- which(is.na(p.idx))
+  #print(pnames[na.idx])
+
+  p.idx <- p.idx[which(!is.na(p.idx))]
+  by.geno <- lapply(geno.idx, function(x) k.mat[x,p.idx])
+  plot.grouped.boxes(by.geno, type = "matrix", group.cols = geno.cols)
+  add_zero_line()
+  mtext(plot.label, side = 3, outer = TRUE, line = -1.5)
+
+  boxplot(by.geno, col = geno.cols, main = "All values",
+    ylab = "scaled protein abundance")
+  add_zero_line()
+
+  group.mean <- sapply(by.geno, function(x) apply(x, 2, median))
+  #pheatmap(group.mean)
+  boxplot(group.mean, main = "Group Medians", col = geno.cols, ylab = "scaled protein abundance")
+  add_zero_line()
+}
+```
+
+
+```{r plot_groups, results = "asis", fig.width = 10, fig.height = 7}
+pgroups <- unique(annot[,"Function/Classification"])
+group.genes <- lapply(pgroups, function(x) annot[which(annot[,"Function/Classification"] == x),"Target"])
+names(group.genes) <- pgroups
+
+for(i in 1:length(pgroups)){
+  cat("###", pgroups[i], "\n")
+  plot_protein_group(pnames = group.genes[[i]], k.mat = scaled.kl, plot.label = pgroups[i])
+  cat("\n\n")
+}
+```
+
+## Conclusions
+
+The humanized Klotho haplotypes do significantly affect
+protein abundance in the mouse brain in the presence of the
+humanized APOE4 allele.
+
+Consistent with the hypothesis that the VS allele is protevctive
+in the heterozygous state, but harmful in the homozygous state,
+the haplotype effects are non-additive. 
+
+Epo and Pgf have higher expression in the FC/VS hets than the other
+two genotypes. This pattern could suggest that VS hets have
+a better blood/oxygen supply in their brains than other genotypes.
+
+The VS homozygotes also have significantly higher phosphorylated
+alpha-synuclein than either of the other genotypes, suggesting 
+one possible detrimental effect of the VS homozygous state.
+
+Other haplotype effects, however are closer to additive. 
+Flt3l and Mif both increase with additional VS alleles.
+Cxcl2 decreases with additional VS alleles, although, the
+effect is more than additive.

@@ -1,0 +1,203 @@
+---
+title: "Alamar - Frailty"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+The purpose of this workflow is to align the Alamar data
+with frailty data measured at 12 months. We want to try
+HDMA with discrete input variables, anyway, and this might
+be a good test for it. We have three different genotypes,
+and two sexes. Maybe here we can relate those features to
+frailty measurements through the proteins measured by Alamar.
+
+The mice in this group are all the same age (12 months), 
+They have humanized Klotho haplotype in the following genotype
+combinations: KL-FC, KL-VS/FC and KL-VS.
+All mice have humanized APOE4. 
+
+
+```{r param}
+rm(list = ls())
+library(here)
+```
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+```
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "vioplot", "RColorBrewer",
+  "gprofiler2", "readxl", "stringr")
+load_libraries(needed.libraries)
+```
+
+```{r load_data}
+frailty.dir <- here("Data", "Mouse", "Alamar", "frailty")
+
+#read in Alamar data matrix created in 2.Alamar.Rmd
+kl.mat <- readRDS(here("Results", "Alamar", "processed_data", "Alamar_proteins.RDS"))
+
+
+kl.split <- strsplit(colnames(kl.mat), " ")
+mouse.info <- Reduce("rbind", kl.split)
+colnames(mouse.info) <- c("genotype", "ID", "sex")
+mouse.info[,"genotype"] <- gsub("Klotho", "", gsub(".APOE4.hAb", "", mouse.info[,"genotype"]))
+
+geno.cols <- c("FC" = "#31a354", "FC/VS" = "gray", "VS" = "#2b8cbe")
+geno.col <- sapply(mouse.info[,"genotype"], function(x) geno.cols[which(names(geno.cols) == x)])
+sex.cols = c("M" = "#998ec3", "F" = "#d8b365")
+sex.col <- sapply(mouse.info[,"sex"], function(x) sex.cols[which(names(sex.cols) == x)])
+```
+
+The frailty data take quite a bit of processing...
+
+```{r frailty_metadata}
+all.frailty.files <- list.files(file.path(frailty.dir), full.names = TRUE)
+all.id <- lapply(all.frailty.files, read_excel)
+
+#for each of the mice with Alamar data, identify the 
+#file location and the blind id.
+frailty.info.table <- matrix(NA, nrow = nrow(mouse.info), ncol = 5)
+rownames(frailty.info.table) <- mouse.info[,"ID"]
+for(i in 1:nrow(mouse.info)){
+  mouse.id <- mouse.info[i,"ID"]
+  check.sheets <- lapply(all.id, function(x) which(x$"Mouse ID" == mouse.id))
+  sheet.idx <- which(sapply(check.sheets, length) > 0)
+  if(length(sheet.idx) == 0){next()}
+  mouse.idx <- check.sheets[[sheet.idx]]
+  in_sheet <- all.frailty.files[sheet.idx]
+  id.info <- all.id[[sheet.idx]][mouse.idx,c("Blind ID (1, 2, 3…)", "Mouse ID", "Sex", "Weight")]
+  all.info <- unlist(c(id.info, "sheet" = sheet.idx))
+  frailty.info.table[i,] <- all.info
+}
+colnames(frailty.info.table) <- names(all.info)
+
+#cbind(frailty.info.table, mouse.info)
+num.mice <- length(which(!is.na(frailty.info.table[,1])))
+```
+
+I could identify `r num.mice` out of `r nrow(mouse.info)` that
+had frailty data.
+
+```{r info_stats}
+all.info.table <- cbind(mouse.info[,c(2,3,1)], frailty.info.table[,c(4,5,1)])
+colnames(all.info.table)[6] <- "blind_ID"
+
+#remove the mice with no frailty data
+not.na <- which(!is.na(all.info.table[,"Weight"]))
+mouse.info.table <- all.info.table[not.na,]
+
+count.mat <- table(data.frame(mouse.info.table[,c("sex", "genotype")]))
+```
+
+The mice break into the following groups. Not too bad.
+
+```{r counts}
+print(count.mat)
+```
+
+Now we will use the sheet numbers and blind IDs to pull 
+out frailty data for each mouse. It's going to be too
+annoying to pull out the numeric key for each label,
+but I will say here that they are all on a scale of
+0, 0.5, 1 with 0 being normal, 0.5 having a modest
+abnormality, and 1 being very abnormal. Details are
+in the excel spread sheets.
+
+```{r frailty_data}
+#it is very difficult to parse these sheets. They have varying
+#placement and grouping of rows.
+all.frailty <- lapply(all.frailty.files, function(x) read_excel(x, sheet = 2))
+
+line.check <- 1-apply(all.frailty[[1]][,1:4], 2, function(x) as.numeric(is.na(x)))
+take.rows <- which(rowSums(line.check) >= 3)
+
+pheno.label <- as.character(unlist(all.frailty[[1]][take.rows,1]))
+#the NA is a place where the labels for one phenotype got put on different rows
+pheno.label[which(is.na(pheno.label))] <- "vaginal/uterine/penile prolapse"
+assessment <- as.character(unlist(all.frailty[[1]][take.rows,2]))
+
+
+#cbind(pheno.label, assessment)
+
+frailty.mat <- matrix(NA, nrow = nrow(mouse.info.table), ncol = length(pheno.label))
+rownames(frailty.mat) <- mouse.info.table[,1]
+colnames(frailty.mat) <- pheno.label
+
+for(i in 1:nrow(mouse.info.table)){
+  sheet.num <- mouse.info.table[i,"sheet"]
+  if(is.na(sheet.num)){next()}
+  mouse.id <- mouse.info.table[i,"blind_ID"]
+  frailty.sheet <- all.frailty[[as.numeric(sheet.num)]]
+  mouse.idx <- which(colnames(frailty.sheet) == mouse.id)
+  data.col <- unlist(frailty.sheet[,mouse.idx])
+  mouse.frailty.info <- data.col[take.rows]
+  frailty.mat[i,] <- mouse.frailty.info
+}
+
+#separate out the weight and the temperature because these are
+#on a different scale than everything else.
+weight.temp.idx <- which(colnames(frailty.mat) %in% c("Weight", "Temperature"))
+weight.temp <- frailty.mat[,weight.temp.idx]
+just.frailty <- frailty.mat[,-weight.temp.idx]
+```
+
+The frailty summary is below. There isn't enough data here
+to do anything with, sadly. A few of the mice had issues,
+but not nearly enough to warrant any kind of analysis.
+
+```{r summary, fig.width = 7, fig.height = 5}
+annot.df <- data.frame("genotype" = as.factor(mouse.info.table[,"genotype"]),
+  "sex" = as.factor(mouse.info.table[,"sex"]))
+rownames(annot.df) <- rownames(just.frailty)
+
+geno.order <- order(mouse.info.table[,"genotype"])
+pheatmap(t(just.frailty[geno.order,]), annotation_col = annot.df, cluster_cols = FALSE)
+```
+
+The following bar plot shows the total frailty score
+for each mouse. More than half have a score of 0.
+
+```{r total_score, fig.width = 7, fig.height = 5}
+total.score <- rowSums(just.frailty)
+barplot(sort(total.score), las = 2)
+```
+
+Just out of a misguided sense of curiosity, I checked to
+see if any of the measured proteins were significantly 
+correlated with the total frailty score. There were a few
+that were significant with an FDR <= 0.1. These are shown 
+below.
+
+```{r test, fig.width = 8, fig.height = 8, warning = FALSE}
+mouse.idx <- sapply(rownames(just.frailty), function(x) which(all.info.table[,"ID"] == x))
+aligned.alamar <- kl.mat[,mouse.idx]
+test.cor <- apply(aligned.alamar, 1, function(x) cor.test(x, total.score, method = "spearman"))
+
+r <- sapply(test.cor, function(x) x$estimate)
+p <- sapply(test.cor, function(x) x$p.value)
+fdr <- p.adjust(p, "fdr")
+#min(fdr)
+
+high.cor <- which(fdr <= 0.1)
+
+par(mfrow = c(2,2))
+for(i in 1:length(high.cor)){
+  plot.with.model(aligned.alamar[names(high.cor)[i],], total.score,
+    xlab = names(high.cor)[i], ylab = "Frailty Score")
+}
+
+stripchart(total.score~as.factor(mouse.info.table[,"genotype"]),
+  vertical = TRUE, pch = 16, method = "jitter")
+```
+
+I kind of want to try the mediation just to set it up.
+I know it will be non-interpretable. 
