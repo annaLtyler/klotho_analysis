@@ -1,0 +1,70 @@
+---
+title: "Comparison to Kl KO"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+## Introduction
+
+One of the reviewers of the Klotho manuscript pointed out a paper
+we hadn't noticed before. This paper compared brain transcriptomics
+between WT and Kl knockout mice (pmid: 38862813). 
+
+They report their DEG results in the supplemental files.
+I downloaded these results to compare to ours. They have 
+some additional stats in this file about whether the genes
+changed in the mouse AD proteom, changed in the human AD
+proteome and changed in specific types of AD models.
+
+
+```{r param}
+rm(list = ls())
+library(here)
+```
+
+```{r load_code}
+all.fun <- list.files(here("Code"), full.names = TRUE)
+for(i in 1:length(all.fun)){source(all.fun[i])}
+```
+
+
+```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
+needed.libraries <- c("pheatmap", "vioplot", "RColorBrewer", "igraph")
+load_libraries(needed.libraries)
+```
+
+```{r load_data}
+ko_deg <- read.csv(here("Data", "Mouse", "DEG_from_Kl_KO_pmid38862813.csv"))
+var_deg <- read.delim(here("Results", "for_paper", "Fig_2B_Data.txt"), comment.char = "#")
+```
+
+First, we looked at whether the VS haplotype effect size was
+correlated with the log2FC from the KO model. Nope.
+
+```{r common_gene}
+common.gene <- intersect(ko_deg[,1], var_deg[,"geneName"])
+matched.ko <- ko_deg[match(common.gene, ko_deg[,1]),]
+matched.var <- var_deg[match(common.gene, var_deg[,"geneName"]),]
+
+plot(matched.ko[,"log2FoldChange"], matched.var[,"genotype_beta"], pch = 16,
+  xlab = "KO log2 Fold Change", ylab = "Haplotype effect size", xlim = c(-0.6, 0.6))
+abline(v = 0, h = 0, col = "red")
+
+coord.mat <- cbind(matched.ko[,"log2FoldChange"], matched.var[,"genotype_beta"])
+rownames(coord.mat) <- matched.ko[,1]
+num.layers = 3
+hull.genes <- vector(mode = "list")
+for(l in 1:num.layers){
+  hull <- convex_hull(coord.mat)
+  hull.genes[[l]] <- rownames(coord.mat)[hull$resverts]
+  text(hull$rescoords[,1], hull$rescoords[,2], labels = rownames(coord.mat)[hull$resverts], pos = 4, cex = 0.5, col = "red")
+  coord.mat <- coord.mat[-hull$resverts,]
+}
+
+```

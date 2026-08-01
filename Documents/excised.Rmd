@@ -1833,3 +1833,72 @@ plotVenn(list("limma" = down.pr, "lm" = neg.pr))
 #setdiff(neg.pr, down.pr)
 #setdiff(down.pr, neg.pr)
 ```
+
+
+
+## Check for sample mix-ups in proteomics
+
+I wanted to do some QC to look for the possibility of sample 
+mix-ups. I tried checking abundance of genes on the X and Y.
+I've tried a few things that I'm not showing here. Basically,
+there is no good way to make sure the mouse labels are correct.
+
+```{r xy, eval = FALSE}
+
+x.gene.table <- gene.info[which(gene.info[,"chromosome_name"] == "X"),]
+y.gene.table <- gene.info[which(gene.info[,"chromosome_name"] == "Y"),]
+
+pr.ensembl <- sapply(strsplit(obs_data$pr_info[,"ensembl_id"], ".", fixed = TRUE), function(x) x[1])
+x.pr.ensembl <- pr.ensembl[which(pr.ensembl %in% x.gene.table[,"ensembl_gene_id"])]
+y.pr.ensembl <- pr.ensembl[which(pr.ensembl %in% y.gene.table[,"ensembl_gene_id"])]
+
+x.pr.pg <- obs_data$pr_info[match(x.pr.ensembl, pr.ensembl), "protein_group"]
+common.x <- intersect(x.pr.pg, rownames(obs_data$mean_abundance))
+decomp_with_nas(t(obs_data$mean_abundance[common.x,]), cols = as.numeric(as.factor(obs_data$mouse_info[,"sex"])))
+#decomp_with_nas(t(obs_data$mean_abundance[common.x,]), cols = as.numeric(as.factor(obs_data$mouse_info[,"age_months"])))
+#test <- decomp_with_nas(t(obs_data$mean_abundance[common.x,]), cols = as.numeric(as.factor(obs_data$mouse_info[,"genotype"])))
+pheatmap(obs_data$mean_abundance[common.x,], show_rownames = FALSE, show_colnames = FALSE, scale = "row") #proteins in rows
+
+y.pr.pg <- obs_data$pr_info[match(y.pr.ensembl, pr.ensembl), "protein_group"]
+common.y <- intersect(y.pr.pg, rownames(obs_data$mean_abundance))
+plot(obs_data$mean_abundance[common.y,]~as.factor(obs_data$mouse_info[,"sex"]),
+    xlab = "", ylab = "Y chromosome protein abundance")
+
+#The gene on Y should definitely be different in males and females
+#but Tim said that the fragments might be mis-mapped to a gene on 
+#X. #Ddx genes are scattered all over
+ddx.info <- gene.info[grep("Ddx", gene.info[,"external_gene_name"]),]
+#barplot(table(ddx.info[,"chromosome_name"]))
+
+
+factor.name <- "sex"; p.thresh = 1e-5
+factor.name <- "age_months"; p.thresh = 1e-20 #I'm convinced that all the age labels are correct
+factor.name <- "genotype"; p.thresh = 1e-3 #this doesn't have enough of an effect
+#look for any sex effects
+fac.test <- apply(obs_data$mean_abundance, 1, function(x) lm(rankZ(x)~as.factor(obs_data$mouse_info[,factor.name])))
+fac.p <- sapply(fac.test, function(x) coef(summary(x))[2,"Pr(>|t|)"])
+qqunif.plot(fac.p);abline(h = -log10(p.thresh))
+sig.idx <- which(fac.p < p.thresh)
+length(sig.idx)
+sig.info <- obs_data$pr_info[match(names(sig.idx), obs_data$pr_info[,"protein_group"]), ]
+gene.info <- gene.info[match(sig.info[,"gene_name"], gene.info[,"external_gene_name"]),]
+#cat(gene.info[,"external_gene_name"], sep = "\n")
+#pheatmap(obs_data$mean_abundance[sig.idx,], scale = "row")
+#could individuals in the wrong cluster be mis-labeled
+decomp_with_nas(t(obs_data$mean_abundance[sig.idx,]), cols = as.factor(obs_data$mouse_info[,factor.name]))
+
+
+
+plot(rankZ(obs_data$mean_abundance[names(sig.idx)[4],])~as.factor(obs_data$mouse_info[,"sex"]))
+
+gene.name <- "Ddx3x"
+gene.name <- "Myh10"
+gene.name <- "Set"
+gene.name <- "Erbb4"
+gene.pg <- obs_data$pr_info[which(obs_data$pr_info[,"gene_name"] == gene.name), "protein_group"]
+print(gene.pg)
+par(mfrow = c(1,length(gene.pg)))
+for(i in 1:length(gene.pg)){
+    plot(rankZ(obs_data$mean_abundance[gene.pg[i],])~as.factor(obs_data$mouse_info[,"sex"]))
+}
+```

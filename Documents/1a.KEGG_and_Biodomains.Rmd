@@ -101,7 +101,7 @@ final.params <- TRUE
 
 if(expression.type == "transcript"){final.params = FALSE}
 if(length(subgroup) != 1 && subgroup[[1]] != 12){final.params = FALSE}
-if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC > WT > VS
+if(!use.carrier.status){final.params = FALSE} #if true, fits models with the ordered factor FC < WT < VS
 if(group.representation != "means"){final.params = FALSE}
 if(!adjust.ide){final.params = FALSE}
 if(rank.normalize){final.params = FALSE}

@@ -1,0 +1,47 @@
+---
+title: "Klotho proteomics DEqMS"
+author: Anna L Tyler
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+output:
+  html_document:
+    code_folding: hide
+    collapsed: no
+    toc: yes
+    toc_float: yes
+---
+
+## Introduction
+
+The purpose of this workflow is to use an established package
+for looking at differential abundance in the Klotho proteomics 
+data.
+
+```{r}
+library(here)
+library(DEqMS)
+library(limma)
+```
+
+
+```{r norm_data}
+expr <- read.delim(here("Data", "Proteomics", "pg.expression.tsv"))
+
+#log normalize
+log.expr <- log2(expr+1)
+
+#filter for low abundance
+keep <- rowSums(!is.na(log.expr)) >= 3
+log.expr <- log.expr[keep, ]
+
+quant_norm <- normalizeBetweenArrays(log.expr, method = "quantile")
+```
+
+```{r comparisons}
+metadata <- data.frame(
+    sample = colnames(quant_norm),
+    group = c(
+        "Control","Control","Control",
+        "Treatment","Treatment","Treatment"
+    )
+)
+```
