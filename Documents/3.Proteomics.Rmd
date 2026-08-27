@@ -52,7 +52,9 @@ if(compare.age == 4){
     compare.age.text <- "four"
 }
 
-offline = FALSE #set to TRUE if offline. Enrichment queries will not be run.
+offline = TRUE #set to TRUE if offline. Enrichment queries will not be run.
+                #peptide votes also require being online, although these are
+                #not run by default
 ```
 
 ```{r load_code}
@@ -85,7 +87,7 @@ heatmap.pos.col <- "brown"
 ```{r libraries, message = FALSE, warning = FALSE, error = FALSE}
 needed.libraries <- c("pheatmap", "VennDiagram", "DT", "knitr", "impute", "gprofiler2",
     "vioplot", "igraph", "stringr", "easyPubMed", "tm", "readxl", "hexbin", "RColorBrewer",
-    "httr2", "jsonlite", "dplyr", "Biostrings", "cluster")
+    "httr2", "jsonlite", "dplyr", "Biostrings", "cluster", "mediation", "pkgcond", "bmediatR")
 
 load_libraries(needed.libraries)
 ```
@@ -588,8 +590,8 @@ As with the transcriptomes, we adjust for IDE abundance in case that is
 a problem. It does have bimodal protein abundance, as shown below.
 
 ```{r ide_abundance, fig.width = 9, fig.height = 6.5}
-plot_gene(gene.name = "Ide", sample_data = obs_data, autoplace.text = TRUE, 
-    data.type = "log")
+plot_pr_abund(gene.name = "Ide", sample_data = obs_data, 
+    autoplace.text = TRUE, data.type = "log")
 ```
 
 ```{r ide}
@@ -1154,11 +1156,13 @@ sig.young.genes <- sig.young.table[,gene.col]
 sig.old.genes <- sig.old.table[,gene.col]
 plotVenn(list("young" = sig.young.genes, "old" = sig.old.genes))
 
-intersect(sig.young.genes, sig.old.genes)
-young.enrich <- gost(sig.young.genes, organism = "mmusculus")
-old.enrich <- gost(sig.old.genes, organism = "mmusculus")
-plot.enrichment(young.enrich, num.terms = 25, max.term.size = 3000)
-plot.enrichment(old.enrich, num.terms = 25, max.term.size = 3000)
+if(!offline){
+    intersect(sig.young.genes, sig.old.genes)
+    young.enrich <- gost(sig.young.genes, organism = "mmusculus")
+    old.enrich <- gost(sig.old.genes, organism = "mmusculus")
+    plot.enrichment(young.enrich, num.terms = 25, max.term.size = 3000)
+    plot.enrichment(old.enrich, num.terms = 25, max.term.size = 3000)
+}
 ```
 
 For each factor, we tested for main effects as well as interaction
@@ -1322,8 +1326,9 @@ in future iterations of the workflow.
 all.sig <- unlist(sig.list, recursive = FALSE)
 sig.id <- lapply(all.sig, function(x) obs_data$pr_info[match(x, obs_data$pr_info[,id.col]),gene.col])
 
+enrich.file <- file.path(results.dir, paste0("group_enrichment_", analysis.text, ".RDS"))
+
 if(!offline){
-    enrich.file <- file.path(results.dir, paste0("group_enrichment_", analysis.text, ".RDS"))
     if(!file.exists(enrich.file)){
         enrich <- lapply(sig.id, 
             function(x) if(length(x) > 0){gost(x, organism = "mmusculus", source = "GO")})
@@ -1403,7 +1408,7 @@ Below we show examples of each type of effect.
 #violin plots. Also because jitter is random, replotting can lead
 #to different text placement.
 
-plot_gene(gene.name = "Hapln2", obs_data, data.type = "scaled", autoplace.text = TRUE) 
+plot_pr_abund(gene.name = "Hapln2", obs_data, data.type = "scaled", autoplace.text = TRUE) 
 #dev.off()
 ```
 
@@ -1411,7 +1416,7 @@ plot_gene(gene.name = "Hapln2", obs_data, data.type = "scaled", autoplace.text =
 
 ```{r age_down, fig.width = 9, fig.height = 6.5}
 #age effect down
-plot_gene(gene.name = "Prom1", obs_data, data.type = "scaled", 
+plot_pr_abund(gene.name = "Prom1", obs_data, data.type = "scaled", 
     autoplace.text = TRUE) 
 ```
 
@@ -1419,7 +1424,7 @@ plot_gene(gene.name = "Prom1", obs_data, data.type = "scaled",
 ```{r geno_age_up, fig.width = 9, fig.height = 6.5}
 #genotype-age interaction positive
 #genetic effect gets more positive with age
-plot_gene("Tspan2", obs_data, data.type = "scaled", 
+plot_pr_abund("Tspan2", obs_data, data.type = "scaled", 
     autoplace.text = TRUE, stat.y = 0.2) 
 ```
 
@@ -1427,32 +1432,32 @@ plot_gene("Tspan2", obs_data, data.type = "scaled",
 ```{r geno_age_down, fig.width = 9, fig.height = 6.5}
 #genotype-age interaction negative
 #genetic effect gets more negative with age
-plot_gene("Tmed9", obs_data, data.type = "scaled", autoplace.text = TRUE) 
+plot_pr_abund("Tmed9", obs_data, data.type = "scaled", autoplace.text = TRUE) 
 ```
 
 ### Higher in males
 ```{r male_up, fig.width = 9, fig.height = 6.5}
 #higher in males
-plot_gene("Serpina3k", obs_data, data.type = "scaled", autoplace.text = TRUE)
+plot_pr_abund("Serpina3k", obs_data, data.type = "scaled", autoplace.text = TRUE)
 ```
 
 ### Higher in females
 ```{r female_up, fig.width = 9, fig.height = 6.5}
 #higher in females
-plot_gene("Ciz1", obs_data, data.type = "scaled", autoplace.text = TRUE) 
+plot_pr_abund("Ciz1", obs_data, data.type = "scaled", autoplace.text = TRUE) 
 ```
 
 ### Positive main effect of genotype
 ```{r geno_up, fig.width = 9, fig.height = 6.5}
 #overall positive effect of genotype
-plot_gene("Hmbox1", obs_data, data.type = "scaled", 
+plot_pr_abund("Hmbox1", obs_data, data.type = "scaled", 
     autoplace.text = TRUE, stat.x = 0.18) 
 ```
 
 ### Negative main effect of genotype
 ```{r geno_down, fig.width = 9, fig.height = 6.5}
 #overall negative effect of genotype
-test <- plot_gene("Csnk2b", obs_data, data.type = "scaled", 
+test <- plot_pr_abund("Csnk2b", obs_data, data.type = "scaled", 
     autoplace.text = TRUE, stat.y = 0.25) 
 ```
 
@@ -1495,9 +1500,9 @@ test <- plot_multi_gene(test.genes, sample_data = young_data, order_by = "geno_f
 
 
 gene.name = "C4b"
-plot_gene(gene.name, obs_data, data.type = "scaled", stat.x = 0.75, stat.y = 0.25)
-#plot_gene(gene.name, old_data, data.type = "scaled", stat.x = 0.75, stat.y = 0.25)
-#plot_gene(gene.name, sample_data = young_data, data.type = "scaled", stat.x = 0.75, stat.y = 0.25)
+plot_pr_abund(gene.name, obs_data, data.type = "scaled", stat.x = 0.75, stat.y = 0.25)
+#plot_pr_abund(gene.name, old_data, data.type = "scaled", stat.x = 0.75, stat.y = 0.25)
+#plot_pr_abund(gene.name, sample_data = young_data, data.type = "scaled", stat.x = 0.75, stat.y = 0.25)
 
 ```
 
@@ -1509,7 +1514,7 @@ for example mitochondrial genes, glutamate receptor genes, etc.
 This is just done by hand out of curiosity.
 
 ```{r gene_groups}
-search.term <- "ribosom"
+search.term <- "mito"
 term.table <- obs_data$pr_info[grep(search.term, obs_data$pr_info[,"gene_desc"], ignore.case = TRUE),]
 #nrow(term.table)
 #datatable(term.table)
@@ -1517,32 +1522,26 @@ search.genes <- term.table[,gene.col]
 
 #overall effect
 search.result <- plot_multi_gene(gene.names = search.genes, sample_data = obs_data, 
-    order_by = "geno_twelve", plot.label = search.term, data.type = "scaled")
+    pr_order_by = "genotype", show_r2 = "genotype", 
+    plot.label = search.term, data.type = "scaled")
+high.geno <- which(search.result[,"genotype"] > 0.1)
+high.genes <- sapply(strsplit(names(high.geno), ":"), function(x) x[1])
+search.result <- plot_multi_gene(gene.names = high.genes, 
+    sample_data = obs_data, pr_order_by = "genotype", 
+    show_r2 = "genotype", plot.label = search.term, data.type = "scaled")
+
 
 #ffect in older animals
 search.result <- plot_multi_gene(gene.names = search.genes, sample_data = old_data, 
-    order_by = "geno_twelve", plot.label = search.term, data.type = "scaled")
-
-
-top.result <- which(search.result[,"geno_twelve"] > 0.1)
-#length(top.result)
-top.genes <- unique(sapply(strsplit(rownames(search.result)[top.result], ": "), function(x) x[1]))
-
-bottom.result <- which(search.result[,"geno_twelve"] < 0.01)
-#length(bottom.result)
-bottom.genes <- unique(sapply(strsplit(rownames(search.result)[bottom.result], ": "), function(x) x[1]))
-
-plot_multi_gene(gene.names = top.genes, sample_data = old_data, 
-    order_by = "geno_twelve", plot.label = search.term, 
-    data.type = "scaled", test_factor = "eigengene")
-
-top.info <- obs_data$pr_info[match(top.genes, obs_data$pr_info[,gene.col]),]
-
-top.enrich <- gost(top.genes, organism = "mmusculus")
-plot.enrichment(top.enrich, num.terms = 25, max.term.size = 3000)
-
-#bottom.enrich <- gost(bottom.genes, organism = "mmusculus")
-#plot.enrichment(bottom.enrich, num.terms = 25, max.term.size = 3000)
+    pr_order_by = "geno_twelve", show_r2 = "geno_twelve", 
+    plot.label = search.term, data.type = "scaled")
+#hist(search.result[,"geno_twelve"])
+#search.result[which(search.result[,"geno_twelve"] > 0.1),]
+high.geno <- which(search.result[,"geno_twelve"] > 0.2)
+high.genes <- unique(sapply(strsplit(names(high.geno), ":"), function(x) x[1]))
+plot_multi_gene(gene.names = high.genes, mouse_order_by = "genotype",
+    sample_data = old_data, pr_order_by = "geno_twelve", 
+    show_r2 = "geno_twelve", plot.label = search.term, data.type = "scaled")
 ```
 
 ## Comparison to transcriptomics
@@ -1561,7 +1560,7 @@ rna <- readRDS(here("Results", "all_gene", "processed_data", "Stabilized_Counts.
 rna.covar <- read.csv(here("Results", "all_gene", "processed_data", "covariates_carriers.csv"))
 rna_data <- list("mouse_info" = rna.covar, "tx_info" = gene.info, "data" = rna)
 
-all_aligned <- align_protein_rna(obs_data, rna_data, gene.col, id.col, 
+all_aligned <- align_protein_rna(obs_data, rna_data, 
     data.type = "mean", gene.names = NULL, 
     adjust.for = c("sex", "age", "genotype"), align.genes = TRUE)
 
@@ -1589,9 +1588,9 @@ We also looked at the same correlations in just the young,
 and just the old mice. 
 
 ```{r cor_young_old}
-young_aligned <- align_protein_rna(young_data, rna_data, gene.col, id.col, 
+young_aligned <- align_protein_rna(young_data, rna_data, 
     data.type = "mean", gene.names = NULL, 
-    adjust.for = c("sex", "age", "genotype"), align.genes = TRUE)
+    adjust.for = "sex", align.genes = TRUE)
 
 young_aligned_pr <- young_aligned$aligned_proteins
 young_aligned_tx <- young_aligned$aligned_transcripts
@@ -1602,9 +1601,9 @@ young_mouse_cor <- sapply(1:ncol(young_aligned_pr),
 #hist(young_mouse_cor, xlim = c(0.15, 0.6), main = "RNA-Protein Correlations within Mouse")
 
 
-old_aligned <- align_protein_rna(old_data, rna_data, gene.col, id.col, 
+old_aligned <- align_protein_rna(old_data, rna_data,
     data.type = "mean", gene.names = NULL, 
-    adjust.for = c("sex", "age", "genotype"), align.genes = TRUE)
+    adjust.for = "sex", align.genes = TRUE)
 
 old_aligned_pr <- old_aligned$aligned_proteins
 old_aligned_tx <- old_aligned$aligned_transcripts
@@ -1670,12 +1669,13 @@ test_co_effect <- function(sample_data, rna.matrix, prot.matrix, factor.name = "
 The plots below show the effects of age, sex, and genotype
 on abundances of both matrices. Weird.
 
-```{r compare_effect, fig.width = 9, fig.height = 3}
+```{r compare_effect, fig.width = 9, fig.height = 6}
 #quartz(width = 9, height = 3)
 par(mfrow = c(1,3))
 
-unadj_aligned <- align_protein_rna(obs_data, rna_data, gene.col, id.col, 
-    data.type = "mean", gene.names = NULL, adjust.for = NULL, align.genes = TRUE)
+unadj_aligned <- align_protein_rna(obs_data, rna_data, 
+    data.type = "mean", gene.names = NULL, adjust.for = NULL, 
+    align.genes = TRUE)
 
 age.effect <- test_co_effect(obs_data, rna.matrix = unadj_aligned$aligned_transcripts, 
     prot.matrix = unadj_aligned$aligned_proteins, factor.name = "age")
@@ -1693,7 +1693,7 @@ across the board. What does that mean?
 ```{r young_old_effect, fig.width = 8, fig.height = 4}
 
 par(mfrow = c(1,2))
-unadj_young <- align_protein_rna(young_data, rna_data, gene.col, id.col, 
+unadj_young <- align_protein_rna(young_data, rna_data,
     data.type = "mean", gene.names = NULL, adjust.for = NULL, align.genes = TRUE)
 
 sex.effect <- test_co_effect(young_data, rna.matrix = unadj_young$aligned_transcripts, 
@@ -1706,7 +1706,7 @@ mtext("Young Mice", side = 3, line = -1.5, outer = TRUE)
 
 
 par(mfrow = c(1,2))
-unadj_old <- align_protein_rna(old_data, rna_data, gene.col, id.col, 
+unadj_old <- align_protein_rna(old_data, rna_data,
     data.type = "mean", gene.names = NULL, adjust.for = NULL, align.genes = TRUE)
 
 sex.effect <- test_co_effect(obs_data, rna.matrix = unadj_old$aligned_transcripts, 
@@ -1718,83 +1718,517 @@ mtext("Old Mice", side = 3, line = -1.5, outer = TRUE)
 
 ```
 
+## Correlations between glutamate transcripts and proteins
 
 Which proteins are our important transcripts correlated with?
+Below we align the transcript and protein data along individuals,
+adjust for age and sex, and scale across individuals.
 
-```{r test_cor}
-stop()
+```{r prep_cor}
+
 test.genes <- get_gene_names(bd.name = "APP Metabolism", kegg.name = "Nicotine addiction")
-
-test_aligned <- align_protein_rna(obs_data, rna_data, gene.col, id.col, 
-    data.type = "mean", gene.names = NULL, 
-    adjust.for = c("sex", "age", "genotype"), align.genes = FALSE)
-
-
 tx.id <- gene.info[match(test.genes, gene.info[,"external_gene_name"]), "ensembl_gene_id"]
-stripped.tx <- sapply(strsplit(rownames(aligned_tx), ": "), function(x) x[2])
-rownames(aligned_tx) <- stripped.tx
-common.tx <- intersect(tx.id, stripped.tx)
+
+test_aligned <- align_protein_rna(pr_data = old_data, rna_data = rna_data,
+    data.type = "mean", gene.names = NULL, 
+    adjust.for = c("sex"), align.genes = FALSE)
+
+test_scaled <- test_aligned
+for(i in 1:length(test_scaled)){
+    test_scaled[[i]] <- t(apply(test_scaled[[i]], 1, scale))
+    dimnames(test_scaled[[i]]) <- dimnames(test_aligned[[i]])
+}
+
+aligned_pr <- test_scaled$aligned_proteins
+aligned_tx <- test_scaled$aligned_transcripts
 
 test.tx <- aligned_tx[tx.id,]
+```
+
+We then calculated correlations between each transcript in the
+group and all proteins.
+
+```{r test_cor}
+
+tx.cor.mat <- matrix(NA, nrow = nrow(test.tx), ncol = nrow(aligned_pr))
+rownames(tx.cor.mat) <- rownames(test.tx)
+colnames(tx.cor.mat) <- rownames(aligned_pr)
+for(tx in 1:nrow(test.tx)){
+    this.tx <- test.tx[tx,]
+    tx.cor <- apply(aligned_pr, 1, function(x) cor(x, this.tx, use = "pairwise.complete.obs"))
+    #hist(tx.cor)
+    tx.cor.mat[tx,] <- tx.cor
+}
+
+#max(tx.cor.mat)
+#min(tx.cor.mat)
+```
+
+We filtered the correlations to those with a Spearman
+correlation rho of at least 0.5. We made a combined matrix
+of the transcripts and correlated proteins. The correlation
+matrix of this combined matrix is shown below. There is a
+group of positively correlated proteins and a group of 
+negatively correlated proteins (all transcripts are in
+the larger group, because they are all positively 
+correlated with each other).
+
+```{r name_and_thresh}
+
+pr_info <- t(sapply(rownames(aligned_pr), function(x) get_prg_info(x, obs_data)))
+pr_names <- unlist(pr_info[,gene.col])
+u_pr <- unique(pr_names)
+pr_name_dups <- rep(NA, length(pr_names))
+for(i in 1:length(u_pr)){
+    u_pr_idx <- which(pr_names == u_pr[i])
+    if(length(u_pr_idx) > 1){
+        dupped_name <- paste(pr_names[u_pr_idx], names(u_pr_idx), sep = ":")
+    }else{
+        dupped_name <- pr_names[u_pr_idx]
+    }
+    pr_name_dups[u_pr_idx] <- dupped_name
+
+}
+tx_names <- gene.info[match(rownames(test.tx), gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+
+rownames(tx.cor.mat) <- tx_names
+colnames(tx.cor.mat) <- pr_name_dups
+
+#pheatmap(tx.cor.mat, show_colnames = FALSE)
+#plot.decomp(tx.cor.mat, label.points = TRUE, xlim = c(-0.3, 0.9))
+
+cor.thresh = 0.5
+high.cor <- apply(tx.cor.mat, 1, function(x) which(x > cor.thresh))
+low.cor <- apply(tx.cor.mat, 1, function(x) which(x < (cor.thresh*-1)))
+any.cor <- apply(tx.cor.mat, 1, function(x) which(abs(x) > cor.thresh))
+
+#get all unique proteins with at least a 0.5 correlation
+u_cor_prot <- unique(unlist(lapply(any.cor, names)))
+
+#build a matrix of the test transcripts and the highly 
+#correlated proteins
+prot.idx <- which(colnames(tx.cor.mat) %in% u_cor_prot)
+pr_tx <- rbind(test.tx, aligned_pr[prot.idx,])
+rownames(pr_tx) <- c(tx_names, pr_names[prot.idx])
+
+pr_tx_cor <- cor(t(pr_tx), use = "pairwise.complete.obs")
+#pheatmap(pr_tx_cor)
+pr.tx.decomp <- plot.decomp(pr_tx_cor, plot.results = FALSE)
+gr1 <- which(pr.tx.decomp$u[,1] < 0.05)
+gr2 <- which(pr.tx.decomp$u[,1] > 0.05)
+gr.col <- rep("blue", nrow(pr.tx.decomp$u))
+gr.col[gr2] <- "red"
+#plot.decomp(pr_tx_cor, cols = gr.col)
+gr.df <- data.frame(as.factor(as.numeric(as.factor(gr.col))))
+rownames(gr.df) <- rownames(pr_tx_cor)
+colnames(gr.df) <- "group"
+pheatmap(pr_tx_cor, annotation_row = gr.df, show_rownames = FALSE, show_colnames = FALSE)
+#hist(pr_tx_cor)
+```
+
+We looked for enrichments of the proteins in each of these
+groups. The enrichments for these proteins are shown below.
+The positively correlated proteins are enriched for zinc
+binding, which is important in glutamatergic synapses. 
+
+```{r pr_group_enrich}
+gr1.genes <- as.vector(sapply(strsplit(colnames(pr_tx_cor)[gr1], ":"), function(x) x[1]))
+gr2.genes <- as.vector(sapply(strsplit(colnames(pr_tx_cor)[gr2], ":"), function(x) x[1]))
+gr1.enrich <- gost(setdiff(gr1.genes, tx_names), organism = "mmusculus")
+gr2.enrich <- gost(setdiff(gr2.genes, tx_names), organism = "mmusculus")
+
+plot.enrichment(gr1.enrich, max.term.size = 3000, num.terms = 25, 
+    plot.label = "Positively Correlated Proteins")
+plot.enrichment(gr2.enrich, max.term.size = 3000, num.terms = 25, 
+    plot.label = "Negatively Correlated Proteins")
+```
+
+## Mediation with bmediatR
+
+Here we prepare the data for mediation analysis. The first step
+is to look for proteins that are significantly affected by genotype.
+I've used a relatively permissive fdr threshold of 0.1.
+
+```{r med_prep}
+old.var <- get_factor_var(old_data, data.type = "scaled")
+
+#test the effect of genotype on each protein
+pr.alone.model <- apply(aligned_pr, 1, function(x) lm(x~old.var[colnames(aligned_pr),"genotype"]))
+pr.effect <- sapply(pr.alone.model, function(x) coef(summary(x))[2,1]) #effect of genotype on the protein
+pr.p <- sapply(pr.alone.model, function(x) coef(summary(x))[2,4]) #p value of genotype on the protein
+
+sig.idx <- which(p.adjust(pr.p, "fdr") < 0.1) #filter to proteins with some genetic effect
+#length(sig.idx)
+#dzank1.id <- "Q8C008"
+#pr.p[dzank1.id]
+```
+
+There were `r length(sig.idx)` proteins with significant effects
+of genotype in the 12 month old animals. We then test each of these 
+proteins with each of the original 10 transcripts for evidence of
+mediation.
+
+## Mediation with bmediatR
+
+```{r bmediatr, eval = FALSE}
+#this only does transcript-protein pairs
+
+gd <- c("FC" = 0, "WT" = 1, "VS" = 2) #allele dosage
+exp.var <- old.var[colnames(test.tx), "genotype"]
+Gdosage <- sapply(exp.var, function(x) gd[which(names(gd) == x)])
+geno.design <- model.matrix(~exp.var-1)
+rownames(geno.design) <- colnames(test.tx)
+
+med.probs <- vector(mode = "list", length = length(sig.idx))
+names(med.probs) <- names(sig.idx)
+
+#go by protein because multiple mediators are supported
+#the reactive prior is uniform across all models.
+
+for(i in 1:length(sig.idx)){ 
+    out.var <- t(aligned_pr[names(sig.idx)[i],colnames(test.tx),drop=FALSE])
+
+    med.test <- bmediatR(y = out.var, M = t(test.tx), 
+        X = geno.design, ln_prior_c = "reactive", 
+        options_X = list(sum_to_zero = TRUE, 
+        center = FALSE, scale = FALSE))
+    
+    post <- get_posterior(med.test)
+    post.mat <- as.matrix(post[,2:ncol(post)])
+    rownames(post.mat) <- post[,1]
+    med.probs[[i]] <- post.mat
+    #pheatmap(post[,2:ncol(post)], cluster_rows = FALSE, cluster_cols = FALSE, display_numbers  = TRUE)
+    #plot_posterior_bar(med.test, mediator_id = rownames(test.tx)[9])
+}
+```
+
+```{r mediate_all}
+#This chunk tests all pairs including transcript-transcript and protein-protein
+
+gd <- c("FC" = 0, "WT" = 1, "VS" = 2) #allele dosage
+exp.var <- old.var[colnames(test.tx), "genotype"]
+Gdosage <- sapply(exp.var, function(x) gd[which(names(gd) == x)])
+geno.design <- model.matrix(~exp.var-1)
+rownames(geno.design) <- colnames(test.tx)
+
+med.probs <- vector(mode = "list", length = length(sig.idx))
+names(med.probs) <- names(sig.idx)
+
+#test all possible protein and transcript pairs, even within class
+pr.for.med <- aligned_pr[names(sig.idx),]
+tx.for.med <- test.tx
+all.for.med <- t(rbind(pr.for.med, tx.for.med))
+
+all.med.probs <- vector(mode = "list", length = ncol(all.for.med))
+names(all.med.probs) <- colnames(all.for.med)
+for(i in 1:ncol(all.for.med)){ 
+    output <- all.for.med[,i,drop=FALSE]
+    meds <- all.for.med[,-i] #everything but the output
+    
+    med.test <- bmediatR(y = output, M = meds, 
+        X = geno.design, ln_prior_c = "reactive", 
+        options_X = list(sum_to_zero = TRUE, 
+        center = FALSE, scale = FALSE))
+    
+    post <- get_posterior(med.test)
+    post.mat <- as.matrix(post[,2:ncol(post)])
+    rownames(post.mat) <- post[,1]
+    all.med.probs[[i]] <- post.mat
+    #pheatmap(post[,2:ncol(post)], cluster_rows = FALSE, cluster_cols = FALSE, display_numbers  = TRUE)
+    #plot_posterior_bar(med.test, mediator_id = rownames(test.tx)[9])
+}
+
+```
+
+```{r entropy_check, eval = FALSE}
+check.ent <- matrix(NA, ncol = length(med.probs), nrow = nrow(med.probs[[1]]))
+rownames(check.ent) <- gene.info[match(rownames(med.probs[[1]]), gene.info[,"ensembl_gene_id"]),"external_gene_name"]
+for(i in 1:length(med.probs)){
+    check.ent[,i] <- apply(med.probs[[i]], 1, function(x) DescTools::Entropy(x))
+}
+pheatmap(check.ent)
+boxplot(t(check.ent), las  = 2)
+hist(check.ent)
+
+#which(check.ent > 2.5, arr.ind = TRUE)
+```
+
+```{r med_thresh}
+prob.thresh = 0.51
+```
+
+Sometimes the partial forward and partial reactive 
+models are pretty much evenly split, so we want to have
+a relatively high threshold for the posterior models.
+I'm going with `r prob.thresh` for now, although I may raise it
+later. We also filtered for models that were either 
+partial or complete forward or reverse mediation. 
 
 
-aligned_pr <- all_aligned$aligned_proteins
-aligned_tx <- all_aligned$aligned_transcripts
+```{r thresh_med}
+med.probs <- all.med.probs
+interesting.models <- c("partial med", "complete med", 
+    "complete med (react)", "partial med (react)")
+
+filtered_med <- vector(mode = "list", length = length(med.probs))
+for(i in 1:length(med.probs)){
+    max.probs <- apply(med.probs[[i]], 1, max)
+    pass.thresh <- which(max.probs > prob.thresh)
+    max.model <- apply(med.probs[[i]], 1, which.max)
+    target.id <- rep(names(med.probs)[i], length(max.model))
+    target.name <- get_mixed_id(ids = target.id, obs_data, rna_data)
+    med.id <- rownames(med.probs[[i]])
+    med.name <- get_mixed_id(med.id, obs_data, rna_data)
+    med.table <- cbind(med.id[pass.thresh], target.id[pass.thresh],
+        med.name[pass.thresh], target.name[pass.thresh], max.probs[pass.thresh],
+        colnames(med.probs[[i]])[max.model[pass.thresh]])
+    is_interesting <- which(med.table[,6] %in% interesting.models)
+    filtered_med[[i]] <- med.table[is_interesting,]
+}
+
+filtered.results <- Reduce("rbind", filtered_med)
+no.name <- which(filtered.results[,3] == "")
+filtered.results[no.name,3] <- filtered.results[no.name,1]
+no.name <- which(filtered.results[,4] == "")
+filtered.results[no.name,4] <- filtered.results[no.name,2]
+colnames(filtered.results) <- c("mediator_id", "target_id", 
+    "mediator_name", "target_name", "posterior_prob", "best_model")
+
+#We don't need pairs and their reverse, so just keep one of each
+u_edges <- unique(t(apply(filtered.results[,c("mediator_name", "target_name")], 1, sort)))
+unique_results <- vector(mode = "list", length = nrow(u_edges))
+for(i in 1:nrow(u_edges)){
+    gene1 <- u_edges[i,1]
+    gene2 <- u_edges[i,2]
+    line1 <- intersect(which(filtered.results[,c("mediator_name")] == gene1), which(filtered.results[,c("target_name")] == gene2))
+    line2 <- intersect(which(filtered.results[,c("mediator_name")] == gene2), which(filtered.results[,c("target_name")] == gene1))
+    #there might be multiple peptides assigned to a gene. 
+    #pick the lines with forward mediation
+    all_lines <- c(line1, line2)
+    is_react <- grep("react", filtered.results[all_lines, "best_model"])
+    not_react <- setdiff(1:length(all_lines), is_react)
+    unique_results[[i]] <- filtered.results[all_lines[not_react],,drop=FALSE]
+}
+result_table <- Reduce("rbind", unique_results)
+
+u_prot_tx <- unique(as.vector(result_table[,1:2]))
+#sort(u_prot_tx)
+```
+
+There were `r length(u_prot_tx)` mediating elements in this
+set of proteins and transcripts
 
 
-pep_test <- peptide_vals(test.genes, obs_data, data.type = "mean",
-    gene.col, id.col, adjust.for = NULL, unique.peptides.only = FALSE,
-    add.gene.names = TRUE)
+```{r check_prob_ent, eval = FALSE}
+#I've checked filtering by entropy and by maximum individual probability
+#and I think the individual probability is better. Everything with a max.prob
+#over 0.51 looks good, but even with low entropy levels we get some ambiguous
+#model selection. I'm leaving this here so I don't forget I did this.
+plot(max.prob, check.ent);abline(v = 0.51)
+spot.check <- idx_to_row_col(intersect(which(max.prob < 0.51), which(check.ent < 1.5)), n.row = nrow(max.prob)) #low entropy but also low max prob
+spot.check <- idx_to_row_col(intersect(which(max.prob > 0.51), which(check.ent > 2)), n.row = nrow(max.prob)) #high entrop but pretty high max prob
+spot.check <- which(max.prob > 0.51, arr.ind = TRUE)
+i = 5
+barplot(med.probs[[spot.check[i,2]]][spot.check[i,1],])
+```
 
-matched.rna <- unadj_aligned$aligned_transcripts
-common.ind <- intersect(colnames(pep_test), colnames(matched.rna))
+There were `r nrow(filtered.results)` mediation relationships.
 
-matched.pr <- pep_test[,common.ind]
-matcned.rna <- matched.rna[,common.ind]
+We ordered the mediation interactions based on whether the 
+best mediation model was forward or reverse to make a directed
+mediation network.
 
-prot.cor <- prot.p <- matrix(NA, ncol = nrow(matched.rna), nrow = nrow(matched.pr))
-rownames(prot.cor) <- rownames(prot.p) <- rownames(matched.pr)
-colnames(prot.cor) <- colnames(prot.p) <- rownames(matched.rna)
 
-for(i in 1:nrow(matched.pr)){
-    test.pep <- matched.pr[i,]
-    check.cor <- apply(matched.rna, 1, function(x) cor.test(x, test.pep, use = "pairwise.complete.obs"))
-    r <- sapply(check.cor, function(x) x$estimate)
-    p <- sapply(check.cor, function(x) x$p.value)
-    prot.cor[i,] <- r
-    prot.p[i,] <- p
+
+```{r order_med}
+ordered.bmed <- result_table[order(as.numeric(result_table[,"posterior_prob"]), decreasing = TRUE),]
+
+#there shouldn't be any reactive interactions left, but check anyway
+react.idx <- grep("react", ordered.bmed[,"best_model"])
+edge_id <- ordered.bmed[,c("mediator_id", "target_id")]
+edge_name <- ordered.bmed[,c("mediator_name", "target_name")]
+
+if(length(react.idx) > 0){
+    #if there are any switch the direction for the reactive edges.
+    edge_id[react.idx,] <- ordered.bmed[react.idx,c("target_id", "mediator_id")]
+    edge_name[react.idx,] <- ordered.bmed[react.idx,c("target_name", "mediator_name")]
 }
 
 
-pos.idx <- apply(prot.cor, 1, function(x) which(x > 0))
-neg.idx <- apply(prot.cor, 1, function(x) which(x < 0))
-sig.idx <- apply(prot.p, 1, function(x) which(p.adjust(x, "fdr") < 0.05))
-sig.col <- unique(unlist(lapply(sig.idx, names)))
+#also get the correlations for these edges.
+edge.cor <- rep(NA, nrow(edge_id))
+for(i in 1:nrow(ordered.bmed)){
+    gene1 <- get_any_abund(gene.id = edge_id[i,1], test_aligned)
+    gene2 <- get_any_abund(gene.id = edge_id[i,2], test_aligned)
+    edge.cor[i] <- cor(gene1, gene2, use = "pairwise.complete.obs")
+}
+#hist(edge.cor)
 
+#plot all edges
+plot.idx <- 1:nrow(edge_id)
 
-sub.cor <- prot.cor[, sig.col]
-sub.p <- prot.p[, sig.col]
+#filter to edges with transcripts
+#plot.idx <- unique(c(grep("ENSMUS", edge_id[,1]), grep("ENSMUS", edge_id[,2])))
 
-pdf("~/Desktop/app_nicotine_correlates.pdf", width = 7, height = 17)
-pheatmap(-log10(t(sub.p)))
-pheatmap(t(sub.cor))
+#filter to one step away from transcripts
+#one.step <- unique(as.vector(edge_id[plot.idx,]))
+#plot.idx <- unique(c(which(edge_id[,1] %in% one.step), which(edge_id[,2] %in% one.step)))
+
+#filter to only genes connected to a test gene
+#check.gene <- "Grin2b"
+#plot.idx <- unique(c(which(edge_name[,1] == check.gene), which(edge_name[,2] == check.gene)))
+
+#filter to only positively or negatively correlated edges
+plot.idx <- 1:nrow(edge_id) #all
+#plot.idx <- which(edge.cor > 0) #positive edges
+#plot.idx <- which(edge.cor < 0) #negative edges
+
+pdf("~/Desktop/Network.pdf", width = 10, height = 10)
+bmed.net <- plot_mediation_network(edge.list = edge_id[plot.idx,], 
+    sample_data = old_data, rna_data = rna_data,
+    mediation.prob = as.numeric(ordered.bmed[,"posterior_prob"])[plot.idx],
+    abund.cor = edge.cor[plot.idx], max.edge.width = 5, label.cex = 1,
+    max.vertex.size = 10, vertex.label.dist = 0.5)
 dev.off()
 
-#plot(sub.cor, -log10(sub.p))
-pos.genes <- sapply(strsplit(names(which(colSums(sub.cor) > 0)), ": "), function(x) x[2])
-neg.genes <- sapply(strsplit(names(which(colSums(sub.cor) < 0)), ": "), function(x) x[2])
+comm <- cluster_walktrap(bmed.net, weights = E(bmed.net)$mediation_prob, steps = 1000)$membership
 
-sig.genes <- unique(sapply(strsplit(unlist(colnames(sub.p)), ": "), function(x) x[2]))
-sig.gene.info <- gene.info[match(sig.genes, gene.info[,"ensembl_gene_id"]), ]
+#comm <- cluster_fast_greedy(as_undirected(bmed.net))$membership
 
-par(mar = c(4, 12, 4, 2))
-barplot_with_num(sort(sapply(sig.idx, length)), las = 2, horiz = TRUE, 
-    xlab = "Number of Significantly Correlated Transcripts")
+pdf("~/Desktop/community_colors.pdf", width = 10, height = 10)
+plot(bmed.net, vertex.color = comm, vertex.size = 5)
+legend("topright", fill = categorical_pal(max(comm))[1:max(comm)], legend = paste("Cluster", 1:max(comm)))
+dev.off()
 
-sig.list <- list("all" = sig.genes, "pos cor" = pos.genes, "neg cor" = neg.genes)
-enrich <- lapply(sig.list, function(x) gost(x, organism = "mmusculus"))
+comm.names <- lapply(1:max(comm), function(x) setdiff(V(bmed.net)$name[which(comm == x)], test.genes)) #without transcript names
+comm.names <- lapply(1:max(comm), function(x) V(bmed.net)$name[which(comm == x)]) #with transcript names
+names(comm.names) <- paste("cluster", 1:length(comm.names))
+#lapply(comm.names, function(x) which(x %in% test.genes))
+comm.enrich <- lapply(comm.names, function(x) gost(x, organism = "mmusculus", evcodes = TRUE))
+plot.enrichment.group(comm.enrich, max.term.size = 3000, transformation = function(x) log10(x+1))
+#plot.enrichment(comm.enrich[[1]], max.term.size = 3000, num.terms = 15)
 
-plot.enrichment.group(enrich, max.term.size = 3000, n.terms = 15, cluster_cols = FALSE)
+
+
+test_cats <- read.delim(here("Data", "general", "contamination_tests.txt"))
+check.contamination <- c("Alb", "Apoa1", "Tf", "Hp", "C3", "Apoh", "Q8BPF4", "Q9CY06")
+blood.score <- c("Fgb", "Hba-a1", "Hbb-bs", "Alb", "Apoa1", "Slc4a1", "Gypa")
+
+check <- plot_multi_gene(gene.names = check.contamination, sample_data = obs_data, 
+    data.type = "scaled", test_factor = "eigengene", adjust.for = "sex",
+    mouse_order_by = "cluster", pr_order_by = "cluster", show_r2 = "genotype", stat.x = 0.67)
+
+have.cat.genes <- sapply(strsplit(rownames(check), ":"), function(x) x[1])
+filtered.cats <- test_cats[match(have.cat.genes, test_cats[,1]),]
+
+gene1.id <- obs_data$pr_info[which(obs_data$pr_info[,gene.col] == "Fgb"),id.col]
+gene1.abund <- get_any_abund(gene1.id, test_aligned)
+
+u_cat <- unique(filtered.cats[,"Category"])
+cat_genes <- lapply(u_cat, function(x) filtered.cats[which(filtered.cats[,"Category"] == x),1])
+names(cat_genes) <- u_cat
+cat.cor <- vector(mode = "list", length = nrow(filtered.cats))
+pdf("~/Desktop/test.genes.pdf")
+for(i in 1:nrow(filtered.cats)){
+    print(i)
+    gene.name <- filtered.cats[i,1]
+    gene2.id <- obs_data$pr_info[which(obs_data$pr_info[,gene.col] == gene.name),id.col]
+    plot_pr_abund(gene.name, old_data, data.type = "scaled")
+    gene2.abund <- sapply(gene2.id, function(x) get_any_abund(x, test_aligned))
+    par(mfrow = c(1,ncol(gene2.abund)))
+    all.gene.cor <- rep(NA, ncol(gene2.abund))
+    for(g in 1:ncol(gene2.abund)){
+        if(!all(is.na(gene2.abund[,g]))){
+            all.gene.cor[g] <- plot.with.model(gene1.abund, gene2.abund[,g], main = filtered.cats[i,2])[1]
+        }
+    }
+    cat.cor[[i]] <- all.gene.cor
+}
+dev.off()
+
+grouped.cor <- lapply(u_cat, function(x) cat.cor[which(filtered.cats[,2] == x)])
+names(grouped.cor) <- u_cat
+check.cor <- unlist(grouped.cor, recursive = FALSE)
+par(mar = c(4,12, 4, 2))
+boxplot(check.cor, las = 2, horizontal = TRUE, cex.axis = 0.5)
+
+indeg <- strength(bmed.net, mode = "in", weights = E(bmed.net)$correlation) #weighted in degree
+outdeg <- strength(bmed.net, mode = "out", weights = E(bmed.net)$correlation) #weighted out degree
+
+indeg <- strength(bmed.net, mode = "in", weights = E(bmed.net)$mediation_prob) #weighted in degree
+outdeg <- strength(bmed.net, mode = "out", weights = E(bmed.net)$mediation_prob) #weighted out degree
+
+barplot(sort(indeg), las = 2)
+barplot(sort(outdeg), las = 2)
+label.in <- which(indeg > 8)
+label.out <- which(outdeg > 10)
+
+#genes with high in degree have genotype effects through other genes
+#genes with high out degree are core genes, and affecting others 
+plot(jitter(indeg), jitter(outdeg), ylim = c(0, 30), xlab = "In Degree", ylab = "Out Degree",
+    pch = 16, cex = 0.7)
+text(indeg[c(label.in, label.out)], outdeg[c(label.in, label.out)], 
+    labels = c(names(label.in), names(label.out)), pos = 3, cex = 0.7)
+
+
+#pdf("~/Desktop/bmediatr_test_med.pdf", width = 10, height = 8)
+#for(i in 1:nrow(filtered.results)){
+#    #quartz(width = 10, height = 7)
+#    plot_genotype_mediation(aligned_data = test_scaled, sample_data = old_data, 
+#        rna_data = rna_data, transcript.gene = filtered.results[i,1], 
+#        peptide.gene = filtered.results[i,2], autoplace.text = TRUE,
+#        reverse.mediation = FALSE)
+#}
+#dev.off()
+
+med.list <- list("forward" = V(pr.tx.net)$name, "reverse" = V(reverse.pr.tx.net)$name,
+    "bmediatR" = V(bmed.net)$name)
+plotVenn(med.list)
+common.med <- Reduce("intersect", med.list)
+
+just.bmed <- setdiff(med.list$bmediatR, union(med.list$forward, med.list$reverse))
+cat(just.bmed, sep = "\n")
+
+just.med <- setdiff(union(med.list$forward, med.list$reverse), med.list$bmediatR)
+cat(just.med, sep = "\n")
+stop()
+```
+
+```{r med_enrich}
+
+med.enrich <- gost(u_prot_med, organism = "mmusculus")
+enrich.mat <- plot.enrichment(med.enrich, num.terms = 25, max.term.size = 3000)
+cat(u_prot_med, sep = "\n")
+```
+
+```{r test_reverse}
+tx.name = "Grin2b"; pr.name <- "Setdb1"
+tx.name = "Gria3"; pr.name <- "Cpeb3"
+tx.name = "Cacna1b"; pr.name <- "Dzank1"
+tx.name <- "Chrna7"; pr.name = "Wdr5" #partial reactive
+tx.name = "Cacna1b"; pr.name = "Afg3l2" #complete med
+tx.name = "Cacna1b"; pr.name = "Tnpo1" #complete med
+
+i = 1
+tx.name <- filtered.results[i,1]; pr.name <- filtered.results[i,2]
+
+pdf(paste0("~/Desktop/", tx.name, "_and_", pr.name, ".pdf"), width = 10, height = 7)
+#quartz(width = 10, height = 7)
+forward.result <- plot_genotype_mediation(aligned_data = test_scaled, sample_data = old_data, 
+        rna_data = rna_data, source.gene = tx.name, source.gene.type = "transcript",
+        target.gene = pr.name, target.gene.type = "peptide", 
+        autoplace.text = TRUE, reverse.mediation = FALSE)
+
+#quartz(width = 10, height = 7)
+plot_genotype_mediation(aligned_data = test_scaled, sample_data = old_data, 
+        rna_data = rna_data, transcript.gene = tx.name, 
+        peptide.gene = pr.name, autoplace.text = TRUE, reverse.mediation = TRUE)
+dev.off()
+
+
+individual_bmediatR(tx.name = tx.name, pr.name = pr.name, aligned_data = test_scaled, 
+    sample_data = old_data, rna_data = rna_data, plot.results = TRUE)
+
 
 ```
 
@@ -1802,7 +2236,7 @@ plot.enrichment.group(enrich, max.term.size = 3000, n.terms = 15, cluster_cols =
 #these correlated proteins do decrease with age...
 test <- c("Ctss", "Il33", "Pls1", "Tmem230", "Glul", "Tax1bp3")
 plot_multi_gene(test, obs_data, data.type = "scaled", test_factor = "eigengene",
-    stat.x = 0.67)
+    mouse_order_by = "age", "show_r2" = "age", stat.x = 0.67)
 ```
 
 ```{r example_low_cor, eval = FALSE, fig.height = 7, fig.width = 6}
@@ -1819,7 +2253,7 @@ plot(rankZ(high.var.rna[test.gene.ens,])~sub.mouse.info[,"genotype"], xlab = "",
 
 mtext(gene.name, outer =TRUE, side = 3, line = -2.5, cex = 1.2, font = 2)
 
-plot_gene(gene.name, obs_data)
+plot_pr_abund(gene.name, obs_data)
 
 
 ```
@@ -2111,66 +2545,6 @@ plot.with.model(as.numeric(combined.result.table[,"Transcript Effect"]),
 
 ```
 
-```{r top_example, fig.width = 9, fig.height = 6.5, eval = FALSE}
-plot_gene("Ppbp", centered.gene.mat, autoplace.text = TRUE)
-plot_gene("Apoe", centered.gene.mat, autoplace.text = TRUE)
-plot_gene("App", centered.gene.mat, autoplace.text = TRUE)
-
-
-ad.genes <- read.delim(here("Results", paste0("age_batch_", compare.age, "_gene"), "AD_genes.txt"), comment.char = "#")
-ad.pos.pr <- intersect(ad.genes[,1], pos.pr)
-ad.neg.pr <- intersect(ad.genes[,1], neg.pr)
-
-plot_gene(ad.neg.pr[2], centered.gene.mat, autoplace.text = TRUE)
-
-pdf("~/Desktop/common_pos.pdf", width = 9, height = 6.5)
-for(i in 1:length(common.pos)){
-    print(i)
-    plot_gene(common.pos[i], autoplace.text = TRUE)
-}
-dev.off()
-
-pdf("~/Desktop/examples.pdf", width = 9, height = 6.5)
-#stats placed for age-specific animals
-#stat placement are relative and run from 0 to 1 for both x and 1
-plot_gene("Apoe", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.9, autoflip.stat.y = FALSE, cex.lab = 1.5)
-plot_gene("App", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.9, autoflip.stat.y = FALSE, cex.lab = 1.5)
-plot_gene("Pf4", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.9, autoflip.stat.y = FALSE, cex.lab = 1.5)
-plot_gene("Grin2b", centered.gene.mat, autoplace.text = FALSE, stat.x = 0.7, stat.y = 0.23, autoflip.stat.y = FALSE, cex.lab = 1.5)
-dev.off()
-
-#platelet factors from Dubal paper
-plot_gene("Pf4", centered.gene.mat) #negative effect, which is the opposite of what we would predict
-plot_gene("Tln1", centered.gene.mat) #no effect
-plot_gene("Fermt3", centered.gene.mat, stat.x = 0.7, stat.y = 0.9) #negative effect
-plot_gene("Thbs1", centered.gene.mat, stat.y = 0.9, stat.x = 0.7) #negative effect
-plot_gene(c("Pf4", "Tln1", "Fermt3", "Thbs1"), centered.gene.mat, stat.y = 0.9, stat.x = 0.7)
-
-plot_gene("Ckm", centered.gene.mat) #creatinine metabolism, no effect
-#plot_gene("Gadph", centered.gene.mat) #not captured
-
-platelet.genes <- gene.features[grep("platelet", gene.features[,"gene_desc"], ignore.case = TRUE),gene.col]
-plot_gene(platelet.genes, centered.gene.mat, plot.label = "platelet factors")
-
-glutamate.genes <- gene.features[grep("glutamate", gene.features[,"gene_desc"], ignore.case = TRUE),gene.col]
-plot_gene(glutamate.genes, centered.gene.mat, plot.label = "glutamate genes")
-
-#proteins annotated to blood coagulation tend to be 
-#less abundant in VS at specified age
-coag.table <- read.table("~/Downloads/GO_MFeatures.tsv", sep = "\t")
-coag.genes <- coag.table[,8]
-coag.list <- plot_gene(coag.genes, centered.gene.mat, autoplace.text = TRUE, plot.label = "coagulation") 
-
-#proteins annotatied to mitochondrion are not differentially
-#abundant at specified age
-mito.table <- read.table("~/Downloads/GO_MFeatures (1).tsv", sep = "\t", fill = TRUE)
-mito.genes <- mito.table[,8]
-mito.list <- plot_gene(mito.genes, centered.gene.mat, autoplace.text = TRUE, plot.label = "mitochondria")
-
-oxphos.genes <- c("Cox7a2l", "Ndufa6", "Slc25a33", "Pink1", "Nupr1", "Atp6v0a1",
-    "Atp6v1b2", "Ndufa11", "Iscu", "Tmem135")
-plot_gene(oxphos.genes, centered.gene.mat, autoplace.text = TRUE, plot.label = "oxphos")
-```
 
 ## Biodomains and KEGG pathways
 
@@ -2188,7 +2562,7 @@ plot_list <- function(gene.list, pr.mat, list.label = "BD", plot.results = TRUE)
     }
     for(i in 1:length(gene.list)){
         gene.names <- gene.info[match(gene.list[[i]], gene.info[,"ensembl_gene_id"]),"external_gene_name"]
-        gene.stats[[i]] <- plot_gene(gene.names, pr.mat, plot.label = names(gene.list)[i], 
+        gene.stats[[i]] <- plot_pr_abund(gene.names, pr.mat, plot.label = names(gene.list)[i], 
             plot.label.cex = 2, plot.results = plot.results)
     }
     if(plot.results){
@@ -2213,7 +2587,7 @@ plot_nested_list <- function(nested.gene.list, pr.mat, list.label = "KEGG_BD", p
         for(j in 1:length(nested.gene.list[[i]])){
             plot.label <- paste(names(nested.gene.list)[i], "AND\n", names(nested.gene.list[[i]])[j])
             gene.names <- gene.info[match(nested.gene.list[[i]][[j]], gene.info[,"ensembl_gene_id"]),"external_gene_name"]
-            group.result <- plot_gene(gene.names, pr.mat, plot.label = plot.label, plot.label.cex = 1, plot.results = plot.results)
+            group.result <- plot_pr_abund(gene.names, pr.mat, plot.label = plot.label, plot.label.cex = 1, plot.results = plot.results)
             sub.stats[[j]] <- group.result
         }
         gene.stats[[i]] <- sub.stats
@@ -2369,7 +2743,7 @@ if(show.num > 0){
         bd.idx <- which(names(kegg.bd.list) == sig.table[i,1])
         k.idx <- which(names(kegg.bd.list[[bd.idx]]) == sig.table[i,2])
         gene.names <- gene.info[match(kegg.bd.list[[bd.idx]][[k.idx]], gene.info[,"ensembl_gene_id"]), "external_gene_name"]
-        plot_gene(gene.names, centered.gene.mat, autoplace.text = TRUE, 
+        plot_pr_abund(gene.names, centered.gene.mat, autoplace.text = TRUE, 
         plot.label = paste(sig.table[i,], collapse = "\nAND\n"))
         cat("\n\n")
     }
@@ -2496,7 +2870,7 @@ for(i in 1:length(geno.cols)){
 #text(x = 1:length(short.ad.p), y = rep(plot.dim[4]+0.1, length(short.ad.p)), labels = sig.text[row.order])
 dev.off()
 
-#plot_gene("App", centered.gene.mat, autoplace.text = TRUE)
+#plot_pr_abund("App", centered.gene.mat, autoplace.text = TRUE)
 #plot.with.model(as.numeric(aligned.mats[[1]]), as.numeric(aligned.mats[[2]]))
 ```
 
@@ -2659,13 +3033,16 @@ hist(check.cor, breaks = 100)
 abline(v = c(high.thresh, low.thresh))
 high.cor <- colnames(aligned.pr)[which(check.cor >= high.thresh)]
 low.cor <- colnames(aligned.pr)[which(check.cor <= low.thresh)]
-high.enrich <- gost(high.cor, organism = "mmusculus", source = "GO")
-low.enrich <- gost(low.cor, organism = "mmusculus", source = "GO")
 
-plot.enrichment(high.enrich, plot.label = "High Transcript-Protein Correlations",
-    num.terms = 25)
-plot.enrichment(low.enrich, plot.label = "Low Transcript-Protein Correlations",
-    num.terms = 25)
+if(!offline){
+    high.enrich <- gost(high.cor, organism = "mmusculus", source = "GO")
+    low.enrich <- gost(low.cor, organism = "mmusculus", source = "GO")
+
+    plot.enrichment(high.enrich, plot.label = "High Transcript-Protein Correlations",
+        num.terms = 25)
+    plot.enrichment(low.enrich, plot.label = "Low Transcript-Protein Correlations",
+        num.terms = 25)
+}
 
 ```
 
@@ -2794,7 +3171,7 @@ mod42.genes <- mod42$GeneName
 mod42.mouse <- t(sapply(mod42.genes, get_ortho))
 
 #pdf("~/Desktop/Matrisome.pdf", width = 9, height = 6.5)
-mod.result <- plot_gene(mod42.mouse[,"name"], centered.gene.mat, 
+mod.result <- plot_pr_abund(mod42.mouse[,"name"], centered.gene.mat, 
     autoplace.text = TRUE, plot.label = "Module 42", plot.label.cex = 2)
 ```
 
@@ -2815,7 +3192,7 @@ not consistent with the human data.
 included.proteins <- colnames(mod.result$expr_mat)
 mod.gene.results <- vector(mode = "list", length = length(included.proteins))
 for(i in 1:length(included.proteins)){
-    mod.gene.results[[i]] <- plot_gene(included.proteins[i], centered.gene.mat, 
+    mod.gene.results[[i]] <- plot_pr_abund(included.proteins[i], centered.gene.mat, 
         plot.results = FALSE)
 }
 #dev.off()

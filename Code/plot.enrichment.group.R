@@ -23,13 +23,7 @@ pval.thresh = 0.05, return.empty.columns = FALSE){
 	sig.enrich <- lapply(enrichment.list, function(x) x$result[which(x$result[,"p_value"] <= pval.thresh),])
 
 	list.len <- sapply(sig.enrich, length)
-
-	if(!return.empty.columns){
-		has.results <- which(list.len != 0)
-	}else{
-		has.results <- 1:length(sig.enrich)
-	}
-
+	has.results <- which(list.len != 0)
 	enrichment.list <- sig.enrich[has.results]
 
 	if(class(enrichment.list[[1]]) == "list"){
@@ -39,9 +33,8 @@ pval.thresh = 0.05, return.empty.columns = FALSE){
 	}
 	
 	if(length(enrich.list) == 1){
-		term.mat <- plot.enrichment(enrich.list[[1]], num.terms = n.terms, 
-		order.by = sort.by, 
-		plot.label = plot.label, max.term.size = max.term.size)
+		term.mat <- plot.enrichment.vis(enrich.list[[1]], num.terms = n.terms, 
+		order.by = sort.by, plot.label = plot.label, max.term.size = max.term.size)
 		return()
 		}else{
 
@@ -93,9 +86,12 @@ pval.thresh = 0.05, return.empty.columns = FALSE){
 				}	
 		}
 
-		all.terms <- lapply(sorted.enrich, function(x) get.terms(x, n.terms))		
-		u_term.id <- unique(unlist(lapply(all.terms, function(x) x[,1])))
-		u_term.name <- unique(unlist(lapply(all.terms, function(x) x[,2])))
+		#get a list of the top terms
+		top.terms <- lapply(sorted.enrich, function(x) get.terms(x, n.terms))		
+		#also get all terms, so we can grab p values for terms that are not necessarily in the top n for a given group
+		all.terms <- lapply(sorted.enrich, function(x) get.terms(x, Inf))		
+		u_term.id <- unique(unlist(lapply(top.terms, function(x) x[,1])))
+		u_term.name <- unique(unlist(lapply(top.terms, function(x) x[,2])))
 		no.na <- which(!is.na(u_term.id))
 		u_term.id <- u_term.id[no.na]
 		u_term.name <- u_term.name[no.na]
@@ -104,8 +100,11 @@ pval.thresh = 0.05, return.empty.columns = FALSE){
 		rownames(term.mat) <- u_term.name
 		colnames(term.mat) <- names(sorted.enrich)
 		for(i in 1:length(sorted.enrich)){
-			term.idx <- match(all.terms[[i]][,1], u_term.id)
-			term.mat[term.idx,i] <- all.terms[[i]][,3]
+			#find any instance of the top terms in this group
+			included.terms <- intersect(u_term.id, all.terms[[i]][,1])
+			term.vals <- all.terms[[i]][match(included.terms, all.terms[[i]][,1]),]
+			mat.idx <- match(term.vals[,"term_name"], rownames(term.mat))
+			term.mat[mat.idx,i] <- term.vals[,3]
 			}
 			
 		if(!is.null(max.char)){

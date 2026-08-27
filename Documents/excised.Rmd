@@ -1902,3 +1902,226 @@ for(i in 1:length(gene.pg)){
     plot(rankZ(obs_data$mean_abundance[gene.pg[i],])~as.factor(obs_data$mouse_info[,"sex"]))
 }
 ```
+
+
+## Mediation with R package mediate
+I am switching to bmediatR
+
+```{r mediate}
+#Here I am attempting to use the R package mediate
+#to test whether each transcript mediates the effect
+#of genotype on each protein. I'm coding the genotype
+#as a dosage. Not great, but good for now.
+gd <- c("FC" = 0, "WT" = 1, "VS" = 2) #allele dosage
+exp.var <- old.var[colnames(test.tx), "genotype"]
+Gdosage <- sapply(exp.var, function(x) gd[which(names(gd) == x)])
+geno.design <- model.matrix(~exp.var-1)
+rownames(geno.design) <- colnames(test.tx)
+
+#here we test iteratively to a minimum p value of 10-5
+#filtering out proteins that have higher p values for each round
+min.sim <- 10
+max.sim <- 10000
+
+mediation.result.file <- file.path(results.dir, "Mediation.Results.RDS")
+if(!file.exists(mediation.result.file)){
+
+    tx.med.mat <- prop.med.mat <- matrix(NA, nrow = nrow(test.tx), ncol = length(pr.p))
+    rownames(tx.med.mat) <- rownames(prop.med.mat) <- rownames(test.tx)
+    colnames(tx.med.mat) <- colnames(prop.med.mat) <- names(pr.p)
+    
+    for(i in 1:nrow(test.tx)){
+        this.sim <- min.sim
+        strong.sig <- TRUE
+        test.further <- sig.idx
+
+        while(this.sim <= max.sim && strong.sig){
+            print(paste("Transcript", i, ":", this.sim, "simulations"))
+            one.tx <- test.tx[i,]
+            out.var <- t(aligned_pr[names(test.further),colnames(test.tx),drop=FALSE])
+
+            all.df <- lapply(1:ncol(out.var), 
+                function(x) data.frame("P" = out.var[,x], "T" = one.tx, "G" = exp.var, "Gdosage" = Gdosage))    
+            #make sure all individuals with missing protein data are removed. Otherwise we can't compare the models
+            for(j in 1:length(all.df)){
+                all.df[[j]] <- all.df[[j]][which(!is.na(all.df[[j]]$P)),]
+            }
+            
+
+            med.fit <- lapply(all.df, function(x) lm(T ~ Gdosage, data = x))
+            out.fit <- lapply(all.df, function(x) lm(P ~ Gdosage + T, data = x))
+
+            med.out <- lapply(1:length(med.fit), 
+                function(x) suppress_messages(mediate(med.fit[[x]], out.fit[[x]], 
+                treat = "Gdosage", mediator = "T",
+                boot = TRUE,sims = this.sim)))
+            names(med.out) <- names(all.df)
+
+            med.p <- sapply(med.out, function(x) if(length(x) > 1){summary(x)$n1.p}else{NA})
+            tx.med.mat[i,names(med.p)] <- med.p
+            prop.med <- sapply(med.out, function(x) if(length(x) > 1){summary(x)$n1}else{NA})
+            prop.med.mat[i,names(prop.med)] <- prop.med
+
+            #find proteins worth testing further
+            test.further <- which(med.p == 0)
+            strong.sig <- as.logical(length(test.further))
+            this.sim <- this.sim*10
+            cat(paste("\t", length(test.further), "proteins to test further\n"))
+        }
+    }
+
+    has.vals <- which(!is.na(colSums(prop.med.mat)))
+    med.result <- list("proportion_mediated" = prop.med.mat[,has.vals], "p" = tx.med.mat[,has.vals])
+    saveRDS(med.result, mediation.result.file)
+}else{
+    med.result <- readRDS(mediation.result.file)
+}
+
+med.p.mat <- med.result$p
+med.prop.mat <- med.result$proportion_mediated
+rownames(med.p.mat) <- rownames(med.prop.mat) <- gene.info[match(rownames(med.p.mat), gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+colnames(med.p.mat) <- colnames(med.prop.mat) <- obs_data$pr_info[match(colnames(med.p.mat), obs_data$pr_info[,id.col]),gene.col]
+
+
+pheatmap(-log10(med.p.mat+(1/max.sim)))
+plot(med.prop.mat, -log10(med.p.mat+(1/max.sim)))
+
+#take only the most significant proteins
+med.prot.idx <- which(med.p.mat <= 1e-3, arr.ind = TRUE)
+pr.tx.pairs <- med.prot.idx
+pr.tx.pairs[,1] <- rownames(med.p.mat)[med.prot.idx[,1]]
+pr.tx.pairs[,2] <- colnames(med.p.mat)[med.prot.idx[,2]]
+
+edge.med <- abs(med.prop.mat[med.prot.idx])
+```
+
+```{r forward}
+
+pr.tx.net <- plot_mediation_network(pr.tx.pairs, 
+    edge.weights = edge.med, main = "Forward Mediation Network")
+
+in_deg <- degree(pr.tx.net, mode = "in")
+out_deg <- degree(pr.tx.net, mode = "out")
+
+par(mfrow = c(1,2))
+barplot(sort(in_deg[which(in_deg > 0)]), las = 2, ylab = "Number of Mediators")
+barplot(sort(out_deg[which(out_deg > 0)]), las = 2, ylab = "Number of Targets")
+#plot_gene("Dzank1", obs_data, data.type = "scaled", stat.y = 0.2)
+
+
+pdf("~/Desktop/test_med.pdf", width = 10, height = 8)
+for(i in 1:nrow(pr.tx.pairs)){
+    plot_genotype_mediation(aligned_data = test_scaled, sample_data = old_data, 
+        rna_data = rna_data, transcript.gene = pr.tx.pairs[i,1], peptide.gene = pr.tx.pairs[i,2], 
+        autoplace.text = TRUE)
+}
+dev.off()
+
+u_med_prot <- unique(pr.tx.pairs[,2])
+
+plot_multi_gene(gene.names = u_med_prot, sample_data = old_data, 
+    test_factor = "eigengene", pr_order_by = "clust", mouse_order_by = "clust",
+    plot.label = "Mediated by glutamatergic transcripts", stat.y = 0.2)
+
+if(!offline){
+    enrich <- gost(u_med_prot, organism = "mmusculus")
+    enrich.mat <- plot.enrichment(enrich, num.terms = 25)
+}
+
+#cat(u_med_prot, sep = "\n")
+#cat(sort(u_med_prot), sep = ", ")
+```
+
+
+```{r reverse_mediation}
+reverse.mediation.result.file <- file.path(results.dir, "Reverse_Mediation.Results.RDS")
+if(!file.exists(reverse.mediation.result.file)){
+
+    tx.med.mat <- prop.med.mat <- matrix(NA, ncol = nrow(test.tx), nrow = length(pr.p))
+    colnames(tx.med.mat) <- colnames(prop.med.mat) <- rownames(test.tx)
+    rownames(tx.med.mat) <- rownames(prop.med.mat) <- names(pr.p)
+    
+    for(i in 1:nrow(test.tx)){
+        this.sim <- 10
+        strong.sig <- TRUE
+        test.further <- sig.idx
+
+        while(this.sim <= max.sim && strong.sig){
+            print(paste("Transcript", i, ":", this.sim, "simulations"))
+            one.tx <- test.tx[i,]
+            out.var <- t(aligned_pr[names(test.further),colnames(test.tx),drop=FALSE])
+
+            all.df <- lapply(1:ncol(out.var), 
+                function(x) data.frame("P" = out.var[,x], "T" = one.tx, "G" = exp.var, "Gdosage" = Gdosage))    
+            #make sure all individuals with missing protein data are removed. Otherwise we can't compare the models
+            for(j in 1:length(all.df)){
+                all.df[[j]] <- all.df[[j]][which(!is.na(all.df[[j]]$P)),]
+            }
+            names(all.df) <- colnames(out.var)
+
+            #fit the reverse mediation model
+            med.fit <- lapply(all.df, function(x) lm(P ~ Gdosage, data = x))
+            out.fit <- lapply(all.df, function(x) lm(T ~ Gdosage + P, data = x))
+
+            #start with 100 sims.
+            med.out <- lapply(1:length(med.fit), 
+                function(x) suppress_messages(mediate(med.fit[[x]], out.fit[[x]], 
+                treat = "Gdosage", mediator = "P",
+                boot = TRUE,sims = this.sim)))
+            names(med.out) <- names(all.df)
+
+            med.p <- sapply(med.out, function(x) if(length(x) > 1){summary(x)$n1.p}else{NA})
+            tx.med.mat[names(med.p),i] <- med.p
+            prop.med <- sapply(med.out, function(x) if(length(x) > 1){summary(x)$n1}else{NA})
+            prop.med.mat[names(prop.med),i] <- prop.med
+
+            #find proteins worth testing further
+            test.further <- which(med.p == 0)
+            strong.sig <- as.logical(length(test.further))
+            this.sim <- this.sim*10
+            cat(paste("\t", length(test.further), "proteins to test further\n"))
+        }
+    }
+
+    has.vals <- which(!is.na(rowSums(prop.med.mat)))
+    reverse.med.result <- list("proportion_mediated" = prop.med.mat[has.vals,], "p" = tx.med.mat[has.vals,])
+    saveRDS(reverse.med.result, reverse.mediation.result.file)
+}else{
+    reverse.med.result <- readRDS(reverse.mediation.result.file)
+}
+
+
+reverse.med.p.mat <- reverse.med.result$p
+reverse.med.prop.mat <- reverse.med.result$proportion_mediated
+colnames(reverse.med.p.mat) <- colnames(reverse.med.prop.mat) <- gene.info[match(colnames(reverse.med.p.mat), gene.info[,"ensembl_gene_id"]), "external_gene_name"]
+rownames(reverse.med.p.mat) <- rownames(reverse.med.prop.mat) <- obs_data$pr_info[match(rownames(reverse.med.p.mat), obs_data$pr_info[,id.col]),gene.col]
+
+
+pheatmap(-log10(reverse.med.p.mat+(1/max.sim)))
+plot(reverse.med.prop.mat, -log10(reverse.med.p.mat+(1/max.sim)))
+
+#take only the most significant proteins
+reverse.med.prot.idx <- which(reverse.med.p.mat <= 1e-3, arr.ind = TRUE)
+reverse.pr.tx.pairs <- reverse.med.prot.idx
+reverse.pr.tx.pairs[,1] <- rownames(reverse.med.p.mat)[reverse.med.prot.idx[,1]]
+reverse.pr.tx.pairs[,2] <- colnames(reverse.med.p.mat)[reverse.med.prot.idx[,2]]
+
+reverse.edge.med <- abs(reverse.med.prop.mat[reverse.med.prot.idx])
+
+reverse.pr.tx.net <- plot_mediation_network(reverse.pr.tx.pairs, reverse.edge.med, 
+    main = "Reverse Mediation Network")
+
+
+#bi.dir.net <- rbind(pr.tx.pairs, reverse.pr.tx.pairs)
+#all.weights <- c(edge.med, reverse.edge.med)
+#plot_mediation_network(bi.dir.net, all.weights)
+
+pdf("~/Desktop/reverse_test_med.pdf", width = 10, height = 8)
+for(i in 1:nrow(reverse.pr.tx.pairs)){
+    plot_genotype_mediation(aligned_data = test_scaled, sample_data = old_data, 
+        rna_data = rna_data, transcript.gene = reverse.pr.tx.pairs[i,2], 
+        peptide.gene = reverse.pr.tx.pairs[i,1], autoplace.text = TRUE,
+        reverse.mediation = TRUE)
+}
+dev.off()
+```

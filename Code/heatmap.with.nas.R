@@ -3,7 +3,7 @@
 #clusters the matrix, and then plots the matrix
 #in the clustered order, but with the NAs returned.
 
-heatmap.with.nas <- function(mat){
+heatmap.with.nas <- function(mat, show_colnames = TRUE, show_rownames = TRUE){
 	
 	new.mat <- mat
 	na.locale <- which(is.na(new.mat))
@@ -15,6 +15,7 @@ heatmap.with.nas <- function(mat){
 	d.row <- dist(new.mat)
 	row.order <- hclust(d.row)$order
 	
-	pheatmap(mat[row.order, col.order], cluster_rows = FALSE, cluster_cols = FALSE)	
+	pheatmap(mat[row.order, col.order], cluster_rows = FALSE, cluster_cols = FALSE,
+		show_rownames = show_rownames, show_colnames = show_colnames)	
 	
-	}
+}

@@ -1,6 +1,11 @@
+#mouse_order_by determines how the mice will be ordered in columns
+#pr_order_by determines how the proteins will be ordered in rows
+#show_r2 shows which protein test statistic will be shown in the
+#bar plot. If pr_order_by and show_r2 are the same, the bars should
+#be in order of decreasing value
 
-
-plot_multi_gene <- function(gene.names, sample_data, order_by = "genotype", 
+plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust", 
+    pr_order_by = "genotype", show_r2 = "genotype", adjust.for = "sex",
     data.type = c("raw", "log", "mean", "scaled"),
     test_factor = c("eigengene", "mean"), plot.label = "",
     stat.x = 0.1, stat.y = 0.9, autoplace.text = FALSE){
@@ -13,7 +18,7 @@ plot_multi_gene <- function(gene.names, sample_data, order_by = "genotype",
 
     mouse.factors <- get_factor_var(sample_data, data.type = data.type)
     gene.abund <- lapply(gene.names, 
-        function(x) as.matrix(peptide_vals(x, sample_data, data.type, gene.name.col, gene.id.col)))
+        function(x) as.matrix(peptide_vals(x, sample_data, data.type, adjust.for)))
     genes.found <- which(sapply(gene.abund, length) > 1)
     gene.vals <- Reduce("rbind", gene.abund[genes.found])
 
@@ -23,21 +28,44 @@ plot_multi_gene <- function(gene.names, sample_data, order_by = "genotype",
     rownames(gene.vals) <- gene.labels
 
     gene.tests <- lapply(gene.names[genes.found], 
-        function(x) plot_gene(x, sample_data, data.type = data.type, gene.name.col = gene.col,
-            gene.id.col = id.col, plot.results = FALSE))
+        function(x) plot_gene(x, sample_data, data.type = data.type, plot.results = FALSE))
     all.r2 <- t(Reduce("cbind", lapply(gene.tests, function(x) sapply(x, function(y) as.numeric(y$stats[,"r2"])))))
     colnames(all.r2) <- rownames(gene.tests[[1]][[1]]$stats)
     rownames(all.r2) <- gene.labels
 
-    col.order <- order(mean.abund)
-    
-    if(all(is.na(all.r2[,order_by]))){
-        requested.order <- order_by
-        max.ind <- idx_to_row_col(which.max(all.r2), nrow(all.r2))
-        order_by <- colnames(all.r2)[max.ind[,"column"]]
-        warning(paste0("No variation in ", requested.order, ". Ordering by ", order_by, " instead."))
+    #establish some order based on clustering
+    mouse.order <- hclust(dist(t(gene.vals)))$order
+
+    #check to see if we wanted to order the mice by their genotype, age, or sex
+    order.idx <- which(colnames(mouse.factors) %in% mouse_order_by)
+    if(length(order.idx) > 0){
+        mouse.order <- order(mouse.factors[,order.idx])
     }
-    row.order <- order(all.r2[,order_by], decreasing = TRUE)
+    #otherwise, we can order by the abundance mean
+    if(mouse_order_by == "mean"){
+        mouse.order <- order(mean.abund)
+    }
+    #or median
+    if(mouse_order_by == "median"){
+        col.med <- apply(gene.vals, 2, function(x) median(x, na.rm = TRUE))
+        mouse.order <- order(col.med)
+    }
+    
+    #establish an order for the proteins based on clustering
+    pr.order <- hclust(dist(gene.vals))$order
+    
+    #check to see if we want to order the 
+    order_by <- which(colnames(all.r2) %in% pr_order_by)
+
+    if(length(order_by) > 0){
+        if(all(is.na(all.r2[,pr_order_by]))){
+            requested.order <- pr_order_by
+            max.ind <- idx_to_row_col(which.max(all.r2), nrow(all.r2))
+            pr_order_by <- colnames(all.r2)[max.ind[,"column"]]
+            warning(paste0("No variation in ", requested.order, ". Ordering by ", pr_order_by, " instead."))
+        }
+        pr.order <- order(all.r2[,pr_order_by], decreasing = TRUE)
+    }
     
     if(data.type == "scaled"){
         #layout.matrix <- matrix(c(1,1,3,2,2,0,4,5,5), nrow = 3, byrow = FALSE)
@@ -53,10 +81,10 @@ plot_multi_gene <- function(gene.names, sample_data, order_by = "genotype",
     #pheatmap(gene.vals, annotation_col = mouse.factors, annotation_colors = factor.cols, show_colnames = FALSE)
     par(mar = c(4,12,8,0), xpd = NA)
     if(data.type == "scaled"){
-        imageWithText(gene.vals[row.order,col.order], show.text = FALSE, split.at.vals = TRUE,
+        imageWithText(gene.vals[pr.order,mouse.order], show.text = FALSE, split.at.vals = TRUE,
             col.scale = c("purple", "brown"), col.names = NULL, grad.dir = "ends", row.text.shift = 0.01)
     }else{
-        imageWithText(gene.vals[row.order,col.order], show.text = FALSE, split.at.vals = FALSE,
+        imageWithText(gene.vals[pr.order,mouse], show.text = FALSE, split.at.vals = FALSE,
             use.pheatmap.colors = TRUE, row.text.shift = 0.01, col.names = NULL)
     }
     
@@ -68,27 +96,27 @@ plot_multi_gene <- function(gene.names, sample_data, order_by = "genotype",
     sex <- mouse.factors[,"sex"]
     sex.col <- sapply(sex, function(x) factor.cols$sex[which(names(factor.cols$sex) == x)])
     segments(x0 = 1:ncol(gene.vals), y0 = rep(yvals[1], ncol(gene.vals)), 
-        y1 = rep(yvals[2], ncol(gene.vals)), col = sex.col[col.order], lwd = 3)
+        y1 = rep(yvals[2], ncol(gene.vals)), col = sex.col[mouse.order], lwd = 3)
     text("sex", x = plot.dim[3],y = mean(yvals[c(1,2)]), adj = 1)
 
     age <- mouse.factors[,"age"]
     age.col <- sapply(age, function(x) factor.cols$age[which(names(factor.cols$age) == x)])
     segments(x0 = 1:ncol(gene.vals), y0 = rep(yvals[2], ncol(gene.vals)), 
-        y1 = rep(yvals[3], ncol(gene.vals)), col = age.col[col.order], lwd = 3)
+        y1 = rep(yvals[3], ncol(gene.vals)), col = age.col[mouse.order], lwd = 3)
     text("age", x = plot.dim[3],y = mean(c(yvals[c(2,3)])), adj = 1)
 
     geno <- mouse.factors[,"genotype"]
     geno.col <- sapply(geno, function(x) factor.cols$genotype[which(names(factor.cols$genotype) == x)])
     segments(x0 = 1:ncol(gene.vals), y0 = rep(yvals[3], ncol(gene.vals)), 
-        y1 = rep(yvals[4], ncol(gene.vals)), col = geno.col[col.order], lwd = 3)
+        y1 = rep(yvals[4], ncol(gene.vals)), col = geno.col[mouse.order], lwd = 3)
     text("genotype", x = plot.dim[3],y = mean(yvals[c(3,4)]), adj = 1)
 
     #barplots plot backwards, reverse the order of the r2 here
     par(mar = c(4,0,8,4))
 
-    xmax = ceiling(max(all.r2[row.order,order_by], na.rm = TRUE)*10)/10
-    barplot(all.r2[rev(row.order),order_by], horiz = TRUE, names = NA, xlim = c(0, xmax))
-    mtext(paste("R2 by", order_by), side = 1, line = 2.5)
+    xmax = ceiling(max(all.r2[pr.order,show_r2], na.rm = TRUE)*10)/10
+    barplot(all.r2[rev(pr.order),show_r2], horiz = TRUE, names = NA, xlim = c(0, xmax))
+    mtext(paste("R2 by", show_r2), side = 1, line = 2.5)
     plot.dim <- par("usr")
     vert.lines <- bin.vector(segment_region(0.02, xmax, 5, "ends"), seq(0, xmax, 0.05))
     segments(x0 = vert.lines, y0 = 0, y1 = plot.dim[4], lty = 2, col = "darkgray")

@@ -14,7 +14,7 @@ align_protein_rna <- function(pr_data, rna_data,
 
     #if unspecified, get protein abundance for all genes
     if(is.null(gene.names)){
-        gene.names <- unique(pr_data$pr_info[,gene.name.col])
+        gene.names <- unique(c(pr_data$pr_info[,gene.name.col], rna_data$tx_info[,"external_gene_name"]))
     }
     
     #if we are going to align genes later, only request proteins with single entries
@@ -27,7 +27,7 @@ align_protein_rna <- function(pr_data, rna_data,
     }
     
     #don't adjust until we have the final list of individuals
-    pr.mat <- peptide_vals(gene.names, pr_data, data.type, gene.name.col, gene.id.col,
+    pr.mat <- peptide_vals(gene.names, pr_data, data.type,
             adjust.for = NULL, add.gene.names = add.gene.names, 
             unique.peptides.only = unique.peptides.only)
 

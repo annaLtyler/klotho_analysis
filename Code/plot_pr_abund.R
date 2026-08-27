@@ -3,9 +3,8 @@
 #matrix by default. Set scaled.data = FALSE to draw from log normalized
 #means.
 #data.type = "scaled"; plot.label = ""; plot.results = TRUE; stat.x = 0.1; stat.y = 0.9; stat.y.spread = 0.15; cex.lab = 1; return.text = TRUE; ylab = "Abundance (A.U.)"; autoflip.stat.y = FALSE; autoplace.text = FALSE; n.samples = 25; min.contig = 5; jitter.factor = 1; ylim = NULL; plot.label.cex = 1
-plot_gene <- function(gene.name, sample_data, data.type = c("raw", "log", "mean", "scaled"), 
-    plot.label = "", 
-    plot.results = TRUE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
+plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "mean", "scaled"), 
+    plot.label = "", plot.results = TRUE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
     cex.lab = 1, return.text = TRUE, ylab = "Abundance (A.U.)", autoflip.stat.y = FALSE, 
     autoplace.text = FALSE, n.samples = 25, min.contig = 5, jitter.factor = 1, ylim = NULL, 
     plot.label.cex = 1){
@@ -17,12 +16,14 @@ plot_gene <- function(gene.name, sample_data, data.type = c("raw", "log", "mean"
 
     id.info <- get_gene_info(gene.name, sample_data)
     if(is.null(id.info)){
-        stop(paste("I can't find", gene.name))
+        message(paste("I can't find", gene.name))
+        return(NULL)
     }
 
-    gene.data <- peptide_vals(gene.name, sample_data, data.type, gene.name.col, gene.id.col)
-    if(length(gene.data) == 1){
-        stop(paste("No data for", gene.name))
+    gene.data <- peptide_vals(gene.name, sample_data, data.type)
+    if(nrow(gene.data) == 0 || length(gene.data) == 1){
+        message(paste("No data for", gene.name))
+        return(NULL)
     }
 
     factor_df <- get_factor_var(sample_data, data.type)
