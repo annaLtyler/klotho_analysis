@@ -4,7 +4,7 @@
 #means.
 #data.type = "scaled"; plot.label = ""; plot.results = TRUE; stat.x = 0.1; stat.y = 0.9; stat.y.spread = 0.15; cex.lab = 1; return.text = TRUE; ylab = "Abundance (A.U.)"; autoflip.stat.y = FALSE; autoplace.text = FALSE; n.samples = 25; min.contig = 5; jitter.factor = 1; ylim = NULL; plot.label.cex = 1
 plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "mean", "scaled"), 
-    plot.label = "", plot.results = TRUE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
+    test_type = c("anova", "lm"), plot.label = "", plot.results = TRUE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
     cex.lab = 1, return.text = TRUE, ylab = "Abundance (A.U.)", autoflip.stat.y = FALSE, 
     autoplace.text = FALSE, n.samples = 25, min.contig = 5, jitter.factor = 1, ylim = NULL, 
     plot.label.cex = 1){
@@ -13,11 +13,15 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
     gene.name.col <- sample_data$gene.name.col
 
     if(length(data.type) > 1){data.type = "scaled"} #default to scaled
+    test_type = test_type[1]
+    if(test_type == "lm"){num.stats = 3}
+    if(test_type == "anova"){num.stats = 2}
+    
 
     id.info <- get_gene_info(gene.name, sample_data)
     if(is.null(id.info)){
         message(paste("I can't find", gene.name))
-        return(NULL)
+        return(NA)
     }
 
     gene.data <- peptide_vals(gene.name, sample_data, data.type)
@@ -44,7 +48,7 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
             adj.vals <- adjust(t(gene.data[i,,drop=FALSE]), dummy_covar(factor_df[,c("age", "genotype")]), 
                 retain.intercept = FALSE)
             sex.result <- test_effect(values = adj.vals, plot.factor = factor_df$sex, 
-                return.text = return.text,
+                test_type = test_type, return.text = return.text,
                 plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, 
                 stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
                 paste("Effect of sex on", gene.label), 
@@ -54,14 +58,15 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
             if(plot.results){
                 plot.text("Only one sex represented.")
             }
-            sex.result <- rep(NA, 4)
+            sex.result <- rep(NA, num.stats)
         }
         
         if(length(unique(factor_df[,"age"])) > 1){
             #plot two: main effect of age
             adj.vals <- adjust(t(gene.data[i,,drop=FALSE]), dummy_covar(factor_df[,c("sex", "genotype")]), 
                 retain.intercept = FALSE)
-            age.result <- test_effect(adj.vals, factor_df$age, return.text = return.text,
+            age.result <- test_effect(adj.vals, factor_df$age, test_type = test_type,
+                return.text = return.text,
                 plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, 
                 stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
                 paste("Effect of age on", gene.label), 
@@ -71,7 +76,7 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
             if(plot.results){
                 plot.text("Only one age represented")
             }
-            age.result <- rep(NA, 4)
+            age.result <- rep(NA, num.stats)
             
         }
 
@@ -80,16 +85,16 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
             adj.vals <- adjust(t(gene.data[i,,drop=FALSE]), dummy_covar(factor_df[,c("age", "sex")]), 
                 retain.intercept = FALSE)
             geno.result <- test_effect(values = adj.vals, plot.factor = factor_df$genotype, 
-                return.text = return.text, plot.results = plot.results, stat.x = stat.x, 
-                stat.y = stat.y, stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
-                paste("Effect of genotype on", gene.label), 
+                test_type = test_type, return.text = return.text, plot.results = plot.results, 
+                stat.x = stat.x, stat.y = stat.y, stat.y.spread = stat.y.spread, cex.lab = cex.lab, 
+                plot.label = paste("Effect of genotype on", gene.label), 
                 ylab = ylab, autoflip.stat.y = autoflip.stat.y, autoplace.text = autoplace.text,
                 n.samples = n.samples, min.contig = min.contig, jitter.factor = jitter.factor, ylim = ylim)
         }else{
             if(plot.results){
                 plot.text("Only one genotype represented")
             }
-            geno.result <- rep(NA, 4)
+            geno.result <- rep(NA, num.stats)
             
         }
 
@@ -97,7 +102,7 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
         four.idx <- which(factor_df[,"age"] == "4")
         if(length(four.idx) > 0){
             four.result <- test_effect(values = adj.vals[four.idx], 
-                plot.factor = factor_df$genotype[four.idx], 
+                plot.factor = factor_df$genotype[four.idx], test_type = test_type,
                 return.text = return.text, plot.results = plot.results, stat.x = stat.x, 
                 stat.y = stat.y, stat.y.spread = stat.y.spread, cex.lab = cex.lab, 
                 plot.label = paste("Effect of genotype on", gene.label, "\nin 4-month old mice"), 
@@ -108,7 +113,7 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
             if(plot.results){
                 plot.text("No four month old mice in the data set")
             }
-            four.result <- rep(NA, 4)
+            four.result <- rep(NA, num.stats)
             
         }
 
@@ -116,7 +121,7 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
         twelve.idx <- which(factor_df[,"age"] == "12")
         if(length(twelve.idx) > 0){
             twelve.result <- test_effect(values = adj.vals[twelve.idx], 
-                plot.factor = factor_df$genotype[twelve.idx], 
+                plot.factor = factor_df$genotype[twelve.idx], test_type = test_type,
                 return.text = return.text, plot.results = plot.results, stat.x = stat.x, 
                 stat.y = stat.y, stat.y.spread = stat.y.spread, cex.lab = cex.lab, 
                 plot.label = paste("Effect of genotype on", gene.label, "\nin 12-month old mice"), 
@@ -127,7 +132,7 @@ plot_pr_abund <- function(gene.name, sample_data, data.type = c("raw", "log", "m
             if(plot.results){
                 plot.text("No twelve month old mice in data set")
             }
-            twelve.result <- rep(NA, 4)
+            twelve.result <- rep(NA, num.stats)
         }
         
         if(plot.results){

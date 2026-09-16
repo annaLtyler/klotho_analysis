@@ -1,17 +1,35 @@
 
-test_effect <- function(values, plot.factor, return.text = FALSE,
-    plot.results = FALSE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
-    cex.lab = 1, plot.label = "", ylab = "Abundance (A.U.)", autoflip.stat.y = FALSE,
-    autoplace.text = FALSE, n.samples = 25, min.contig = 5, jitter.factor = 1, ylim = NULL){
+test_effect <- function(values, plot.factor, test_type = c("anova", "lm"), 
+    return.text = FALSE, plot.results = FALSE, stat.x = 0.1, stat.y = 0.9, 
+    stat.y.spread = 0.15, cex.lab = 1, plot.label = "", ylab = "Abundance (A.U.)", 
+    autoflip.stat.y = FALSE, autoplace.text = FALSE, n.samples = 25, min.contig = 5, 
+    jitter.factor = 1, ylim = NULL){
     
-    model <- lm(values~plot.factor)
-    #summary(model)
+    test_type = test_type[1] #default to anova
 
-    r2 <- summary(model)$adj.r.squared
-    p <- anova(model)$"Pr(>F)"[1]
-    text.p <- threshold_p(p, sig.dig = 2, return.text = TRUE)
-    linear.effect.size <- coefficients(summary(model))["plot.factor.L","Estimate"]
-    linear.effect.p <- coefficients(summary(model))["plot.factor.L","Pr(>|t|)"]
+    if(test_type == "lm"){
+        model <- lm(values~plot.factor)
+        #summary(model)
+        r2 <- summary(model)$adj.r.squared
+        p <- threshold_p(anova(model)$"Pr(>F)"[1])
+        linear.effect.size <- coefficients(summary(model))["plot.factor.L","Estimate"]
+        linear.effect.p <- coefficients(summary(model))["plot.factor.L","Pr(>|t|)"]
+        stat.list <- list("R2" = signif(r2, 2), "beta" = signif(linear.effect.size, 2), 
+            "p" = threshold_p(linear.effect.p, sig.dig = 2))
+        text.p <- threshold_p(linear.effect.p, sig.dig = 2, return.text = TRUE)
+    }
+    if(test_type == "anova"){
+        unordered.factor <- as.factor(as.character(plot.factor))
+        model <- lm(values~unordered.factor)
+        #model <- aov(values~unordered.factor)
+        r2 = signif(summary(model)$adj.r.squared, 2)
+        f <- signif(summary(model)$fstatistic, 2)
+	    p <- threshold_p(signif(pf(f[1],f[2],f[3],lower.tail = FALSE), 2))
+        text.p <- threshold_p(signif(pf(f[1],f[2],f[3],lower.tail = FALSE), 2), return.text = TRUE)
+        #TukeyHSD(model)
+        stat.list <- list("R2" = r2, "p" = p)
+    }
+    
     
         if(plot.results){
             factor.idx <- which(sapply(factor.cols, function(x) length(which(names(x) %in% levels(plot.factor)))) > 0)
@@ -49,10 +67,7 @@ test_effect <- function(values, plot.factor, return.text = FALSE,
                 }
 
                 #y positions are evenly distributed from max.y to min.y
-                text.y <- segment_region(max.y, min.y, 3, "ends")
-                r2.y <- text.y[1]
-                effect.y <- text.y[2]
-                p.y <- text.y[3]
+                text.y <- segment_region(max.y, min.y, length(stat.list), "ends")
             }else{
                 text.x <- fractional_pos(plot.dim[1], plot.dim[2], stat.x)
                 if(autoflip.stat.y){
@@ -60,19 +75,30 @@ test_effect <- function(values, plot.factor, return.text = FALSE,
                         stat.y <- 1.1-stat.y #automatically flip if the effect size is negative. not sure if this is a good idea
                     }
                 }
-                text.y <- segment_region(stat.y, stat.y - stat.y.spread, 3, "ends")
-                r2.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[1])
-                effect.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[2])
-                p.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[3])
+                label.y <- segment_region(stat.y, stat.y - stat.y.spread, length(stat.list), "ends")
+                text.y <- sapply(label.y, function(x) fractional_pos(plot.dim[3], plot.dim[4], x))
+                #r2.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[1])
+                #effect.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[2])
+                #p.y <- fractional_pos(plot.dim[3], plot.dim[4], text.y[3])
                 
             }
-            text(text.x, r2.y, bquote(italic(R)^2==.(signif(r2, 2))), adj = 0)
-            text(text.x, p.y, labels = text.p, adj = 0)
-            text(text.x, effect.y, labels = bquote(beta==.(signif(linear.effect.size, 2))), adj = 0)
+
+            if(test_type == "lm"){
+                text(text.x, text.y[1], bquote(italic(R)^2==.(signif(r2, 2))), adj = 0)
+                text(text.x, text.y[2], labels = text.p, adj = 0)
+                text(text.x, text.y[3], labels = bquote(beta==.(signif(linear.effect.size, 2))), adj = 0)
+            }else{
+                text(text.x, r2.y, bquote(italic(R)^2==.(signif(r2, 2))), adj = 0)
+                text(text.x, p.y, labels = text.p, adj = 0)
+            }
+
+            #for(st in 1:length(stat.list)){
+            #    text(text.x, text.y[st], paste(names(stat.list)[st], "=", stat.list[[st]]), adj = 0)
+            #}
+
         }
 
-    result <- list("r2" = r2, "model.p" = p, 
-        "linear.effect.size" = linear.effect.size, "linear.effect.p" = linear.effect.p)
-    invisible(result)
+
+    invisible(stat.list)
 }
 

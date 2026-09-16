@@ -19,7 +19,7 @@ plot_multi_effects <- function(gene.names, sample_data, data.type = c("raw", "lo
     mean.abund <- colMeans(gene.vals, na.rm = TRUE)
     
     gene.tests <- lapply(gene.names[genes.found], 
-        function(x) plot_gene(x, sample_data, data.type = data.type,
+        function(x) plot_pr_abund(x, sample_data, data.type = data.type,
             gene.name.col = gene.col, gene.id.col = id.col, plot.results = FALSE))
 
 

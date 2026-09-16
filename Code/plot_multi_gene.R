@@ -5,33 +5,39 @@
 #be in order of decreasing value
 
 plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust", 
-    pr_order_by = "genotype", show_r2 = "genotype", adjust.for = "sex",
+    pr_order_by = "genotype", show_r2 = "genotype", adjust.for = NULL,
     data.type = c("raw", "log", "mean", "scaled"),
-    test_factor = c("eigengene", "mean"), plot.label = "",
-    stat.x = 0.1, stat.y = 0.9, autoplace.text = FALSE){
+    test_factor = c("mean", "eigengene"), test_type = c("anova", "lm"), plot.label = "",
+    stat.x = 0.1, stat.y = 0.9, autoplace.text = FALSE, impute.with.min = FALSE){
+
+    #remove any empty names. There are numerous peptides without assigned gene names.
+    #if we don't remove the empty spaces these genes will always appear
+    gene.names <- gene.names[which(gene.names != "")]
 
     gene.id.col <- sample_data$gene.id.col
     gene.name.col <- sample_data$gene.name.col
 
     if(length(data.type) > 1){data.type = "scaled"} #default to scaled
-    test_factor = test_factor[1]
+    test_factor = test_factor[1] #default to mean
+    test_type <- test_type[1] #default to anova
 
     mouse.factors <- get_factor_var(sample_data, data.type = data.type)
-    gene.abund <- lapply(gene.names, 
-        function(x) as.matrix(peptide_vals(x, sample_data, data.type, adjust.for)))
-    genes.found <- which(sapply(gene.abund, length) > 1)
-    gene.vals <- Reduce("rbind", gene.abund[genes.found])
+    gene.vals <- peptide_vals(gene.names, sample_data, data.type, adjust.for, add.gene.names = TRUE)
+    mean.abund <- rowMeans(gene.vals, na.rm = TRUE)
+    genes.found <- unique(sapply(strsplit(names(mean.abund), ":"), function(x) x[1]))
 
-    mean.abund <- colMeans(gene.vals, na.rm = TRUE)
-    gene.labels <- unlist(sapply(genes.found, 
-        function(x) paste(gene.names[x], rownames(gene.abund[[x]]), sep = ": ")))
-    rownames(gene.vals) <- gene.labels
+    gene.tests <- lapply(genes.found, 
+        function(x) plot_pr_abund(x, sample_data, data.type = data.type, test_type = test_type, 
+        plot.results = FALSE))
 
-    gene.tests <- lapply(gene.names[genes.found], 
-        function(x) plot_gene(x, sample_data, data.type = data.type, plot.results = FALSE))
-    all.r2 <- t(Reduce("cbind", lapply(gene.tests, function(x) sapply(x, function(y) as.numeric(y$stats[,"r2"])))))
+    all.r2 <- t(Reduce("cbind", lapply(gene.tests, function(x) sapply(x, function(y) as.numeric(y$stats[,"R2"])))))
+    stat.name = "R2"
+
     colnames(all.r2) <- rownames(gene.tests[[1]][[1]]$stats)
-    rownames(all.r2) <- gene.labels
+    tested.pep <- unlist(sapply(gene.tests, names))
+    pep_table <- Reduce("rbind", lapply(tested.pep, function(x) get_prg_info(x, sample_data)))
+    pep_names <- apply(pep_table, 1, function(x) paste(x[4], x[1], sep = ": "))
+    rownames(all.r2) <- pep_names
 
     #establish some order based on clustering
     mouse.order <- hclust(dist(t(gene.vals)))$order
@@ -39,7 +45,16 @@ plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust",
     #check to see if we wanted to order the mice by their genotype, age, or sex
     order.idx <- which(colnames(mouse.factors) %in% mouse_order_by)
     if(length(order.idx) > 0){
+        #order by the factor
         mouse.order <- order(mouse.factors[,order.idx])
+        #mouse.order <- NULL
+        #cluster within the levels
+        #for(l in 1:length(levels(mouse.factors[,order.idx]))){
+        #    lidx <- which(mouse.factors[,order.idx] == levels(mouse.factors[,order.idx])[l])
+        #    lorder <- hclust(dist(t(gene.vals[,lidx])))$order
+        #    mouse.order <- c(mouse.order, lidx[lorder])
+        #}
+        
     }
     #otherwise, we can order by the abundance mean
     if(mouse_order_by == "mean"){
@@ -84,7 +99,7 @@ plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust",
         imageWithText(gene.vals[pr.order,mouse.order], show.text = FALSE, split.at.vals = TRUE,
             col.scale = c("purple", "brown"), col.names = NULL, grad.dir = "ends", row.text.shift = 0.01)
     }else{
-        imageWithText(gene.vals[pr.order,mouse], show.text = FALSE, split.at.vals = FALSE,
+        imageWithText(gene.vals[pr.order,mouse.order], show.text = FALSE, split.at.vals = FALSE,
             use.pheatmap.colors = TRUE, row.text.shift = 0.01, col.names = NULL)
     }
     
@@ -116,7 +131,7 @@ plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust",
 
     xmax = ceiling(max(all.r2[pr.order,show_r2], na.rm = TRUE)*10)/10
     barplot(all.r2[rev(pr.order),show_r2], horiz = TRUE, names = NA, xlim = c(0, xmax))
-    mtext(paste("R2 by", show_r2), side = 1, line = 2.5)
+    mtext(paste(stat.name, "by", show_r2), side = 1, line = 2.5)
     plot.dim <- par("usr")
     vert.lines <- bin.vector(segment_region(0.02, xmax, 5, "ends"), seq(0, xmax, 0.05))
     segments(x0 = vert.lines, y0 = 0, y1 = plot.dim[4], lty = 2, col = "darkgray")
@@ -169,16 +184,21 @@ plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust",
     }
     if(test_factor == "mean"){
         imp.mat <- gene.vals
-        for(i in 1:nrow(imp.mat)){
-            imp.mat[i, which(is.na(imp.mat[i,]))] <- min(imp.mat[i,], na.rm = TRUE)
+        if(impute.with.min){
+            for(i in 1:nrow(imp.mat)){
+                imp.mat[i, which(is.na(imp.mat[i,]))] <- min(imp.mat[i,], na.rm = TRUE)
+            }
+            ylab = "Mean Abundance (Imputed)"
+        }else{
+            ylab = "Mean Abundance"
         }
-        imp.mean <- matrix(colMeans(imp.mat), ncol = 1)
+        imp.mean <- matrix(colMeans(imp.mat, na.rm = TRUE), ncol = 1)
         rownames(imp.mean) <- rownames(mouse.factors)
 
         if(!all(is.na(all.r2[,"sex"]))){
             adj.mean <- adjust(imp.mean, dummy_covar(mouse.factors[,c("age", "genotype")]))        
             test_effect(adj.mean, sex, plot.results = TRUE, 
-                autoplace.text = autoplace.text, ylab = "Mean Abundance (Imputed)", 
+                autoplace.text = autoplace.text, ylab = ylab, 
                 stat.x = stat.x, stat.y = stat.y)
         }else{
             plot.text("No variation in sex.")
@@ -187,7 +207,7 @@ plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust",
         if(!all(is.na(all.r2[,"age"]))){
             adj.mean <- adjust(imp.mean, dummy_covar(mouse.factors[,c("sex", "genotype")]))
             test_effect(adj.mean, age, plot.results = TRUE, 
-                autoplace.text = autoplace.text, ylab = "Mean Abundance (Imputed)", 
+                autoplace.text = autoplace.text, ylab = ylab, 
                 stat.x = stat.x, stat.y = stat.y)
         }else{
             plot.text("No variation in age.")
@@ -196,7 +216,7 @@ plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust",
         if(!all(is.na(all.r2[,"genotype"]))){
             adj.mean <- adjust(imp.mean, dummy_covar(mouse.factors[,c("age", "sex")]))
             test_effect(adj.mean, geno, plot.results = TRUE, 
-                autoplace.text = autoplace.text, ylab = "Mean Abundance (Imputed)", 
+                autoplace.text = autoplace.text, ylab = ylab, 
                 stat.x = stat.x, stat.y = stat.y)
         }else{
             plot.text("No variation in genotype")
@@ -239,7 +259,7 @@ plot_multi_gene <- function(gene.names, sample_data, mouse_order_by = "clust",
 
     if(data.type != "scaled"){
         par(mar = c(2, 6, 6, 6))
-        imageWithTextColorbar(gene.vals[row.order,col.order], split.at.vals = FALSE,
+        add_color_bar(gene.vals[pr.order,mouse.order], split.at.vals = FALSE,
             use.pheatmap.colors = TRUE, cex = 1.5)
     }
 

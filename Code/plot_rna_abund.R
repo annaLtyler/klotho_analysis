@@ -1,8 +1,14 @@
-plot_rna_abund <- function(gene.name, rna_data){
+#plot.label = ""; plot.results = TRUE; stat.x = 0.1; stat.y = 0.9; stat.y.spread = 0.15; cex.lab = 1; return.text = TRUE; ylab = "Abundance (A.U.)"; autoflip.stat.y = FALSE; autoplace.text = FALSE; n.samples = 25; min.contig = 5; jitter.factor = 1; ylim = NULL; plot.label.cex = 1
+plot_rna_abund <- function(gene.name, rna_data, test_type = c("anova", "lm"),
+    plot.label = "", plot.results = TRUE, stat.x = 0.1, stat.y = 0.9, stat.y.spread = 0.15, 
+    cex.lab = 1, return.text = TRUE, ylab = "Abundance (A.U.)", autoflip.stat.y = FALSE, 
+    autoplace.text = FALSE, n.samples = 25, min.contig = 5, jitter.factor = 1, ylim = NULL, 
+    plot.label.cex = 1){
     gene.idx <- which(rna_data$tx_info[,"external_gene_name"] == gene.name)
     
     if(length(gene.idx) == 0){
-        stop(paste("Can't find", gene.name))
+        message(paste("I can't find", gene.name))
+        return(NA)
     }
 
     gene.id <- rna_data$tx_info[gene.idx,"ensembl_gene_id"]
@@ -22,8 +28,8 @@ plot_rna_abund <- function(gene.name, rna_data){
         "genotype" = ordered(mouse.info[,"ordered_geno"], levels = c("FC", "WT", "VS")))
 
 
-    all_stats <- vector(mode = "list", length = nrow(gene.data))
-    names(all_stats) <- rownames(gene.data)
+    all_stats <- vector(mode = "list", length = ncol(gene.data))
+    names(all_stats) <- colnames(gene.data)
 
     for(i in 1:length(all_stats)){
         gene.label <- paste(gene.name, colnames(gene.data)[i], sep = ": ")
@@ -38,7 +44,7 @@ plot_rna_abund <- function(gene.name, rna_data){
             adj.vals <- adjust(gene.data[,i,drop=FALSE], dummy_covar(factor_df[,c("age", "genotype")]), 
                 retain.intercept = FALSE)
             sex.result <- test_effect(values = adj.vals, plot.factor = factor_df$sex, 
-                return.text = return.text,
+                return.text = return.text, test_type = test_type,
                 plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, 
                 stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
                 paste("Effect of sex on", gene.label), 
@@ -56,7 +62,7 @@ plot_rna_abund <- function(gene.name, rna_data){
             adj.vals <- adjust(gene.data[,i,drop=FALSE], dummy_covar(factor_df[,c("sex", "genotype")]), 
                 retain.intercept = FALSE)
             age.result <- test_effect(adj.vals, factor_df$age, return.text = return.text,
-                plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, 
+                plot.results = plot.results, stat.x = stat.x, stat.y = stat.y, test_type = test_type,
                 stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
                 paste("Effect of age on", gene.label), 
                 ylab = ylab, autoflip.stat.y = autoflip.stat.y, autoplace.text = autoplace.text,
@@ -78,7 +84,8 @@ plot_rna_abund <- function(gene.name, rna_data){
                 stat.y = stat.y, stat.y.spread = stat.y.spread, cex.lab = cex.lab, plot.label = 
                 paste("Effect of genotype on", gene.label), 
                 ylab = ylab, autoflip.stat.y = autoflip.stat.y, autoplace.text = autoplace.text,
-                n.samples = n.samples, min.contig = min.contig, jitter.factor = jitter.factor, ylim = ylim)
+                n.samples = n.samples, min.contig = min.contig, jitter.factor = jitter.factor, ylim = ylim,
+                test_type = test_type)
         }else{
             if(plot.results){
                 plot.text("Only one genotype represented")
@@ -97,7 +104,7 @@ plot_rna_abund <- function(gene.name, rna_data){
                 plot.label = paste("Effect of genotype on", gene.label, "\nin 4-month old mice"), 
                 ylab = ylab, autoflip.stat.y = autoflip.stat.y, 
                 autoplace.text = autoplace.text, n.samples = n.samples, min.contig = min.contig, 
-                jitter.factor = jitter.factor, ylim = ylim)
+                jitter.factor = jitter.factor, ylim = ylim,  test_type = test_type)
         }else{
             if(plot.results){
                 plot.text("No four month old mice in the data set")
@@ -116,7 +123,7 @@ plot_rna_abund <- function(gene.name, rna_data){
                 plot.label = paste("Effect of genotype on", gene.label, "\nin 12-month old mice"), 
                 ylab = ylab, autoflip.stat.y = autoflip.stat.y, 
                 autoplace.text = autoplace.text, n.samples = n.samples, min.contig = min.contig, 
-                jitter.factor = jitter.factor, ylim = ylim)
+                jitter.factor = jitter.factor, ylim = ylim,  test_type = test_type)
         }else{
             if(plot.results){
                 plot.text("No twelve month old mice in data set")
@@ -133,7 +140,9 @@ plot_rna_abund <- function(gene.name, rna_data){
         "genotype" = geno.result, "geno_four" = four.result,
         "geno_twelve" = twelve.result)
 
-    all_stats[[i]] <- list("expr_mat" = gene.data[i,,drop=FALSE], "stats" = stat.mat)
+    expr_mat <- matrix(gene.data[,i,drop=FALSE])
+    rownames(expr_mat) <- rownames(gene.data)
+    all_stats[[i]] <- list("expr_mat" = expr_mat, "stats" = stat.mat)
     }
 
     invisible(all_stats)

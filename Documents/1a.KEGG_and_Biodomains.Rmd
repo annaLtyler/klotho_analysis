@@ -1795,8 +1795,10 @@ and have a positive effect size.
 
 ```{r, plot_pc_r2}
 pt.col <- rep("black", length(edge.weights))
-pt.col[neg.sig] <- colors.from.values(vals = edge.weights[neg.sig], col.scale = list(heatmap.neg.col), grad.dir = "low", 
-    global.color.scale = TRUE, global.min = min(edge.weights), global.max = 0, light.dark = "d", n.col = 4)
+pt.col[neg.sig] <- colors.from.values(vals = edge.weights[neg.sig], 
+    col.scale = list(heatmap.neg.col), grad.dir = "low", 
+    global.color.scale = TRUE, global.min = min(edge.weights), global.max = 0, light.dark = "d", 
+    n.col = 4)
 pt.col[pos.sig] <- colors.from.values(edge.weights[pos.sig], col.scale = list(heatmap.pos.col), grad.dir = "high",
     global.color.scale = TRUE, global.max = max(edge.weights), global.min = 0, light.dark = "d", n.col = 4)
 
